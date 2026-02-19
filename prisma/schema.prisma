@@ -1,0 +1,429 @@
+// ============================================
+// Easy Blogger — Prisma Schema
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum ArticleStatus {
+  DRAFT
+  PUBLISHED
+  SCHEDULED
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWED
+  RESOLVED
+  DISMISSED
+}
+
+enum NotificationType {
+  FOLLOW
+  LIKE
+  COMMENT
+  MENTION
+  SYSTEM
+  NEW_ARTICLE
+}
+
+// ─── User ───────────────────────────────────
+
+model User {
+  id          String   @id @default(cuid())
+  firebaseUid String   @unique
+  email       String   @unique
+  username    String   @unique
+  displayName String?
+  bio         String?
+  avatarUrl   String?
+  role        Role     @default(USER)
+  isPremium   Boolean  @default(false)
+
+  // Social account links
+  linkedInAccountId  String?
+  wordpressAccountId String?
+
+  // Online status
+  isOnline Boolean  @default(false)
+  lastSeen DateTime @default(now())
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ── Relations ──
+  articles       Article[]
+  comments       Comment[]
+  stories        Story[]
+  sentMessages   Message[]        @relation("SentMessages")
+  receivedMessages Message[]      @relation("ReceivedMessages")
+
+  // Social graph
+  followers Follow[] @relation("Following") // users who follow this user
+  following Follow[] @relation("Followers")  // users this user follows
+
+  // Engagement
+  likes         ArticleLike[]
+  shares        ArticleShare[]
+  savedArticles SavedArticle[]
+  readHistory   ReadHistory[]
+
+  // Stats
+  stats UserStats?
+
+  // Admin / Moderation
+  reportedArticles ReportedArticle[] @relation("Reporter")
+  auditLogs        AuditLog[]
+  bannedRecord     BannedUser?       @relation("BannedUser")
+  bansIssued       BannedUser[]      @relation("BannedBy")
+
+  // Notifications
+  notifications Notification[]
+
+  @@map("users")
+}
+
+// ─── Article ────────────────────────────────
+
+model Article {
+  id           String        @id @default(cuid())
+  title        String
+  slug         String        @unique
+  content      String        // Rich text / HTML / Markdown
+  summary      String?       // Short excerpt for previews
+  coverImage   String?
+  status       ArticleStatus @default(DRAFT)
+  isAiGenerated Boolean      @default(false)
+
+  // Scheduling
+  scheduledAt DateTime?
+  publishedAt DateTime?
+
+  // Denormalized counters for fast reads
+  readCount  Int @default(0)
+  likeCount  Int @default(0)
+  shareCount Int @default(0)
+  commentCount Int @default(0)
+
+  // Tags (stored as a string array for simplicity; can be a separate model later)
+  tags String[]
+
+  // Reading time estimate in minutes
+  readingTime Int @default(0)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ── Relations ──
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  authorId String
+
+  comments       Comment[]
+  likes          ArticleLike[]
+  shares         ArticleShare[]
+  savedBy        SavedArticle[]
+  readHistory    ReadHistory[]
+  reports        ReportedArticle[]
+
+  @@index([authorId])
+  @@index([status])
+  @@index([publishedAt])
+  @@index([slug])
+  @@map("articles")
+}
+
+// ─── Comment ────────────────────────────────
+
+model Comment {
+  id      String @id @default(cuid())
+  content String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Parent comment for nested replies
+  parentId String?
+  parent   Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  Comment[] @relation("CommentReplies")
+
+  // ── Relations ──
+  author    User    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  authorId  String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  articleId String
+
+  @@index([articleId])
+  @@index([authorId])
+  @@map("comments")
+}
+
+// ─── ArticleLike ────────────────────────────
+
+model ArticleLike {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  articleId String
+
+  @@unique([userId, articleId])
+  @@index([articleId])
+  @@map("article_likes")
+}
+
+// ─── ArticleShare ───────────────────────────
+
+model ArticleShare {
+  id        String   @id @default(cuid())
+  platform  String?  // e.g. "twitter", "linkedin", "copy_link"
+  createdAt DateTime @default(now())
+
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  articleId String
+
+  @@index([articleId])
+  @@map("article_shares")
+}
+
+// ─── SavedArticle (Library / Bookmarks) ─────
+
+model SavedArticle {
+  id        String   @id @default(cuid())
+  savedAt   DateTime @default(now())
+
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  articleId String
+
+  @@unique([userId, articleId])
+  @@map("saved_articles")
+}
+
+// ─── ReadHistory ────────────────────────────
+
+model ReadHistory {
+  id         String   @id @default(cuid())
+  lastReadAt DateTime @default(now())
+  readCount  Int      @default(1) // how many times this user read this article
+
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  articleId String
+
+  @@unique([userId, articleId])
+  @@map("read_history")
+}
+
+// ─── Follow (Social Graph) ─────────────────
+
+model Follow {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  follower    User   @relation("Followers", fields: [followerId], references: [id], onDelete: Cascade)
+  followerId  String
+  following   User   @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+  followingId String
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+  @@map("follows")
+}
+
+// ─── Story (Ephemeral Content) ──────────────
+
+model Story {
+  id        String   @id @default(cuid())
+  mediaUrl  String
+  caption   String?
+  expiresAt DateTime // Set to createdAt + 24h on creation
+  createdAt DateTime @default(now())
+
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  authorId String
+
+  @@index([authorId])
+  @@index([expiresAt])
+  @@map("stories")
+}
+
+// ─── Message (Real-Time Chat) ───────────────
+
+model Message {
+  id      String  @id @default(cuid())
+  content String
+  isRead  Boolean @default(false)
+  sentAt  DateTime @default(now())
+
+  sender     User   @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  senderId   String
+  receiver   User   @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  receiverId String
+
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([sentAt])
+  @@map("messages")
+}
+
+// ─── UserStats (Aggregated) ─────────────────
+
+model UserStats {
+  id             String @id @default(cuid())
+  totalReads     Int    @default(0)
+  totalLikes     Int    @default(0)
+  totalFollowers Int    @default(0)
+  totalFollowing Int    @default(0)
+  articleCount   Int    @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @unique
+
+  @@map("user_stats")
+}
+
+// ─── Notification ───────────────────────────
+
+model Notification {
+  id      String           @id @default(cuid())
+  type    NotificationType
+  title   String
+  message String
+  isRead  Boolean          @default(false)
+  link    String?          // Deep link to the relevant resource
+
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  // Who triggered the notification (optional)
+  actorId String?
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// ─── ReportedArticle (Moderation) ───────────
+
+model ReportedArticle {
+  id     String       @id @default(cuid())
+  reason String
+  status ReportStatus @default(PENDING)
+  details String?
+
+  createdAt  DateTime @default(now())
+  resolvedAt DateTime?
+
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  articleId String
+  reporter  User    @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reporterId String
+
+  @@index([status])
+  @@map("reported_articles")
+}
+
+// ─── BannedUser ─────────────────────────────
+
+model BannedUser {
+  id          String    @id @default(cuid())
+  reason      String
+  bannedAt    DateTime  @default(now())
+  bannedUntil DateTime? // null = permanent ban
+
+  user   User   @relation("BannedUser", fields: [userId], references: [id], onDelete: Cascade)
+  userId String @unique
+
+  bannedBy   User   @relation("BannedBy", fields: [bannedById], references: [id])
+  bannedById String
+
+  @@map("banned_users")
+}
+
+// ─── AuditLog ───────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String   // e.g. "BAN_USER", "DELETE_ARTICLE", "UPDATE_CONFIG"
+  targetId   String?  // ID of the affected entity
+  targetType String?  // e.g. "User", "Article"
+  details    String?  // JSON string with extra context
+  ipAddress  String?
+
+  createdAt DateTime @default(now())
+
+  admin   User   @relation(fields: [adminId], references: [id])
+  adminId String
+
+  @@index([adminId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─── AdminDashboard (Singleton) ─────────────
+
+model AdminDashboard {
+  id             String @id @default("singleton")
+  totalUsers     Int    @default(0)
+  totalArticles  Int    @default(0)
+  totalRevenue   Float  @default(0)
+  activeSessions Int    @default(0)
+  premiumUsers   Int    @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@map("admin_dashboard")
+}
+
+// ─── AiConfig (Singleton) ───────────────────
+
+model AiConfig {
+  id            String @id @default("singleton")
+  modelName     String @default("gpt-4")
+  apiUsageLimit Int    @default(1000)
+  currentUsage  Int    @default(0)
+  isEnabled     Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
+
+  @@map("ai_config")
+}
+
+// ─── TrendingTopic ──────────────────────────
+
+model TrendingTopic {
+  id       String @id @default(cuid())
+  name     String @unique
+  hitCount Int    @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@index([hitCount])
+  @@map("trending_topics")
+}
