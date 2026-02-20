@@ -11,9 +11,6 @@
     "prisma:studio": "npx prisma studio",
     "prisma:seed": "node prisma/seed.js"
   },
-  "prisma": {
-    "seed": "node prisma/seed.js"
-  },
   "keywords": [
     "blog",
     "express",
@@ -23,7 +20,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@prisma/client": "^6.4.1",
+    "@prisma/client": "6.19.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -37,6 +34,6 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.9",
-    "prisma": "^6.4.1"
+    "prisma": "6.19.2"
   }
 }
