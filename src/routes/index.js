@@ -11,6 +11,7 @@ const libraryRoutes = require("./library.routes");
 const feedRoutes = require("./feed.routes");
 const notificationRoutes = require("./notification.routes");
 const adminRoutes = require("./admin.routes");
+const aiRoutes = require("./ai.routes");
 
 const router = Router();
 
@@ -26,5 +27,6 @@ router.use("/library", libraryRoutes);
 router.use("/feed", feedRoutes);
 router.use("/notifications", notificationRoutes);
 router.use("/admin", adminRoutes);
+router.use("/ai", aiRoutes);
 
 module.exports = router;
