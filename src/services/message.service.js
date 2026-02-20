@@ -110,7 +110,9 @@ const getConversationList = async (userId) => {
 
   // Sort by latest message
   conversations.sort(
-    (a, b) => new Date(b.lastMessage.sentAt) - new Date(a.lastMessage.sentAt),
+    (a, b) =>
+      new Date(b.lastMessage.sentAt).getTime() -
+      new Date(a.lastMessage.sentAt).getTime(),
   );
 
   return conversations;

@@ -49,8 +49,8 @@ const initializeSocket = (httpServer) => {
         return next(new Error("User not found"));
       }
 
-      socket.userId = user.id;
-      socket.userData = user;
+      socket.data.userId = user.id;
+      socket.data.userData = user;
       next();
     } catch (error) {
       console.error("Socket auth error:", error.message);
@@ -61,22 +61,22 @@ const initializeSocket = (httpServer) => {
   // ── Connection handler ──
   io.on("connection", async (socket) => {
     console.log(
-      `⚡ User connected: ${socket.userData.username} (${socket.userId})`,
+      `⚡ User connected: ${socket.data.userData.username} (${socket.data.userId})`,
     );
 
     // Join a personal room for targeted messages
-    socket.join(`user:${socket.userId}`);
+    socket.join(`user:${socket.data.userId}`);
 
     // Mark user as online
     await prisma.user.update({
-      where: { id: socket.userId },
+      where: { id: socket.data.userId },
       data: { isOnline: true, lastSeen: new Date() },
     });
 
     // Broadcast online status to followers
     socket.broadcast.emit("user:online", {
-      userId: socket.userId,
-      username: socket.userData.username,
+      userId: socket.data.userId,
+      username: socket.data.userData.username,
     });
 
     // ── Private message ──
@@ -92,7 +92,7 @@ const initializeSocket = (httpServer) => {
         const message = await prisma.message.create({
           data: {
             content: content.trim(),
-            senderId: socket.userId,
+            senderId: socket.data.userId,
             receiverId,
           },
           include: {
@@ -128,7 +128,7 @@ const initializeSocket = (httpServer) => {
         await prisma.message.updateMany({
           where: {
             id: { in: messageIds },
-            receiverId: socket.userId,
+            receiverId: socket.data.userId,
           },
           data: { isRead: true },
         });
@@ -136,7 +136,7 @@ const initializeSocket = (httpServer) => {
         // Notify the sender that their messages were read
         io.to(`user:${senderId}`).emit("message:read", {
           messageIds,
-          readBy: socket.userId,
+          readBy: socket.data.userId,
         });
       } catch (error) {
         console.error("Message read error:", error.message);
@@ -146,28 +146,28 @@ const initializeSocket = (httpServer) => {
     // ── Typing indicator ──
     socket.on("typing:start", (data) => {
       io.to(`user:${data.receiverId}`).emit("typing:start", {
-        userId: socket.userId,
-        username: socket.userData.username,
+        userId: socket.data.userId,
+        username: socket.data.userData.username,
       });
     });
 
     socket.on("typing:stop", (data) => {
       io.to(`user:${data.receiverId}`).emit("typing:stop", {
-        userId: socket.userId,
+        userId: socket.data.userId,
       });
     });
 
     // ── Disconnect ──
     socket.on("disconnect", async () => {
-      console.log(`💤 User disconnected: ${socket.userData.username}`);
+      console.log(`💤 User disconnected: ${socket.data.userData.username}`);
 
       await prisma.user.update({
-        where: { id: socket.userId },
+        where: { id: socket.data.userId },
         data: { isOnline: false, lastSeen: new Date() },
       });
 
       socket.broadcast.emit("user:offline", {
-        userId: socket.userId,
+        userId: socket.data.userId,
       });
     });
   });
