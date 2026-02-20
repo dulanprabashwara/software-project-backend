@@ -3,7 +3,8 @@ require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
-const helmet = require("helmet");
+/** @type {() => import('express').RequestHandler} */
+const helmet = require("helmet").default;
 const morgan = require("morgan");
 
 const routes = require("./routes");
@@ -26,7 +27,7 @@ app.set("io", io);
 
 // ─── Global Middleware ──────────────────────
 
-app.use(helmet.default ? helmet.default() : helmet());
+app.use(helmet());
 app.use(
   cors({
     origin: process.env.CLIENT_URL || "http://localhost:3000",
