@@ -9,7 +9,10 @@ const prisma = require("../config/prisma");
  * @returns {Promise<string>}
  */
 const generateUniqueSlug = async (title) => {
-  let slug = slugify(title, { lower: true, strict: true, trim: true });
+  // @ts-ignore
+  const slugifyFn = slugify.default || slugify;
+  // @ts-ignore
+  let slug = slugifyFn(title, { lower: true, strict: true, trim: true });
 
   // Check for existing slug
   const existing = await prisma.article.findUnique({ where: { slug } });
