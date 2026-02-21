@@ -62,18 +62,32 @@ const authenticate = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
-    console.error("Authentication error:", error.message);
+    console.error("Authentication/Database error:", error.message);
 
-    if (error.code === "auth/id-token-expired") {
+    // If the error comes from Firebase Auth verifyIdToken (usually starts with 'auth/')
+    if (
+      error.code &&
+      typeof error.code === "string" &&
+      error.code.startsWith("auth/")
+    ) {
+      if (error.code === "auth/id-token-expired") {
+        return res.status(401).json({
+          success: false,
+          message: "Token expired. Please log in again.",
+        });
+      }
       return res.status(401).json({
         success: false,
-        message: "Token expired. Please log in again.",
+        message: "Invalid or expired token.",
       });
     }
 
-    return res.status(401).json({
+    // Otherwise, it is likely a Prisma database connection error or generic error
+    return res.status(500).json({
       success: false,
-      message: "Invalid or expired token.",
+      message:
+        "An internal server/database error occurred during authentication.",
+      error: error.message,
     });
   }
 };
