@@ -78,12 +78,6 @@ const syncUser = async (firebaseUid) => {
     });
   }
 
-  // Update online status
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { isOnline: true, lastSeen: new Date() },
-  });
-
   return user;
 };
 
