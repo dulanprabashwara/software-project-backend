@@ -1,4 +1,4 @@
-   const { Server } = require("socket.io");
+const { Server } = require("socket.io");
 const admin = require("../config/firebase");
 const prisma = require("../config/prisma");
 
@@ -88,6 +88,24 @@ const initializeSocket = (httpServer) => {
           return callback?.({ error: "Receiver ID and content are required" });
         }
 
+        // --- SECURITY ENFORCEMENT 1: Must Follow to Message ---
+        // Check if the sender follows the receiver
+        const isFollowing = await prisma.follow.findUnique({
+          where: {
+            followerId_followingId: {
+              followerId: socket.data.userId,
+              followingId: receiverId,
+            },
+          },
+        });
+
+        if (!isFollowing) {
+          return callback?.({
+            error: "You can only message users you follow.",
+          });
+        }
+        // -----------------------------------------------------
+
         // Save message to database
         const message = await prisma.message.create({
           data: {
@@ -115,6 +133,51 @@ const initializeSocket = (httpServer) => {
       } catch (error) {
         console.error("Message send error:", error.message);
         callback?.({ error: "Failed to send message" });
+      }
+    });
+
+    // ── Delete Message ──
+    socket.on("message:delete", async (data, callback) => {
+      try {
+        const { messageId } = data;
+
+        if (!messageId) {
+          return callback?.({ error: "Message ID is required" });
+        }
+
+        // Find the message
+        const message = await prisma.message.findUnique({
+          where: { id: messageId },
+        });
+
+        if (!message) {
+          return callback?.({ error: "Message not found" });
+        }
+
+        // --- SECURITY ENFORCEMENT 2: Only Sender can Delete ---
+        if (message.senderId !== socket.data.userId) {
+          return callback?.({
+            error: "Unauthorized: You can only delete messages you sent.",
+          });
+        }
+        // ------------------------------------------------------
+
+        await prisma.message.delete({
+          where: { id: messageId },
+        });
+
+        // Notify both sender and receiver that a message was deleted so their UI can remove it
+        io.to(`user:${message.senderId}`).emit("message:deleted", {
+          messageId,
+        });
+        io.to(`user:${message.receiverId}`).emit("message:deleted", {
+          messageId,
+        });
+
+        callback?.({ success: true });
+      } catch (error) {
+        console.error("Message delete error:", error.message);
+        callback?.({ error: "Failed to delete message" });
       }
     });
 

@@ -22,6 +22,7 @@ const getUserProfile = async (identifier, currentUserId = null) => {
       isOnline: true,
       lastSeen: true,
       createdAt: true,
+      role: true,
       linkedInAccountId: true,
       wordpressAccountId: true,
       stats: true,

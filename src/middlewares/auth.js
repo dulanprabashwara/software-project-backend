@@ -53,11 +53,13 @@ const authenticate = async (req, res, next) => {
       }
     }
 
-    // Update online status
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { isOnline: true, lastSeen: new Date() },
-    });
+    // Update online status (fire-and-forget, don't block the request)
+    prisma.user
+      .update({
+        where: { id: user.id },
+        data: { isOnline: true, lastSeen: new Date() },
+      })
+      .catch((err) => console.error("Failed to update online status:", err));
 
     req.user = user;
     next();
