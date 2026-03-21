@@ -28,7 +28,7 @@ const listUsers = asyncHandler(async (req, res) => {
   sendPaginated(res, { data: users, page, limit, total });
 });
 
-const updateUserRole = asyncHandler(async (req, res) => {
+const updateUserRole = asyncHandler(async (/** @type {any} */ req, res) => {
   const user = await adminService.updateUserRole(
     req.user.id,
     req.params.userId,
@@ -37,7 +37,7 @@ const updateUserRole = asyncHandler(async (req, res) => {
   sendSuccess(res, { message: "User role updated.", data: user });
 });
 
-const togglePremium = asyncHandler(async (req, res) => {
+const togglePremium = asyncHandler(async (/** @type {any} */ req, res) => {
   const user = await adminService.togglePremium(req.user.id, req.params.userId);
   sendSuccess(res, {
     message: user.isPremium ? "Premium granted." : "Premium revoked.",
@@ -47,7 +47,7 @@ const togglePremium = asyncHandler(async (req, res) => {
 
 // ─── Bans ───────────────────────────────────
 
-const banUser = asyncHandler(async (req, res) => {
+const banUser = asyncHandler(async (/** @type {any} */ req, res) => {
   const { reason, bannedUntil } = req.body;
   const ban = await adminService.banUser(
     req.user.id,
@@ -58,7 +58,7 @@ const banUser = asyncHandler(async (req, res) => {
   sendSuccess(res, { statusCode: 201, message: "User banned.", data: ban });
 });
 
-const unbanUser = asyncHandler(async (req, res) => {
+const unbanUser = asyncHandler(async (/** @type {any} */ req, res) => {
   await adminService.unbanUser(req.user.id, req.params.userId);
   sendSuccess(res, { message: "User unbanned." });
 });
@@ -76,7 +76,7 @@ const getReports = asyncHandler(async (req, res) => {
   sendPaginated(res, { data: reports, page, limit, total });
 });
 
-const reportArticle = asyncHandler(async (req, res) => {
+const reportArticle = asyncHandler(async (/** @type {any} */ req, res) => {
   const { reason, details } = req.body;
   const report = await adminService.reportArticle(
     req.user.id,
@@ -91,7 +91,7 @@ const reportArticle = asyncHandler(async (req, res) => {
   });
 });
 
-const resolveReport = asyncHandler(async (req, res) => {
+const resolveReport = asyncHandler(async (/** @type {any} */ req, res) => {
   const report = await adminService.resolveReport(
     req.user.id,
     req.params.reportId,
@@ -121,14 +121,14 @@ const getAiConfig = asyncHandler(async (req, res) => {
   sendSuccess(res, { data: config });
 });
 
-const updateAiConfig = asyncHandler(async (req, res) => {
+const updateAiConfig = asyncHandler(async (/** @type {any} */ req, res) => {
   const config = await adminService.updateAiConfig(req.user.id, req.body);
   sendSuccess(res, { message: "AI config updated.", data: config });
 });
 
 // ─── Trending ───────────────────────────────
 
-const getTrendingTopics = asyncHandler(async (req, res) => {
+const getTrendingTopics = asyncHandler(async (/** @type {any} */ req, res) => {
   const limit = parseInt(req.query.limit) || 20;
   const topics = await adminService.getTrendingTopics(limit);
   sendSuccess(res, { data: topics });
