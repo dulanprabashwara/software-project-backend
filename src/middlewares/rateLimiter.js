@@ -17,11 +17,12 @@ const apiLimiter = rateLimit({
 
 /**
  * Stricter rate limiter for auth endpoints.
- * 20 requests per 15 minutes per IP.
+ * 100 requests per 15 minutes per IP.
+ * Note: sync/login are already protected by Firebase token verification.
  */
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
