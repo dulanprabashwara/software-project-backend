@@ -142,4 +142,33 @@ const requirePremium = (req, res, next) => {
   next();
 };
 
-module.exports = { authenticate, authorize, requirePremium };
+/**
+ * Middleware: Optional authentication.
+ * Silently attaches req.user if a valid Bearer token is present.
+ * Does NOT reject the request if the token is missing or invalid.
+ * Use on public routes where knowing the current user is helpful but not required.
+ */
+const optionalAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return next(); // No token — proceed as anonymous
+    }
+
+    const idToken = authHeader.split("Bearer ")[1];
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+
+    const user = await prisma.user.findUnique({
+      where: { firebaseUid: decodedToken.uid },
+    });
+
+    if (user) {
+      req.user = user;
+    }
+  } catch {
+    // Token invalid or expired — silently ignore and proceed as anonymous
+  }
+  next();
+};
+
+module.exports = { authenticate, authorize, requirePremium, optionalAuth };
