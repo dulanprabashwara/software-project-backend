@@ -9,27 +9,13 @@ const toggleFollow = async (followerId, followingId) => {
     throw ApiError.badRequest("You cannot follow yourself.");
   }
 
-  // Check if the target user exists
-  const targetUser = await prisma.user.findUnique({
-    where: { id: followingId },
-  });
-  if (!targetUser) throw ApiError.notFound("User not found.");
-
-  // Check for existing follow
-  const existingFollow = await prisma.follow.findUnique({
-    where: {
-      followerId_followingId: { followerId, followingId },
-    },
-  });
-
-  if (existingFollow) {
-    // Unfollow
-    await prisma.follow.delete({
-      where: { id: existingFollow.id },
-    });
-
-    // Update stats
-    await Promise.all([
+  try {
+    // Attempt to Unfollow first (Optimistic)
+    // Runs entirely in 1 database roundtrip
+    await prisma.$transaction([
+      prisma.follow.delete({
+        where: { followerId_followingId: { followerId, followingId } },
+      }),
       prisma.userStats.upsert({
         where: { userId: followerId },
         update: { totalFollowing: { decrement: 1 } },
@@ -41,29 +27,42 @@ const toggleFollow = async (followerId, followingId) => {
         create: { userId: followingId },
       }),
     ]);
-
     return { followed: false };
-  } else {
-    // Follow
-    await prisma.follow.create({
-      data: { followerId, followingId },
-    });
-
-    // Update stats
-    await Promise.all([
-      prisma.userStats.upsert({
-        where: { userId: followerId },
-        update: { totalFollowing: { increment: 1 } },
-        create: { userId: followerId, totalFollowing: 1 },
-      }),
-      prisma.userStats.upsert({
-        where: { userId: followingId },
-        update: { totalFollowers: { increment: 1 } },
-        create: { userId: followingId, totalFollowers: 1 },
-      }),
-    ]);
-
-    return { followed: true };
+  } catch (error) {
+    // P2025: Record to delete does not exist (They weren't following yet)
+    if (error.code === "P2025") {
+      try {
+        // Attempt to Follow instead
+        // Runs entirely in 1 database roundtrip
+        await prisma.$transaction([
+          prisma.follow.create({
+            data: { followerId, followingId },
+          }),
+          prisma.userStats.upsert({
+            where: { userId: followerId },
+            update: { totalFollowing: { increment: 1 } },
+            create: { userId: followerId, totalFollowing: 1 },
+          }),
+          prisma.userStats.upsert({
+            where: { userId: followingId },
+            update: { totalFollowers: { increment: 1 } },
+            create: { userId: followingId, totalFollowers: 1 },
+          }),
+        ]);
+        return { followed: true };
+      } catch (createError) {
+        // P2003: Foreign key constraint failed (The target user doesn't exist)
+        if (createError.code === "P2003") {
+          throw ApiError.notFound("User not found.");
+        }
+        // P2002: Unique constraint failed (They rapidly clicked and already followed)
+        if (createError.code === "P2002") {
+          return { followed: true };
+        }
+        throw createError;
+      }
+    }
+    throw error;
   }
 };
 

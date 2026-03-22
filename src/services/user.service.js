@@ -33,24 +33,26 @@ const getUserProfile = async (identifier, currentUserId = null) => {
           following: true,
         },
       },
+      // Eagerly check if current user follows this profile (saves 1 DB roundtrip)
+      ...(currentUserId && {
+        followers: {
+          where: { followerId: currentUserId },
+          select: { id: true },
+        },
+      }),
     },
   });
 
   if (!user) throw ApiError.notFound("User not found.");
 
-  // Check if current user is following this profile
   let isFollowing = false;
   if (currentUserId && currentUserId !== user.id) {
-    const follow = await prisma.follow.findUnique({
-      where: {
-        followerId_followingId: {
-          followerId: currentUserId,
-          followingId: user.id,
-        },
-      },
-    });
-    isFollowing = !!follow;
+    // If the array has an item, the current user is following this profile
+    isFollowing = user.followers && user.followers.length > 0;
   }
+  
+  // Remove the eager loaded array from the response object
+  delete user.followers;
 
   return { ...user, isFollowing };
 };
