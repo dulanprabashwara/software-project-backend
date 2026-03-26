@@ -31,4 +31,8 @@ router.put("/ai-config", adminController.updateAiConfig);
 // Trending
 router.get("/trending", adminController.getTrendingTopics);
 
+// Subscription Offers
+router.get("/offers", adminController.getOffers);
+router.post("/offers", adminController.createOffer);
+
 module.exports = router;
