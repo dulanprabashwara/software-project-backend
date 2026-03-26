@@ -392,6 +392,20 @@ const createOffer = async (data) => {
   });
 };
 
+//updateOffer
+const updateOffer = async (id, data) => {
+  return await prisma.offer.update({
+    where: { id: id },
+    data: {
+      name: data.name,
+      discount_percent: parseInt(data.discount_percent),
+      stripe_coupon_id: data.stripe_coupon_id,
+      is_active: data.is_active,
+      features: data.features
+    }
+  });
+};
+
 module.exports = {
   getDashboard,
   refreshDashboard,
@@ -410,4 +424,5 @@ module.exports = {
   incrementTopicHit,
   getAllOffers,
   createOffer,
+  updateOffer,
 };

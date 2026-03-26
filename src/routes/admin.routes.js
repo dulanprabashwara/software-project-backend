@@ -34,5 +34,6 @@ router.get("/trending", adminController.getTrendingTopics);
 // Subscription Offers
 router.get("/offers", adminController.getOffers);
 router.post("/offers", adminController.createOffer);
+router.put("/offers/:id", adminController.updateOffer);
 
 module.exports = router;

@@ -154,6 +154,16 @@ const createOffer = async (req, res, next) => {
   }
 };
 
+const updateOffer = async (req, res, next) => {
+  try {
+    const { id } = req.params; // Grabs the ID from the URL
+    const updatedOffer = await adminService.updateOffer(id, req.body);
+    res.status(200).json({ success: true, data: updatedOffer });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getDashboard,
   listUsers,
@@ -170,4 +180,5 @@ module.exports = {
   getTrendingTopics,
   getOffers,
   createOffer,
+  updateOffer,
 };
