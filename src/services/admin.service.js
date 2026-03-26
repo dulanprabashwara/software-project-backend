@@ -373,6 +373,25 @@ const incrementTopicHit = async (topicName) => {
   });
 };
 
+// Get all offers
+const getAllOffers = async () => {
+  return await prisma.offer.findMany({
+    orderBy: { createdAt: 'desc' }
+  });
+};
+
+// Create a new offer
+const createOffer = async (data) => {
+  // add Stripe API logic here!
+  return await prisma.offer.create({
+    data: {
+      name: data.name,
+      discount_percent: parseInt(data.discount_percent),
+      is_active: true
+    }
+  });
+};
+
 module.exports = {
   getDashboard,
   refreshDashboard,
@@ -389,4 +408,6 @@ module.exports = {
   updateAiConfig,
   getTrendingTopics,
   incrementTopicHit,
+  getAllOffers,
+  createOffer,
 };
