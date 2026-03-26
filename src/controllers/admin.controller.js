@@ -134,6 +134,26 @@ const getTrendingTopics = asyncHandler(async (/** @type {any} */ req, res) => {
   sendSuccess(res, { data: topics });
 });
 
+// ─── Offers ───────────────────────────────
+const getOffers = async (req, res, next) => {
+  try {
+    // Assuming adminService is already imported at the top of this file
+    const offers = await adminService.getAllOffers();
+    res.status(200).json({ success: true, data: offers });
+  } catch (error) {
+    next(error); // Passes the error to your teammate's error handler
+  }
+};
+
+const createOffer = async (req, res, next) => {
+  try {
+    const newOffer = await adminService.createOffer(req.body);
+    res.status(201).json({ success: true, data: newOffer });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getDashboard,
   listUsers,
@@ -148,4 +168,6 @@ module.exports = {
   getAiConfig,
   updateAiConfig,
   getTrendingTopics,
+  getOffers,
+  createOffer,
 };
