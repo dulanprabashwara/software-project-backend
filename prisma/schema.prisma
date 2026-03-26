@@ -427,3 +427,19 @@ model TrendingTopic {
   @@index([hitCount])
   @@map("trending_topics")
 }
+
+
+// ─── Offer ──────────────────────────
+
+model Offer {
+  id               String   @id @default(cuid())
+  name             String   // e.g., "Holiday Sale"
+  discount_percent Int      // e.g., 20
+  stripe_coupon_id String?  // To be filled later by Stripe integration
+  is_active        Boolean  @default(true)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("offers")
+}
