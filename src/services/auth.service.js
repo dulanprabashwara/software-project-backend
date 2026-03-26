@@ -55,7 +55,17 @@ const registerUser = async ({
 const syncUser = async (firebaseUid) => {
   let user = await prisma.user.findUnique({
     where: { firebaseUid },
-    include: { stats: true, bannedRecord: true },
+    include: {
+      stats: true,
+      bannedRecord: true,
+      _count: {
+        select: {
+          followers: true,
+          following: true,
+          articles: { where: { status: "PUBLISHED" } },
+        },
+      },
+    },
   });
 
   if (!user) {
@@ -74,7 +84,16 @@ const syncUser = async (firebaseUid) => {
         avatarUrl: firebaseUser.photoURL || null,
         stats: { create: {} },
       },
-      include: { stats: true },
+      include: {
+        stats: true,
+        _count: {
+          select: {
+            followers: true,
+            following: true,
+            articles: { where: { status: "PUBLISHED" } },
+          },
+        },
+      },
     });
   }
 

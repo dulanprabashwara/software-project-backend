@@ -1,7 +1,7 @@
 const { Router } = require("express");
 const userController = require("../controllers/user.controller");
 const followController = require("../controllers/follow.controller");
-const { authenticate } = require("../middlewares/auth");
+const { authenticate, optionalAuth } = require("../middlewares/auth");
 
 const router = Router();
 
@@ -15,8 +15,8 @@ router.get("/me", authenticate, userController.getMe);
 router.put("/me", authenticate, userController.updateProfile);
 router.put("/profile", authenticate, userController.updateProfile); // Keep old alias just in case
 
-// User profile by ID or username (public)
-router.get("/:identifier", userController.getProfile);
+// User profile by ID or username (public, but optionalAuth so isFollowing works)
+router.get("/:identifier", optionalAuth, userController.getProfile);
 
 // Follow system (protected)
 router.post("/:userId/follow", authenticate, followController.toggleFollow);
