@@ -437,6 +437,7 @@ model Offer {
   discount_percent Int      // e.g., 20
   stripe_coupon_id String?  // To be filled later by Stripe integration
   is_active        Boolean  @default(true)
+  features         Json?
 
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
