@@ -94,6 +94,7 @@ model User {
   // Notifications
   notifications Notification[]
 
+  aiArticleLogs AiArticleLog[]  
   @@map("users")
 }
 
@@ -139,6 +140,7 @@ model Article {
   savedBy        SavedArticle[]
   readHistory    ReadHistory[]
   reports        ReportedArticle[]
+  aiLog   AiArticleLog?   
 
   @@index([authorId])
   @@index([status])
@@ -428,6 +430,42 @@ model TrendingTopic {
   @@map("trending_topics")
 }
 
+
+
+model AiArticleLog {
+  id String @id @default(cuid())
+ 
+  // ── Instructions the user gave ──
+  userPrompt        String   // original text the user typed
+  keywordsPresented String[] // all keywords AI matched and showed
+  keywordsSelected  String[] // keywords the user actually selected (0-4)
+ 
+  // null = user specified this preference inside their prompt text
+  articleLength String?  // "short" | "mid-length" | "long" | null
+  tone          String?  // "professional" | "casual" | "humorous" | null
+ 
+  // ── AI output ──
+  articleTitle   String
+  articleContent String
+  wordCount      Int
+ 
+  // ── Draft link ──
+  // null  = user has not clicked Save Draft
+  // set   = points to the Article row created when user saved
+  savedToDraftId String?  @unique
+  savedToDraft   Article? @relation(fields: [savedToDraftId], references: [id], onDelete: SetNull)
+ 
+  // ── Timestamp ──
+  generatedAt DateTime @default(now())
+ 
+  // ── Author ──
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+ 
+  @@index([authorId])
+  @@index([generatedAt])
+  @@map("ai_article_logs")
+}
 
 // ─── Offer ──────────────────────────
 
