@@ -406,6 +406,48 @@ const updateOffer = async (id, data) => {
   });
 };
 
+//scraping sources
+const getScrapingSources = async () => {
+  return await prisma.scrapingSource.findMany({
+    orderBy: { createdAt: 'desc' }
+  });
+};
+
+const createScrapingSource = async (data) => {
+  return await prisma.scrapingSource.create({
+    data: {
+      name: data.name,
+      url: data.url,
+      category: data.category,
+      scrapeWindow: data.scrapeWindow, 
+      minWordCount: parseInt(data.minWordCount) || 300,
+      excludedKeywords: data.excludedKeywords || [],
+      status: data.status || "active"
+    }
+  });
+};
+
+const updateScrapingSource = async (id, data) => {
+  return await prisma.scrapingSource.update({
+    where: { id: id },
+    data: {
+      name: data.name,
+      url: data.url,
+      category: data.category,
+      scrapeWindow: data.scrapeWindow,
+      minWordCount: parseInt(data.minWordCount) || 300,
+      excludedKeywords: data.excludedKeywords || [],
+      status: data.status
+    }
+  });
+};
+
+const deleteScrapingSource = async (id) => {
+  return await prisma.scrapingSource.delete({
+    where: { id: id }
+  });
+};
+
 module.exports = {
   getDashboard,
   refreshDashboard,
@@ -425,4 +467,8 @@ module.exports = {
   getAllOffers,
   createOffer,
   updateOffer,
+  getScrapingSources,
+  createScrapingSource,
+  updateScrapingSource,
+  deleteScrapingSource,
 };
