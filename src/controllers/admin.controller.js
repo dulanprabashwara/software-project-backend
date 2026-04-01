@@ -164,6 +164,74 @@ const updateOffer = async (req, res, next) => {
   }
 };
 
+// ─── scraping sources ───────────────────────────────
+const getScrapingSources = async (req, res, next) => {
+  try {
+    const sources = await adminService.getScrapingSources();
+    res.status(200).json({ success: true, data: sources });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const createScrapingSource = async (req, res, next) => {
+  try {
+    const newSource = await adminService.createScrapingSource(req.body);
+    res.status(201).json({ success: true, data: newSource });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateScrapingSource = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const updatedSource = await adminService.updateScrapingSource(id, req.body);
+    res.status(200).json({ success: true, data: updatedSource });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const deleteScrapingSource = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    await adminService.deleteScrapingSource(id);
+    res.status(200).json({ success: true, message: "Source deleted successfully" });
+  } catch (error) {
+    next(error);
+  }
+};
+
+//  ─── URL validation ───────────────────────────────
+const validateUrl = async (req, res, next) => {
+  try {
+    const { url } = req.body;
+    
+    // Ensure it has https:// so the fetch doesn't crash
+    const formattedUrl = url.startsWith('http') ? url : `https://${url}`;
+
+    // Ping the website- Pretending to be a normal web browser
+    const response = await fetch(formattedUrl, { 
+      method: 'GET',
+      headers: { 
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' 
+      } 
+    });
+
+    // If the website returns a 200 OK status, it is real and scrapable!
+    if (response.ok) {
+      return res.status(200).json({ success: true, data: { valid: true } });
+    } else {
+      // It exists, but it blocked us or returned a 404
+      return res.status(200).json({ success: true, data: { valid: false } });
+    }
+  } catch (error) {
+    // The domain doesn't exist at all, or the site is completely down
+    return res.status(200).json({ success: true, data: { valid: false } });
+  }
+};
+
 module.exports = {
   getDashboard,
   listUsers,
@@ -181,4 +249,9 @@ module.exports = {
   getOffers,
   createOffer,
   updateOffer,
+  getScrapingSources,
+  createScrapingSource,
+  validateUrl,
+  updateScrapingSource,
+  deleteScrapingSource,
 };
