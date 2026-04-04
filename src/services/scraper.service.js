@@ -1,0 +1,940 @@
+// src/services/scraper.service.js
+// ─────────────────────────────────────────────────────────────────────────────
+// Content Scraping Service — Phase 1 (Initialization) + Phase 2 (Scraping)
+//
+// Phase 1: Load config from DB → create session log → init counters
+// Phase 2: For each source URL → HTTP request → parse → clean → validate
+//          → duplicate check → save raw article → log every outcome
+//
+// Technologies: axios (HTTP), cheerio (HTML parsing), prisma (DB)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const axios   = require("axios");
+const cheerio = require("cheerio");
+const prisma  = require("../config/prisma");
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+// Maximum articles to collect per source URL per session.
+// 7 articles × ~40 sources (20 categories × 2 URLs) = ~280 articles max per session.
+const MAX_ARTICLES_PER_SOURCE = 7;
+
+// Delay range between HTTP requests (milliseconds) — polite scraping
+const RATE_LIMIT_MIN_MS = 1500;
+const RATE_LIMIT_MAX_MS = 2500;
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// UTILITY HELPERS
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── parseScrapeWindowToDays ───────────────────────────────────────────────
+// Converts the admin-configured scrapeWindow string to a number of days.
+// Matches exactly the dropdown values in page.jsx.
+// Returns null if no limit should be applied.
+
+function parseScrapeWindowToDays(scrapeWindow) {
+  if (!scrapeWindow) return null;
+
+  const val = String(scrapeWindow).toLowerCase().trim();
+
+  const exactMap = {
+    "last 24 hours": 1,
+    "last 7 days":   7,
+    "last 30 days":  30,
+    "3 months":      90,
+    "6 months":      180,
+    "1 year":        365,
+  };
+
+  if (exactMap[val] !== undefined) return exactMap[val];
+
+  // Flexible fallbacks for any future values the admin panel might add
+  const dayMatch   = val.match(/^(?:last\s+)?(\d+)\s*days?$/);
+  if (dayMatch) return parseInt(dayMatch[1]);
+
+  const monthMatch = val.match(/^(\d+)\s*months?$/);
+  if (monthMatch) return parseInt(monthMatch[1]) * 30;
+
+  const yearMatch  = val.match(/^(\d+)\s*years?$/);
+  if (yearMatch) return parseInt(yearMatch[1]) * 365;
+
+  console.warn(`[Scraper] Unknown scrapeWindow value: "${scrapeWindow}" — no age limit applied`);
+  return null;
+}
+
+// ── countWords ────────────────────────────────────────────────────────────
+function countWords(text) {
+  return text.trim().split(/\s+/).filter((w) => w.length > 0).length;
+}
+
+// ── sleep ─────────────────────────────────────────────────────────────────
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// PHASE 1 — INITIALIZATION
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── loadConfiguration ─────────────────────────────────────────────────────
+// Reads all active ScrapingSource records from the database.
+// Groups them by category for the scraping loop.
+// Field names match admin.service.js exactly: name, url, category,
+// scrapeWindow, minWordCount, excludedKeywords, status.
+
+async function loadConfiguration() {
+  console.log("[Phase 1] loadConfiguration() — fetching active sources from DB...");
+
+  const sources = await prisma.scrapingSource.findMany({
+    where: { status: "active" },
+    select: {
+      id:               true,
+      name:             true,
+      url:              true,
+      category:         true,
+      scrapeWindow:     true,   // article age limit e.g. "Last 7 Days"
+      minWordCount:     true,
+      excludedKeywords: true,
+    },
+  });
+
+  if (!sources.length) {
+    console.log("[Phase 1] No active scraping sources found.");
+    return { categories: [], sourcesByCategory: {}, totalSources: 0 };
+  }
+
+  // Group by category: { Technology: [...], Health: [...], ... }
+  const sourcesByCategory = {};
+  for (const src of sources) {
+    const cat = src.category || "Uncategorized";
+    if (!sourcesByCategory[cat]) sourcesByCategory[cat] = [];
+    sourcesByCategory[cat].push(src);
+  }
+
+  const categories = Object.keys(sourcesByCategory);
+  console.log(`[Phase 1] Loaded ${sources.length} sources across ${categories.length} categories: ${categories.join(", ")}`);
+
+  return { categories, sourcesByCategory, totalSources: sources.length };
+}
+
+// ── getLastSuccessfulScrapeDate ────────────────────────────────────────────
+// Finds the completion date of the most recent successful session.
+
+async function getLastSuccessfulScrapeDate() {
+  const last = await prisma.scrapingSession.findFirst({
+    where:   { status: "completed" },
+    orderBy: { completedAt: "desc" },
+    select:  { completedAt: true },
+  });
+  const date = last?.completedAt || null;
+  console.log(`[Phase 1] Last successful scrape: ${date ? date.toISOString() : "never"}`);
+  return date;
+}
+
+// ── createScrapingSessionLog ───────────────────────────────────────────────
+// Creates the ScrapingSession row at the START of the job.
+// Returns sessionId — passed to all subsequent operations.
+
+async function createScrapingSessionLog(totalSources, lastScrapeDate) {
+  console.log("[Phase 1] createScrapingSessionLog()...");
+
+  const session = await prisma.scrapingSession.create({
+    data: {
+      status:        "running",
+      lastScrapeDate,
+      totalSources,
+    },
+  });
+
+  console.log(`[Phase 1] Session created → id: ${session.id}`);
+  return session.id;
+}
+
+// ── initializeKeywordCounters ──────────────────────────────────────────────
+// Creates in-memory counters per category.
+// { Technology: { success:0, failure:0, duplicate:0, urlsProcessed:0 }, ... }
+
+function initializeKeywordCounters(categories) {
+  console.log("[Phase 1] initializeKeywordCounters()...");
+  const counters = {};
+  for (const cat of categories) {
+    counters[cat] = { successCount: 0, failureCount: 0, duplicateCount: 0, urlsProcessed: 0 };
+  }
+  return counters;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// PHASE 2 — ARTICLE SCRAPING & CONTENT VALIDATION
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── applyRateLimitDelay ────────────────────────────────────────────────────
+// Waits 1.5–2.5 seconds between HTTP requests.
+
+async function applyRateLimitDelay() {
+  const ms = RATE_LIMIT_MIN_MS + Math.random() * (RATE_LIMIT_MAX_MS - RATE_LIMIT_MIN_MS);
+  await sleep(ms);
+}
+
+// ── sendHTTPRequest ────────────────────────────────────────────────────────
+// Downloads a web page using axios with browser-like headers.
+// Includes one automatic retry on network errors.
+// Throws on persistent failure — caller logs and continues.
+
+async function sendHTTPRequest(url, attempt = 1) {
+  try {
+    const response = await axios.get(url, {
+      timeout: 15000,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection":      "keep-alive",
+      },
+      maxRedirects: 5,
+      validateStatus: (status) => status < 500, // don't throw on 4xx
+    });
+
+    if (response.status >= 400) {
+      throw Object.assign(new Error(`HTTP ${response.status}`), { statusCode: response.status });
+    }
+
+    return { htmlContent: response.data, statusCode: response.status };
+
+  } catch (err) {
+    if (attempt < 2) {
+      // One retry after a short delay
+      await sleep(3000);
+      return sendHTTPRequest(url, 2);
+    }
+    throw Object.assign(err, { statusCode: err.response?.status || 0 });
+  }
+}
+
+// ── collectArticleLinks ────────────────────────────────────────────────────
+// Scans the homepage HTML for links that look like individual article pages.
+// Filters out navigation/category/tag/author pages.
+// Returns up to MAX_ARTICLES_PER_SOURCE article URLs.
+
+function collectArticleLinks(html, sourceUrl) {
+  const $ = cheerio.load(html);
+  const origin = new URL(sourceUrl).origin;
+  const scored = [];
+
+  $("a[href]").each((_, el) => {
+    let href = $(el).attr("href") || "";
+
+    // Resolve relative and protocol-relative URLs
+    if (href.startsWith("//"))  href = "https:" + href;
+    if (href.startsWith("/"))   href = origin + href;
+    if (!href.startsWith("http")) return;
+
+    let parsed;
+    try { parsed = new URL(href); } catch { return; }
+
+    // Must be on the same domain
+    if (parsed.origin !== origin) return;
+
+    // Strip fragment and query (we want clean article URLs)
+    const cleanUrl = parsed.origin + parsed.pathname;
+
+    // Skip non-article patterns
+    const skipPattern = /\/(tag|tags|category|categories|author|authors|search|page\/\d|feed|rss|wp-json|cdn-cgi|sitemap|subscribe|newsletter|login|signup|about|contact|privacy|terms|advertise|careers)\/?$/i;
+    if (skipPattern.test(parsed.pathname)) return;
+
+    // Skip root and very short paths
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length < 1) return;
+
+    // Skip media files
+    if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|mp4|mp3|css|js)$/i.test(parsed.pathname)) return;
+
+    // Score: more path segments + hyphens in slug = more article-like
+    const lastSegment = segments[segments.length - 1] || "";
+    const hyphenCount = (lastSegment.match(/-/g) || []).length;
+    const score       = segments.length * 2 + hyphenCount;
+
+    scored.push({ url: cleanUrl, score });
+  });
+
+  // Sort by score descending, deduplicate, take top N
+  const seen  = new Set();
+  const links = [];
+  for (const item of scored.sort((a, b) => b.score - a.score)) {
+    if (!seen.has(item.url)) {
+      seen.add(item.url);
+      links.push(item.url);
+      if (links.length >= MAX_ARTICLES_PER_SOURCE) break;
+    }
+  }
+
+  return links;
+}
+
+// ── parseHTML ─────────────────────────────────────────────────────────────
+// Loads HTML into Cheerio. Returns the $ jQuery-like object.
+
+function parseHTML(html) {
+  return cheerio.load(html);
+}
+
+// ── identifyArticleStructure ──────────────────────────────────────────────
+// Finds the main article container element using common CSS selectors.
+// Returns the Cheerio element (articleStructure).
+
+function identifyArticleStructure($) {
+  const selectors = [
+    "article",
+    '[itemprop="articleBody"]',
+    ".post-content",
+    ".entry-content",
+    ".article-content",
+    ".article-body",
+    ".post-body",
+    ".story-body",
+    ".content-body",
+    ".blog-content",
+    ".blog-post-content",
+    "#article-content",
+    "#post-content",
+    ".main-content",
+    "main",
+  ];
+
+  for (const sel of selectors) {
+    if ($(sel).length > 0) return $(sel).first();
+  }
+
+  return $("body"); // fallback
+}
+
+// ── extractArticleContent ─────────────────────────────────────────────────
+// Extracts title, author, published date, and metadata from the page.
+// These are pulled from semantic HTML and Open Graph meta tags.
+
+function extractArticleContent($, articleContainer) {
+  // Title: article h1 → page h1 → og:title → <title>
+  const title =
+    articleContainer.find("h1").first().text().trim() ||
+    $("h1").first().text().trim() ||
+    $('meta[property="og:title"]').attr("content")?.trim() ||
+    $("title").text().split(/[|\-–—]/)[0].trim() ||
+    "";
+
+  // Author
+  const author =
+    $('[rel="author"]').first().text().trim() ||
+    $('[itemprop="author"]').first().text().trim() ||
+    $(".author-name, .author, .byline").first().text().trim() ||
+    null;
+
+  // Published date
+  const dateStr =
+    $('meta[property="article:published_time"]').attr("content") ||
+    $("time[datetime]").first().attr("datetime") ||
+    $('[itemprop="datePublished"]').attr("content") ||
+    null;
+
+  const publishedDate = dateStr ? new Date(dateStr) : null;
+
+  // Metadata for storage
+  const metadata = {
+    description: $('meta[name="description"]').attr("content") ||
+                 $('meta[property="og:description"]').attr("content") || null,
+    siteName:    $('meta[property="og:site_name"]').attr("content") || null,
+    pageTitle:   $("title").text().trim() || null,
+    ogImage:     $('meta[property="og:image"]').attr("content") || null,
+  };
+
+  return { title, author, publishedDate, metadata };
+}
+
+// ── cleanExtractedContent ─────────────────────────────────────────────────
+// Strips all noise from the article container, then extracts only
+// headings and paragraphs — the meaningful content.
+//
+// REMOVED: scripts, styles, nav, header, footer, ads, social buttons,
+//          related posts, newsletters, comments, ALL media (img/video/audio/
+//          iframe/figure), popups, cookie banners, breadcrumbs, author bios,
+//          tag/category links, print buttons.
+//
+// KEPT: h1-h6 (formatted as [H1] etc.), p, blockquote, li
+//
+// DEDUPLICATION: Set-based, skips any text already extracted.
+
+function cleanExtractedContent($, articleContainer) {
+  // ── Remove all noise elements ────────────────────────────────────────
+  $(
+    "script, style, noscript, " +
+    "nav, header, footer, " +
+    ".nav, .navigation, .navbar, .nav-bar, .site-nav, .main-nav, " +
+    ".site-header, .page-header, .site-footer, .page-footer, " +
+    "aside, .sidebar, .side-bar, .widget, .widget-area, [role='complementary'], " +
+
+    // Advertisements — many naming patterns
+    ".ad, .ads, .ad-unit, .ad-container, .ad-wrapper, .ad-banner, " +
+    ".advertisement, .advertisements, .advert, .google-ad, .sponsored, " +
+    '[id*="ad-"], [class*="ad-"], [id*="-ad"], [class*="-ad"], ' +
+    '[id*="advert"], [class*="advert"], [id*="sponsor"], [class*="sponsor"], ' +
+
+    // Social sharing
+    ".social-share, .social-sharing, .share-buttons, .share-bar, " +
+    ".social-links, .social-icons, .follow-us, .addthis, " +
+
+    // Related / recommended content
+    ".related-posts, .related-articles, .more-articles, .more-stories, " +
+    ".recommended, .you-may-also-like, .read-next, " +
+
+    // Newsletter / subscribe
+    ".newsletter, .newsletter-signup, .subscribe, .subscription-box, " +
+    ".email-signup, .cta-box, " +
+
+    // Comments
+    ".comments, #comments, .comment-section, .disqus-container, #disqus_thread, " +
+
+    // Popups and overlays
+    ".popup, .modal, .overlay, .lightbox, " +
+    ".cookie-banner, .cookie-notice, .gdpr-banner, .consent-banner, " +
+
+    // Navigation helpers
+    ".breadcrumb, .breadcrumbs, .pagination, .page-nav, .post-navigation, " +
+    ".back-to-top, .scroll-to-top, " +
+
+    // ALL media — we store text only
+    "img, video, audio, picture, source, track, figure, figcaption, " +
+    "iframe, embed, object, canvas, svg, " +
+
+    // Author bio boxes
+    ".author-bio, .author-box, .about-author, .author-profile, " +
+
+    // Tags and category labels
+    ".tags, .tag-list, .categories, .post-tags, .post-categories, " +
+    ".entry-meta, .post-meta, " +
+
+    // Utility elements
+    '[data-print], .print-button, .toolbar, .utility-bar'
+  ).remove();
+
+  // ── Extract headings and paragraphs ──────────────────────────────────
+  const contentParts = [];
+  const seenText     = new Set(); // exact duplicate prevention
+
+  articleContainer.find("h1, h2, h3, h4, h5, h6, p, blockquote, li").each((_, el) => {
+    const tag  = $(el).prop("tagName").toLowerCase();
+    const text = $(el).text().replace(/\s+/g, " ").trim();
+
+    // Skip short snippets (labels, captions, button text, etc.)
+    if (!text || text.length < 30) return;
+
+    // Skip if already seen
+    if (seenText.has(text)) return;
+    seenText.add(text);
+
+    // Format with structural markers for AI readability
+    if      (tag === "h1")         contentParts.push(`[H1] ${text}`);
+    else if (tag === "h2")         contentParts.push(`[H2] ${text}`);
+    else if (tag === "h3")         contentParts.push(`[H3] ${text}`);
+    else if (tag === "h4")         contentParts.push(`[H4] ${text}`);
+    else if (tag === "h5")         contentParts.push(`[H5] ${text}`);
+    else if (tag === "h6")         contentParts.push(`[H6] ${text}`);
+    else if (tag === "blockquote") contentParts.push(`[QUOTE] ${text}`);
+    else                           contentParts.push(text); // p, li
+  });
+
+  const content   = contentParts.join("\n\n");
+  const wordCount = countWords(content);
+
+  return { content, wordCount };
+}
+
+// ── validateArticleContent ────────────────────────────────────────────────
+// Three validation checks from the diagram:
+//   1. checkPublishDate  — article age vs admin-configured scrapeWindow
+//   2. checkWordCount    — content words vs admin-configured minWordCount
+//   3. checkContentQuality — structure, length, excluded keywords
+//
+// Returns: { valid: boolean, reason: string|null }
+
+function validateArticleContent(cleanedContent, title, publishedDate, source) {
+  const { content, wordCount } = cleanedContent;
+  const maxAgeDays   = parseScrapeWindowToDays(source.scrapeWindow);
+  const minWordCount = source.minWordCount || 300;
+  const excludedKws  = source.excludedKeywords || [];
+
+  // ── checkPublishDate ──────────────────────────────────────────────────
+  // Only checks if:
+  //   (a) the article has an extractable published date in its HTML
+  //   (b) the admin set a scrapeWindow value
+  if (publishedDate && !isNaN(publishedDate) && maxAgeDays) {
+    const ageDays = (Date.now() - publishedDate.getTime()) / (1000 * 60 * 60 * 24);
+    if (ageDays > maxAgeDays) {
+      return {
+        valid:  false,
+        reason: `Too old: ${Math.floor(ageDays)}d (limit: ${source.scrapeWindow})`,
+      };
+    }
+  }
+
+  // ── checkWordCount ────────────────────────────────────────────────────
+  if (wordCount < minWordCount) {
+    return {
+      valid:  false,
+      reason: `Word count ${wordCount} below minimum ${minWordCount}`,
+    };
+  }
+
+  // ── checkContentQuality ───────────────────────────────────────────────
+  if (content.length < 400) {
+    return { valid: false, reason: "Content too thin after cleaning (< 400 chars)" };
+  }
+
+  if (!title || title.length < 10) {
+    return { valid: false, reason: "Title missing or too short" };
+  }
+
+  // Must have at least some paragraph structure
+  const paraCount = (content.match(/\n\n/g) || []).length;
+  if (paraCount < 2) {
+    return { valid: false, reason: "No paragraph structure — likely a listing or navigation page" };
+  }
+
+  // Excluded keywords check (case-insensitive, checks title + content)
+  const combined = (title + " " + content).toLowerCase();
+  for (const kw of excludedKws) {
+    if (kw && combined.includes(kw.toLowerCase())) {
+      return { valid: false, reason: `Contains excluded keyword: "${kw}"` };
+    }
+  }
+
+  return { valid: true, reason: null };
+}
+
+// ── checkDuplicateArticle ─────────────────────────────────────────────────
+// Checks DB for existing article with same URL.
+// The @unique constraint on sourceUrl is the primary guard.
+// Returns true if duplicate.
+
+async function checkDuplicateArticle(url) {
+  const existing = await prisma.scrapedArticle.findUnique({
+    where:  { sourceUrl: url },
+    select: { id: true },
+  });
+  return existing !== null;
+}
+
+// ── saveScrapedArticle ────────────────────────────────────────────────────
+// Saves cleaned article to scraped_articles.
+// summary and matchedKeywords are null at this point — populated in Phase 3.
+
+async function saveScrapedArticle({
+  url, title, content, author, publishedDate,
+  wordCount, category, scrapingSourceId, metadata, sessionId,
+}) {
+  return prisma.scrapedArticle.create({
+    data: {
+      sourceUrl:        url,
+      title,
+      content,
+      author:           author || null,
+      publishedDate:    (publishedDate && !isNaN(publishedDate)) ? publishedDate : null,
+      wordCount,
+      category,
+      scrapingSourceId,
+      metadata:         metadata || null,
+      summary:          null,   // populated by enrichment in Phase 3
+      matchedKeywords:  [],     // populated by enrichment in Phase 3
+      sessionId,
+    },
+  });
+}
+
+// ── logScrapingEvent ──────────────────────────────────────────────────────
+// Writes one row to ScrapingLog.
+// Called at every outcome point in the diagram.
+// Non-blocking — failures logged to console but don't crash the scraper.
+
+async function logScrapingEvent(sessionId, { logType, url, category, statusCode, reason, details }) {
+  await prisma.scrapingLog.create({
+    data: {
+      sessionId,
+      logType,
+      url:        url     || "",
+      category:   category || null,
+      statusCode: statusCode || null,
+      reason:     reason   || null,
+      details:    details  || null,
+    },
+  }).catch((err) =>
+    console.error(`[ScrapingLog] Write failed: ${err.message}`)
+  );
+}
+
+// ── saveKeywordScrapingStats ──────────────────────────────────────────────
+// Saves per-category stats to KeywordScrapingStats after all URLs
+// for that category are processed.
+
+async function saveKeywordScrapingStats(sessionId, category, counters) {
+  const c = counters[category];
+  await prisma.keywordScrapingStats.create({
+    data: {
+      sessionId,
+      category,
+      urlsProcessed:  c.urlsProcessed,
+      successCount:   c.successCount,
+      duplicateCount: c.duplicateCount,
+      failureCount:   c.failureCount,
+    },
+  });
+  console.log(
+    `[Phase 2] Stats saved for "${category}": ` +
+    `✅${c.successCount} ♻️${c.duplicateCount} ❌${c.failureCount}`
+  );
+}
+
+// ── scrapeSource ──────────────────────────────────────────────────────────
+// Orchestrates scraping for ONE source URL.
+// Downloads homepage → collects article links → scrapes each article.
+// Updates counters and logs at every step.
+
+async function scrapeSource(source, sessionId, counters) {
+  const { id: sourceId, url: sourceUrl, name, category } = source;
+
+  console.log(`\n[Phase 2] ▶ "${name}" (${sourceUrl})`);
+
+  // ── Download source homepage ─────────────────────────────────────────
+  await applyRateLimitDelay();
+
+  let homepageHtml;
+  try {
+    ({ htmlContent: homepageHtml } = await sendHTTPRequest(sourceUrl));
+  } catch (err) {
+    console.error(`[Phase 2] ❌ Homepage unreachable: ${name} — ${err.message}`);
+    await logScrapingEvent(sessionId, {
+      logType:    "http_error",
+      url:        sourceUrl,
+      category,
+      statusCode: err.statusCode || 0,
+      reason:     `Homepage request failed: ${err.message}`,
+    });
+    counters[category].failureCount++;
+    return;
+  }
+
+  // ── Collect article links from homepage ──────────────────────────────
+  const articleLinks = collectArticleLinks(homepageHtml, sourceUrl);
+  console.log(`[Phase 2] Found ${articleLinks.length} article links on "${name}"`);
+
+  if (!articleLinks.length) {
+    await logScrapingEvent(sessionId, {
+      logType: "info",
+      url:     sourceUrl,
+      category,
+      reason:  "No article links found on homepage",
+    });
+    return;
+  }
+
+  // ── Process each article link ────────────────────────────────────────
+  for (const articleUrl of articleLinks) {
+    counters[category].urlsProcessed++;
+
+    await applyRateLimitDelay();
+
+    // sendHTTPRequest
+    let htmlContent;
+    try {
+      ({ htmlContent } = await sendHTTPRequest(articleUrl));
+    } catch (err) {
+      console.warn(`[Phase 2] ❌ HTTP error: ${articleUrl} — ${err.message}`);
+      await logScrapingEvent(sessionId, {
+        logType:    "http_error",
+        url:        articleUrl,
+        category,
+        statusCode: err.statusCode || 0,
+        reason:     err.message,
+      });
+      counters[category].failureCount++;
+      continue;
+    }
+
+    // parseHTML → identifyArticleStructure → extractArticleContent
+    const $                = parseHTML(htmlContent);
+    const articleContainer = identifyArticleStructure($);
+    const { title, author, publishedDate, metadata } = extractArticleContent($, articleContainer);
+
+    // cleanExtractedContent
+    const cleaned = cleanExtractedContent($, articleContainer);
+    console.log(`[Phase 2] Cleaned: "${title}" (${cleaned.wordCount}w)`);
+
+    // validateArticleContent
+    const { valid, reason } = validateArticleContent(cleaned, title, publishedDate, source);
+    if (!valid) {
+      console.log(`[Phase 2] ⚠️  Invalid: ${reason}`);
+      await logScrapingEvent(sessionId, {
+        logType:  "validation_failure",
+        url:      articleUrl,
+        category,
+        reason,
+        details:  { title, wordCount: cleaned.wordCount },
+      });
+      counters[category].failureCount++;
+      continue;
+    }
+
+    // checkDuplicateArticle
+    const isDuplicate = await checkDuplicateArticle(articleUrl);
+    if (isDuplicate) {
+      console.log(`[Phase 2] ♻️  Duplicate: "${title}"`);
+      await logScrapingEvent(sessionId, {
+        logType:  "duplicate",
+        url:      articleUrl,
+        category,
+        reason:   "URL already exists in scraped_articles",
+        details:  { title },
+      });
+      counters[category].duplicateCount++;
+      continue;
+    }
+
+    // saveScrapedArticle
+    try {
+      const saved = await saveScrapedArticle({
+        url:              articleUrl,
+        title,
+        content:          cleaned.content,
+        author,
+        publishedDate,
+        wordCount:        cleaned.wordCount,
+        category,
+        scrapingSourceId: sourceId,
+        metadata,
+        sessionId,
+      });
+
+      await logScrapingEvent(sessionId, {
+        logType:  "success",
+        url:      articleUrl,
+        category,
+        details:  { articleId: saved.id, title, wordCount: cleaned.wordCount },
+      });
+
+      counters[category].successCount++;
+      console.log(`[Phase 2] ✅ Saved: "${title}" → ${saved.id}`);
+
+    } catch (err) {
+      console.error(`[Phase 2] ❌ DB save failed for "${title}": ${err.message}`);
+      await logScrapingEvent(sessionId, {
+        logType:  "http_error",
+        url:      articleUrl,
+        category,
+        reason:   `DB save error: ${err.message}`,
+        details:  { title },
+      });
+      counters[category].failureCount++;
+    }
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// MAIN ORCHESTRATOR — exported and called by scraper.job.js
+// ════════════════════════════════════════════════════════════════════════════
+
+async function runScrapingSession() {
+  const { runEnrichmentStage } = require("./enrichment.service");
+  const { sendCompletionNotification, sendErrorAlert } = require("./email.service");
+
+  console.log(`\n${"═".repeat(60)}`);
+  console.log(`[Scraper] 🚀 Session started: ${new Date().toISOString()}`);
+  console.log(`${"═".repeat(60)}\n`);
+
+  let sessionId  = null;
+  const startTime = Date.now();
+
+  try {
+
+    // ── PHASE 1: INITIALIZATION ─────────────────────────────────────────
+
+    const config = await loadConfiguration();
+    if (!config.totalSources) {
+      console.log("[Scraper] No active sources. Session skipped.");
+      return;
+    }
+
+    const lastScrapeDate = await getLastSuccessfulScrapeDate();
+    sessionId = await createScrapingSessionLog(config.totalSources, lastScrapeDate);
+    const counters = initializeKeywordCounters(config.categories);
+
+    await logScrapingEvent(sessionId, {
+      logType: "info",
+      url:     "session",
+      reason:  `Initialized: ${config.categories.length} categories, ${config.totalSources} sources`,
+    });
+
+    // ── PHASE 2: SCRAPING ───────────────────────────────────────────────
+
+    for (const category of config.categories) {
+      const sources = config.sourcesByCategory[category];
+      console.log(`\n[Phase 2] ══ Category: "${category}" (${sources.length} sources) ══`);
+
+      for (const source of sources) {
+        await scrapeSource(source, sessionId, counters);
+      }
+
+      // Save per-category stats after all sources in this category done
+      await saveKeywordScrapingStats(sessionId, category, counters);
+    }
+
+    // Total counts
+    const totalSuccess  = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
+    const totalDuplicate = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
+    const totalFailure  = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
+    const totalUrlsFound = Object.values(counters).reduce((s, c) => s + c.urlsProcessed, 0);
+
+    console.log(`\n[Phase 2] Complete: ✅${totalSuccess} saved | ♻️${totalDuplicate} dupes | ❌${totalFailure} failed`);
+
+    // Update session with Phase 2 counts
+    await prisma.scrapingSession.update({
+      where: { id: sessionId },
+      data: {
+        totalUrlsFound,
+        successCount:  totalSuccess,
+        duplicateCount: totalDuplicate,
+        failureCount:  totalFailure,
+      },
+    });
+
+    // ── PHASE 3: ENRICHMENT + REPORTING ────────────────────────────────
+
+    // AI enrichment — classify + summarize all newly scraped articles
+    let enrichmentStats = { keywordsWithContent: [], keywordsWithoutContent: [], tokenUsage: { inputTokens: 0, outputTokens: 0 } };
+    try {
+      enrichmentStats = await runEnrichmentStage(sessionId);
+    } catch (err) {
+      console.error(`[Phase 3] Enrichment stage failed: ${err.message}`);
+      await logScrapingEvent(sessionId, {
+        logType: "info",
+        url:     "enrichment",
+        reason:  `Enrichment stage failed: ${err.message}`,
+      });
+    }
+
+    // Calculate final session stats
+    const durationMinutes = (Date.now() - startTime) / 60000;
+    const attempted       = totalSuccess + totalFailure;
+    const successRate     = attempted > 0 ? (totalSuccess / attempted) * 100 : 0;
+
+    // Build session report
+    const report = {
+      sessionId,
+      startedAt:           new Date(startTime).toISOString(),
+      completedAt:         new Date().toISOString(),
+      durationMinutes:     parseFloat(durationMinutes.toFixed(2)),
+      totalSources:        config.totalSources,
+      totalUrlsFound,
+      successCount:        totalSuccess,
+      duplicateCount:      totalDuplicate,
+      failureCount:        totalFailure,
+      successRate:         parseFloat(successRate.toFixed(2)),
+      enrichedCount:       enrichmentStats.enrichedCount       || 0,
+      enrichmentFailed:    enrichmentStats.enrichmentFailed    || 0,
+      keywordsWithContent: enrichmentStats.keywordsWithContent  || [],
+      keywordsWithoutContent: enrichmentStats.keywordsWithoutContent || [],
+      totalKeywordsCovered: (enrichmentStats.keywordsWithContent || []).length,
+      totalKeywordsEmpty:   (enrichmentStats.keywordsWithoutContent || []).length,
+      aiTokenUsage:        enrichmentStats.tokenUsage,
+      criticalErrors:      false,
+    };
+
+    // checkCriticalErrors
+    const criticalIssues = checkCriticalErrors(report, counters);
+    report.criticalErrors = criticalIssues.length > 0;
+
+    // Update session record with final data
+    await prisma.scrapingSession.update({
+      where: { id: sessionId },
+      data: {
+        status:               "completed",
+        completedAt:          new Date(),
+        successRate:          report.successRate,
+        durationMinutes:      report.durationMinutes,
+        enrichedCount:        report.enrichedCount,
+        enrichmentFailedCount: report.enrichmentFailed,
+        keywordsCoveredCount: report.totalKeywordsCovered,
+        keywordsEmptyCount:   report.totalKeywordsEmpty,
+        aiInputTokens:        report.aiTokenUsage?.inputTokens  || 0,
+        aiOutputTokens:       report.aiTokenUsage?.outputTokens || 0,
+        criticalErrors:       report.criticalErrors,
+        reportData:           JSON.stringify(report),
+      },
+    });
+
+    // Send critical error alert FIRST if needed
+    if (report.criticalErrors) {
+      console.warn(`[Phase 3] ⚠️  Critical errors: ${criticalIssues.join(" | ")}`);
+      await sendErrorAlert(report, criticalIssues).catch((e) =>
+        console.error("[Phase 3] Error alert email failed:", e.message)
+      );
+    }
+
+    // Always send completion notification
+    await sendCompletionNotification(report).catch((e) =>
+      console.error("[Phase 3] Completion email failed:", e.message)
+    );
+
+    await prisma.scrapingSession.update({
+      where: { id: sessionId },
+      data:  { reportSentAt: new Date() },
+    }).catch(() => {});
+
+    console.log(`\n${"═".repeat(60)}`);
+    console.log(`[Scraper] 🏁 Session complete. ${report.successCount} articles saved. ${report.totalKeywordsCovered} keywords covered.`);
+    console.log(`${"═".repeat(60)}\n`);
+
+    return { status: "completed", sessionId };
+
+  } catch (err) {
+    console.error(`[Scraper] ❌ Session crashed: ${err.message}`);
+
+    if (sessionId) {
+      await prisma.scrapingSession.update({
+        where: { id: sessionId },
+        data: {
+          status:      "failed",
+          completedAt: new Date(),
+          reportData:  JSON.stringify({ error: err.message }),
+        },
+      }).catch(() => {});
+    }
+
+    throw err;
+  }
+}
+
+// ── checkCriticalErrors ───────────────────────────────────────────────────
+// Diagram: success rate < 70%, multiple domains failing, DB issues.
+
+function checkCriticalErrors(report, counters) {
+  const issues = [];
+
+  if (report.successRate < 70 && report.totalSources > 0) {
+    issues.push(`Success rate critically low: ${report.successRate}% (threshold: 70%)`);
+  }
+
+  // Count categories where every source failed
+  const totalFailedCategories = Object.entries(counters)
+    .filter(([, c]) => c.successCount === 0 && c.failureCount > 0).length;
+  if (totalFailedCategories >= 2) {
+    issues.push(`${totalFailedCategories} categories produced zero articles`);
+  }
+
+  return issues;
+}
+
+
+module.exports = { runScrapingSession };
