@@ -72,6 +72,53 @@ function countWords(text) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+// ── wakeUpDatabase ────────────────────────────────────────────────────────────
+// NeonDB free tier suspends the connection pool after ~5 minutes of inactivity.
+// This function pings the database with a lightweight SELECT 1 query and retries
+// if it fails, giving NeonDB time to wake up before the scraping session starts.
+//
+// Retry behaviour:
+//   Attempt 1 — immediate
+//   Attempt 2 — wait 5 seconds
+//   Attempt 3 — wait 10 seconds
+//   Attempt 4 — wait 15 seconds
+//   Attempt 5 — wait 20 seconds
+//   Total max wait before giving up: ~50 seconds
+//
+// If all 5 attempts fail, throws an error so the cron job logs the failure
+// cleanly in the terminal (session never starts, next Saturday it tries again).
+ 
+async function wakeUpDatabase(maxAttempts = 5) {
+  const delays = [0, 5000, 10000, 15000, 20000]; // ms to wait before each attempt
+ 
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const delay = delays[attempt - 1] || 20000;
+ 
+    if (delay > 0) {
+      console.log(`[DB Wake-up] Waiting ${delay / 1000}s before retry ${attempt}/${maxAttempts}...`);
+      await sleep(delay);
+    }
+ 
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      if (attempt > 1) {
+        console.log(`[DB Wake-up] ✅ Database woke up on attempt ${attempt}`);
+      } else {
+        console.log("[DB Wake-up] ✅ Database connection confirmed");
+      }
+      return; // success — proceed with session
+    } catch (err) {
+      console.warn(`[DB Wake-up] ⚠️  Attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+    }
+  }
+ 
+  // All attempts exhausted
+  throw new Error(
+    `Database unreachable after ${maxAttempts} attempts. ` +
+    `NeonDB may be down or DATABASE_URL is incorrect. ` +
+    `Session aborted — will retry next Saturday.`
+  );
+}
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -755,12 +802,12 @@ async function runScrapingSession() {
 
   let sessionId  = null;
   const startTime = Date.now();
-
   try {
+  // ── DB WAKE-UP ──────────────────────────────────────────────────────────
+  await wakeUpDatabase();
 
-    // ── PHASE 1: INITIALIZATION ─────────────────────────────────────────
-
-    const config = await loadConfiguration();
+  // ── PHASE 1: INITIALIZATION ─────────────────────────────────────────────
+  const config = await loadConfiguration();
     if (!config.totalSources) {
       console.log("[Scraper] No active sources. Session skipped.");
       return;
