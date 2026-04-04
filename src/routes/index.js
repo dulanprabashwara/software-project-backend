@@ -14,6 +14,7 @@ const adminRoutes = require("./admin.routes");
 const aiRoutes = require("./ai.routes");
 const paymentRoutes = require("./payment.routes");
 const stripeRoutes = require("./stripe.routes");
+const scraperRoutes = require("./scraper.routes");
 
 const router = Router();
 
@@ -32,5 +33,6 @@ router.use("/admin", adminRoutes);
 router.use("/ai", aiRoutes);
 router.use("/payments", paymentRoutes);
 router.use("/stripe", stripeRoutes);
+router.use("/scraper", scraperRoutes);
 
 module.exports = router;
