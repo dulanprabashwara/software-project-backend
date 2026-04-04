@@ -88,8 +88,8 @@ const initializeSocket = (httpServer) => {
           return callback?.({ error: "Receiver ID and content are required" });
         }
 
-        // --- SECURITY ENFORCEMENT 1: Must Follow to Message ---
-        // Check if the sender follows the receiver
+        // --- SECURITY ENFORCEMENT 1: Follow or Prior History ---
+        // Check if the sender follows the receiver OR if they have prior chat history
         const isFollowing = await prisma.follow.findUnique({
           where: {
             followerId_followingId: {
@@ -99,9 +99,27 @@ const initializeSocket = (httpServer) => {
           },
         });
 
-        if (!isFollowing) {
+        let canMessage = !!isFollowing;
+
+        if (!canMessage) {
+          // Check for prior message history between the two users
+          const priorMessage = await prisma.message.findFirst({
+            where: {
+              OR: [
+                { senderId: socket.data.userId, receiverId },
+                { senderId: receiverId, receiverId: socket.data.userId },
+              ],
+            },
+            select: { id: true }, // we only need to know it exists
+          });
+          if (priorMessage) {
+            canMessage = true;
+          }
+        }
+
+        if (!canMessage) {
           return callback?.({
-            error: "You can only message users you follow.",
+            error: "You can only start conversations with users you follow.",
           });
         }
         // -----------------------------------------------------
