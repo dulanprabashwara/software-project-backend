@@ -17,6 +17,7 @@ model User {
   avatarUrl          String?
   role               Role              @default(USER)
   isPremium          Boolean           @default(false)
+  stripeCustomerId   String?           @unique
   linkedInAccountId  String?
   wordpressAccountId String?
   isOnline           Boolean           @default(false)
@@ -41,6 +42,7 @@ model User {
   savedArticles      SavedArticle[]
   stories            Story[]
   stats              UserStats?
+  subscriptions      Subscription[]
 
   @@map("users")
 }
@@ -304,16 +306,39 @@ model TrendingTopic {
 }
 
 model Offer {
-  id               String   @id @default(cuid())
+  id               String         @id @default(cuid())
   name             String
   discount_percent Int
   stripe_coupon_id String?
-  is_active        Boolean  @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  is_active        Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
   features         Json?
 
+  subscriptions    Subscription[]
+
   @@map("offers")
+}
+
+// ─── Subscription ───────────────────
+
+model Subscription {
+  id                     String    @id @default(cuid())
+  userId                 String
+  offerId                String?
+  stripeSubscriptionId   String    @unique
+  stripeCurrentPeriodEnd DateTime?
+  status                 String    @default("active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User   @relation(fields: [userId], references: [id])
+  offer Offer? @relation(fields: [offerId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@map("subscriptions")
 }
 
 model ai_article_logs {
@@ -378,6 +403,4 @@ enum NotificationType {
   SYSTEM
   NEW_ARTICLE
 }
-
-
 
