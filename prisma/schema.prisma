@@ -24,6 +24,7 @@ model User {
   lastSeen           DateTime          @default(now())
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
+  stripeCustomerId   String?           @unique
   ai_article_logs    ai_article_logs[]
   likes              ArticleLike[]
   shares             ArticleShare[]
@@ -41,6 +42,7 @@ model User {
   reportedArticles   ReportedArticle[] @relation("Reporter")
   savedArticles      SavedArticle[]
   stories            Story[]
+  subscriptions      subscriptions[]
   stats              UserStats?
   subscriptions      Subscription[]
 
@@ -366,17 +368,164 @@ model ScrapingSource {
   name             String
   url              String   @unique
   category         String
-  scrapeWindow     String   @default("Last 7 Days") // Your new time period!
+  scrapeWindow     String   @default("Last 7 Days")
   minWordCount     Int      @default(300)
-  excludedKeywords String[] // Array to safely store your keyword tags
+  excludedKeywords String[]
   status           String   @default("active")
-  
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   @@map("scraping_sources")
 }
 
+model subscriptions {
+  id                     String    @id
+  userId                 String
+  offerId                String?
+  stripeSubscriptionId   String    @unique
+  stripeCurrentPeriodEnd DateTime?
+  status                 String    @default("active")
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime
+  offers                 Offer?    @relation(fields: [offerId], references: [id])
+  users                  User      @relation(fields: [userId], references: [id])
+
+  @@index([status])
+  @@index([userId])
+}
+// ─── ScrapingSession ─────────────────────────────────────────────
+// One row per weekly scraping run.
+// Created at Phase 1 start. Updated at Phase 3 end.
+
+model ScrapingSession {
+  id             String    @id @default(cuid())
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+  status         String    @default("running") // "running" | "completed" | "failed"
+  lastScrapeDate DateTime?
+
+  // Phase 2 counters (raw scraping results)
+  totalSources   Int   @default(0)
+  totalUrlsFound Int   @default(0)
+  successCount   Int   @default(0)
+  duplicateCount Int   @default(0)
+  failureCount   Int   @default(0)
+
+  // Phase 3 enrichment results
+  enrichedCount         Int   @default(0)  // articles successfully summarized + tagged
+  enrichmentFailedCount Int   @default(0)  // articles that failed AI enrichment
+  keywordsCoveredCount  Int   @default(0)  // how many of the 400 keywords got at least 1 article
+  keywordsEmptyCount    Int   @default(0)  // keywords with no articles this session
+
+  // Token tracking for enrichment AI calls (for report)
+  aiInputTokens  Int   @default(0)
+  aiOutputTokens Int   @default(0)
+
+  // Phase 3 report data
+  successRate     Float?
+  durationMinutes Float?
+  reportData      String?   // full JSON report as string
+  reportSentAt    DateTime?
+  criticalErrors  Boolean   @default(false)
+
+  logs            ScrapingLog[]
+  keywordStats    KeywordScrapingStats[]
+  scrapedArticles ScrapedArticle[]
+
+  @@index([startedAt])
+  @@index([status])
+  @@map("scraping_sessions")
+}
+
+
+// ─── ScrapingLog ─────────────────────────────────────────────────
+// One row per event during scraping.
+// Every HTTP error, validation failure, duplicate, and success
+// gets its own log row linked to the parent session.
+
+model ScrapingLog {
+  id        String   @id @default(cuid())
+  sessionId String
+
+  // logType values match diagram branch outcomes:
+  // "success"            → article saved
+  // "duplicate"          → already in DB
+  // "http_error"         → request failed (4xx/5xx/timeout)
+  // "validation_failure" → content invalid (too short, too old, excluded keyword)
+  // "enrichment_success" → AI summarization succeeded
+  // "enrichment_failure" → AI summarization failed
+  // "info"               → general session status messages
+  logType    String
+
+  url        String
+  category   String?
+  statusCode Int?
+  reason     String?
+  details    Json?
+  loggedAt   DateTime @default(now())
+
+  session ScrapingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([logType])
+  @@map("scraping_logs")
+}
+
+
+// ─── ScrapedArticle ──────────────────────────────────────────────
+// Stores every successfully scraped article.
+// NOT linked to any User — platform-wide content table.
+// After Phase 2: has raw content but no summary/matchedKeywords.
+// After Phase 3 enrichment: has summary + matchedKeywords populated.
+
+model ScrapedArticle {
+  id               String    @id @default(cuid())
+  sourceUrl        String    @unique  // @unique prevents duplicates at DB level
+  title            String
+  content          String              // cleaned text (headings + paragraphs only)
+  author           String?
+  publishedDate    DateTime?
+  wordCount        Int
+  category         String              // broad category = ScrapingSource.category
+  scrapingSourceId String              // ScrapingSource.id (stored as plain string, no FK constraint)
+  metadata         Json?               // og:description, siteName, pageTitle
+
+  // Populated by Phase 3 AI enrichment
+  summary         String?   // 130-150 word AI-generated summary
+  matchedKeywords String[]  // specific keywords from the 400-keyword list
+
+  scrapedAt DateTime @default(now())
+  sessionId String
+
+  session ScrapingSession @relation(fields: [sessionId], references: [id])
+
+  @@index([category])
+  @@index([scrapedAt])
+  @@index([sessionId])
+  @@index([scrapingSourceId])
+  @@map("scraped_articles")
+}
+
+
+// ─── KeywordScrapingStats ─────────────────────────────────────────
+// Per-category statistics for each session.
+// Saved after all URLs for a category are scraped (Phase 2).
+// Updated after enrichment to show keyword-level coverage (Phase 3).
+
+model KeywordScrapingStats {
+  id             String @id @default(cuid())
+  sessionId      String
+  category       String  // broad category (Technology/Health/Finance/Lifestyle)
+  urlsProcessed  Int     @default(0)
+  successCount   Int     @default(0)
+  duplicateCount Int     @default(0)
+  failureCount   Int     @default(0)
+
+  session ScrapingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("keyword_scraping_stats")
+}
 enum Role {
   USER
   ADMIN
