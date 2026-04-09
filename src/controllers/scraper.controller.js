@@ -17,6 +17,28 @@ const triggerScraping = asyncHandler(async (req, res) => {
     message: "Scraping session started. Check GET /api/scraper/sessions for progress.",
   });
 });
+  
+// POST /api/scraper/enrich
+// Manually runs the enrichment stage for unenriched articles.
+// Optional body: { sessionId: "...", category: "..." }
+
+const triggerEnrichment = asyncHandler(async (req, res) => {
+  const { sessionId = null, category = null } = req.body || {};
+ 
+  const { runManualEnrichment } = require("../services/enrichment.service");
+ 
+  runManualEnrichment({ sessionId, category }).catch((err) =>
+    console.error("[Controller] Manual enrichment error:", err.message)
+  );
+ 
+  res.status(202).json({
+    success: true,
+    message: sessionId
+      ? `Enrichment started for session ${sessionId}.`
+      : "Enrichment started for all unenriched articles.",
+    note: "This runs in the background. Check Prisma Studio or GET /api/scraper/sessions for results.",
+  });
+});
 
 // GET /api/scraper/sessions
 // Returns the 20 most recent sessions with headline stats.
@@ -76,4 +98,4 @@ const getScrapedArticles = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, total, articles });
 });
 
-module.exports = { triggerScraping, getSessions, getSessionById, getScrapedArticles };
+module.exports = { triggerScraping,triggerEnrichment, getSessions, getSessionById, getScrapedArticles };
