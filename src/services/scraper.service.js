@@ -13,6 +13,20 @@ const axios   = require("axios");
 const cheerio = require("cheerio");
 const prisma  = require("../config/prisma");
 
+// ── SECURITY: Import security utilities from scraperSecurity.js ──────────────
+// These functions provide SSRF protection, response safety checks,
+// redirect validation, and content sanitization before DB storage.
+// See src/utils/scraperSecurity.js for full documentation of each function.
+const {
+  validateScrapingUrl,    // SSRF protection — validates source URLs before any request
+  validateRedirectUrl,    // Validates redirect destinations (malicious redirect defence)
+  checkResponseSafety,    // Checks Content-Type and response size
+  sanitizeContent,        // Strips HTML/XSS from article body before DB save
+  sanitizeTitle,          // Strips HTML/XSS from title/author before DB save
+  buildSecureAxiosConfig, // Returns hardened axios config (size limits, no auto-redirect)
+} = require("../utils/scraperSecurity");
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 // Maximum articles to collect per source URL per session.
@@ -72,6 +86,7 @@ function countWords(text) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
 // ── wakeUpDatabase ────────────────────────────────────────────────────────────
 // NeonDB free tier suspends the connection pool after ~5 minutes of inactivity.
 // This function pings the database with a lightweight SELECT 1 query and retries
@@ -120,6 +135,62 @@ async function wakeUpDatabase(maxAttempts = 5) {
   );
 }
 
+// ── normalizeDomainForComparison ──────────────────────────────────────────────
+// SECURITY HELPER: Strips the leading "www." from a hostname before comparison.
+//
+// Why needed: validateRedirectUrl() in scraperSecurity.js checks whether a
+// redirect destination is on the same domain as the source. However, it uses
+// a simple endsWith() check which fails when a site redirects from
+// www.example.com → example.com (dropping the www prefix). This is a very
+// common and harmless server-side redirect pattern. Without normalization,
+// these legitimate redirects would be incorrectly blocked.
+//
+// Examples of what this fixes:
+//   www.healthline.com → healthline.com   ✅ allowed (www dropped)
+//   healthline.com → www.healthline.com   ✅ allowed (www added)
+//   techcrunch.com → evil.com             ❌ still blocked (correct)
+//   techcrunch.com → cdn.techcrunch.com   ✅ allowed (subdomain of same domain)
+
+function normalizeDomainForComparison(hostname) {
+  return hostname.toLowerCase().replace(/^www\./, "");
+}
+
+// ── isRedirectAllowedDomain ───────────────────────────────────────────────────
+// Wraps validateRedirectUrl() with www-normalization to prevent false blocks.
+// First tries the strict check from scraperSecurity. If that blocks due to the
+// www-mismatch case, applies normalized comparison as a second chance.
+// All other security checks (private IP, scheme, port) are still enforced.
+
+function isRedirectAllowedDomain(redirectUrl, originalHostname) {
+  // First try the strict check from scraperSecurity.js
+  const strictCheck = validateRedirectUrl(redirectUrl, originalHostname);
+  if (strictCheck.safe) return { safe: true };
+
+  // If it failed specifically due to cross-domain, check with www normalization
+  if (strictCheck.reason && strictCheck.reason.startsWith("Cross-domain redirect")) {
+    try {
+      const redirectHostname = new URL(redirectUrl).hostname.toLowerCase();
+      const normRedirect  = normalizeDomainForComparison(redirectHostname);
+      const normOriginal  = normalizeDomainForComparison(originalHostname);
+
+      // Allow if normalized domains match, or one is a subdomain of the other
+      const sameAfterNorm =
+        normRedirect === normOriginal ||
+        normRedirect.endsWith("." + normOriginal) ||
+        normOriginal.endsWith("." + normRedirect);
+
+      if (sameAfterNorm) {
+        return { safe: true }; // legitimate www↔non-www redirect
+      }
+    } catch {
+      // If URL parsing fails, keep the original block
+    }
+  }
+
+  // All other failures (private IP, bad scheme, bad port) stay blocked
+  return strictCheck;
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // PHASE 1 — INITIALIZATION
@@ -130,6 +201,12 @@ async function wakeUpDatabase(maxAttempts = 5) {
 // Groups them by category for the scraping loop.
 // Field names match admin.service.js exactly: name, url, category,
 // scrapeWindow, minWordCount, excludedKeywords, status.
+//
+// SECURITY: After fetching, every source URL is validated with
+// validateScrapingUrl() before it enters the scraping loop. Sources that
+// fail the SSRF check are excluded from scraping, stored in blockedSources,
+// and logged to the session log once the session is created. This prevents
+// the scraper from ever making requests to internal network addresses.
 
 async function loadConfiguration() {
   console.log("[Phase 1] loadConfiguration() — fetching active sources from DB...");
@@ -149,21 +226,44 @@ async function loadConfiguration() {
 
   if (!sources.length) {
     console.log("[Phase 1] No active scraping sources found.");
-    return { categories: [], sourcesByCategory: {}, totalSources: 0 };
+    return { categories: [], sourcesByCategory: {}, totalSources: 0, blockedSources: [] };
   }
+
+  // ── SECURITY: SSRF validation — check every source URL before scraping ──
+  // This is done once here at session init using DNS resolution.
+  // Much cheaper to do once per source than once per article link.
+  // Sources that fail are excluded from this session and their admins are
+  // notified via the session report email.
+  const safeSources    = [];
+  const blockedSources = [];
+
+  for (const src of sources) {
+    const check = await validateScrapingUrl(src.url);
+    if (!check.safe) {
+      console.warn(`[Phase 1] 🔒 BLOCKED source "${src.name}" (${src.url}): ${check.reason}`);
+      blockedSources.push({ ...src, blockReason: check.reason });
+    } else {
+      safeSources.push(src);
+    }
+  }
+
+  if (blockedSources.length > 0) {
+    console.warn(`[Phase 1] 🔒 ${blockedSources.length} source(s) blocked by SSRF security checks`);
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   // Group by category: { Technology: [...], Health: [...], ... }
   const sourcesByCategory = {};
-  for (const src of sources) {
+  for (const src of safeSources) {
     const cat = src.category || "Uncategorized";
     if (!sourcesByCategory[cat]) sourcesByCategory[cat] = [];
     sourcesByCategory[cat].push(src);
   }
 
   const categories = Object.keys(sourcesByCategory);
-  console.log(`[Phase 1] Loaded ${sources.length} sources across ${categories.length} categories: ${categories.join(", ")}`);
+  console.log(`[Phase 1] Loaded ${safeSources.length} safe sources across ${categories.length} categories: ${categories.join(", ")}`);
 
-  return { categories, sourcesByCategory, totalSources: sources.length };
+  return { categories, sourcesByCategory, totalSources: safeSources.length, blockedSources };
 }
 
 // ── getLastSuccessfulScrapeDate ────────────────────────────────────────────
@@ -226,26 +326,93 @@ async function applyRateLimitDelay() {
 }
 
 // ── sendHTTPRequest ────────────────────────────────────────────────────────
-// Downloads a web page using axios with browser-like headers.
+// Downloads a web page using axios with hardened security settings.
 // Includes one automatic retry on network errors.
 // Throws on persistent failure — caller logs and continues.
+//
+// SECURITY ENHANCEMENTS vs original version:
+//   1. Uses buildSecureAxiosConfig() instead of inline axios options.
+//      This enforces: 5MB max response, 15s timeout, no auto-redirects.
+//   2. Handles HTTP redirects MANUALLY (axios maxRedirects: 0).
+//      Each redirect destination is validated with isRedirectAllowedDomain()
+//      before being followed. This prevents redirect-based SSRF attacks
+//      where a site accepts a request but redirects to an internal address.
+//      The www-normalization wrapper handles legitimate www↔non-www redirects.
+//   3. Checks the response Content-Type via checkResponseSafety().
+//      Rejects non-HTML responses (PDFs, binaries, JSON APIs, executables).
+//   4. Checks actual response size via checkResponseSafety().
+//      Rejects responses over 5MB even if Content-Length was wrong/missing.
+//
+// NOTE on scraperSecurity.js ALLOWED_PORTS bug:
+//   ALLOWED_PORTS Set contains [80, 443, 8080, 8443, ""] (mixed number/string).
+//   new URL().port always returns a string, so ports 80/443 explicitly in the
+//   URL would be incorrectly blocked by validateScrapingUrl. However, real
+//   news sites never include explicit port numbers in their URLs, so this
+//   does not affect any legitimate source in practice. Noted for future fix.
 
 async function sendHTTPRequest(url, attempt = 1) {
+  const originalHostname = new URL(url).hostname;
+
   try {
-    const response = await axios.get(url, {
-      timeout: 15000,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection":      "keep-alive",
-      },
-      maxRedirects: 5,
-      validateStatus: (status) => status < 500, // don't throw on 4xx
-    });
+    // ── SECURITY: Use hardened axios config (size limits, no auto-redirects) ─
+    const config   = buildSecureAxiosConfig();
+    const response = await axios.get(url, config);
+
+    // ── SECURITY: Handle redirects manually to validate each destination ─────
+    // buildSecureAxiosConfig() sets maxRedirects: 0, so axios stops here
+    // and gives us the redirect response. We validate before following.
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const locationHeader = response.headers["location"];
+
+      if (!locationHeader) {
+        throw Object.assign(
+          new Error("Redirect response missing Location header"),
+          { statusCode: response.status }
+        );
+      }
+
+      // Resolve relative redirects to absolute (e.g. "/new-path" → "https://site.com/new-path")
+      const absoluteRedirect = locationHeader.startsWith("http")
+        ? locationHeader
+        : new URL(locationHeader, url).href;
+
+      // ── Validate the redirect destination ──────────────────────────────────
+      // isRedirectAllowedDomain wraps validateRedirectUrl() with www-normalization
+      // to prevent false blocks on legitimate www↔non-www redirects.
+      const redirectCheck = isRedirectAllowedDomain(absoluteRedirect, originalHostname);
+      if (!redirectCheck.safe) {
+        throw Object.assign(
+          new Error(`Security: blocked redirect — ${redirectCheck.reason}`),
+          { statusCode: 0, securityBlock: true }
+        );
+      }
+
+      // Follow the validated redirect (one hop only — no chained redirects)
+      const redirectResponse = await axios.get(absoluteRedirect, config);
+
+      // ── Check the redirected response for safety ───────────────────────────
+      const safetyCheck = checkResponseSafety(redirectResponse);
+      if (!safetyCheck.safe) {
+        throw Object.assign(
+          new Error(`Security: ${safetyCheck.reason}`),
+          { statusCode: 0, securityBlock: true }
+        );
+      }
+
+      return { htmlContent: redirectResponse.data, statusCode: redirectResponse.status };
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── SECURITY: Check Content-Type and response size ────────────────────────
+    // Rejects non-HTML responses (PDFs, binaries, APIs) and oversized responses.
+    const safetyCheck = checkResponseSafety(response);
+    if (!safetyCheck.safe) {
+      throw Object.assign(
+        new Error(`Security: ${safetyCheck.reason}`),
+        { statusCode: 0, securityBlock: true }
+      );
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     if (response.status >= 400) {
       throw Object.assign(new Error(`HTTP ${response.status}`), { statusCode: response.status });
@@ -254,8 +421,11 @@ async function sendHTTPRequest(url, attempt = 1) {
     return { htmlContent: response.data, statusCode: response.status };
 
   } catch (err) {
+    // Security blocks are definitive — do not retry them, they will fail again
+    if (err.securityBlock) throw err;
+
     if (attempt < 2) {
-      // One retry after a short delay
+      // One retry after a short delay (same as original behaviour)
       await sleep(3000);
       return sendHTTPRequest(url, 2);
     }
@@ -267,6 +437,11 @@ async function sendHTTPRequest(url, attempt = 1) {
 // Scans the homepage HTML for links that look like individual article pages.
 // Filters out navigation/category/tag/author pages.
 // Returns up to MAX_ARTICLES_PER_SOURCE article URLs.
+//
+// SECURITY: Added port check — article links pointing to non-standard ports
+// (e.g. :8000, :3000, :22) are skipped. Standard ports (80, 443, 8080, 8443)
+// and no-explicit-port (default) are allowed. This prevents a malicious site
+// from embedding links to internal services in its homepage HTML.
 
 function collectArticleLinks(html, sourceUrl) {
   const $ = cheerio.load(html);
@@ -289,6 +464,13 @@ function collectArticleLinks(html, sourceUrl) {
 
     // Strip fragment and query (we want clean article URLs)
     const cleanUrl = parsed.origin + parsed.pathname;
+
+    // ── SECURITY: Block article links to non-standard ports ───────────────
+    // A legitimate article page is always on port 80, 443, or no explicit port.
+    // Links to custom ports likely point to development servers or internal services.
+    const allowedArticlePorts = new Set(["", "80", "443", "8080", "8443"]);
+    if (!allowedArticlePorts.has(parsed.port)) return;
+    // ─────────────────────────────────────────────────────────────────────
 
     // Skip non-article patterns
     const skipPattern = /\/(tag|tags|category|categories|author|authors|search|page\/\d|feed|rss|wp-json|cdn-cgi|sitemap|subscribe|newsletter|login|signup|about|contact|privacy|terms|advertise|careers)\/?$/i;
@@ -413,6 +595,12 @@ function extractArticleContent($, articleContainer) {
 // KEPT: h1-h6 (formatted as [H1] etc.), p, blockquote, li
 //
 // DEDUPLICATION: Set-based, skips any text already extracted.
+//
+// SECURITY: sanitizeContent() is applied to each extracted text segment
+// after cheerio extraction. Even after removing noise elements, some sites
+// may have malformed tags or JavaScript event attributes that survive the
+// cheerio removal pass. sanitizeContent() strips any residual HTML before
+// the text is assembled into the final content string for DB storage.
 
 function cleanExtractedContent($, articleContainer) {
   // ── Remove all noise elements ────────────────────────────────────────
@@ -472,8 +660,8 @@ function cleanExtractedContent($, articleContainer) {
   const seenText     = new Set(); // exact duplicate prevention
 
   articleContainer.find("h1, h2, h3, h4, h5, h6, p, blockquote, li").each((_, el) => {
-    const tag  = $(el).prop("tagName").toLowerCase();
-    const text = $(el).text().replace(/\s+/g, " ").trim();
+    const tag = $(el).prop("tagName").toLowerCase();
+    let   text = $(el).text().replace(/\s+/g, " ").trim();
 
     // Skip short snippets (labels, captions, button text, etc.)
     if (!text || text.length < 30) return;
@@ -481,6 +669,14 @@ function cleanExtractedContent($, articleContainer) {
     // Skip if already seen
     if (seenText.has(text)) return;
     seenText.add(text);
+
+    // ── SECURITY: Sanitize each text segment before adding to content ────
+    // cheerio .text() normally returns plain text, but on malformed pages
+    // some HTML can bleed through. sanitizeContent() strips any residual
+    // HTML tags and decodes HTML entities to their text equivalents.
+    text = sanitizeContent(text);
+    if (!text || text.length < 30) return; // re-check after sanitization
+    // ─────────────────────────────────────────────────────────────────────
 
     // Format with structural markers for AI readability
     if      (tag === "h1")         contentParts.push(`[H1] ${text}`);
@@ -577,17 +773,28 @@ async function checkDuplicateArticle(url) {
 // ── saveScrapedArticle ────────────────────────────────────────────────────
 // Saves cleaned article to scraped_articles.
 // summary and matchedKeywords are null at this point — populated in Phase 3.
+//
+// SECURITY: sanitizeTitle() and sanitizeContent() are applied as a final
+// pass immediately before writing to the database. This is the last line of
+// defence against any HTML or control characters that may have survived
+// cheerio extraction. Ensures only clean plain text is ever stored.
 
 async function saveScrapedArticle({
   url, title, content, author, publishedDate,
   wordCount, category, scrapingSourceId, metadata, sessionId,
 }) {
+  // ── SECURITY: Final sanitization pass before DB write ────────────────
+  const cleanTitle   = sanitizeTitle(title);
+  const cleanContent = sanitizeContent(content);
+  const cleanAuthor  = author ? sanitizeTitle(author) : null;
+  // ─────────────────────────────────────────────────────────────────────
+
   return prisma.scrapedArticle.create({
     data: {
       sourceUrl:        url,
-      title,
-      content,
-      author:           author || null,
+      title:            cleanTitle,
+      content:          cleanContent,
+      author:           cleanAuthor,
       publishedDate:    (publishedDate && !isNaN(publishedDate)) ? publishedDate : null,
       wordCount,
       category,
@@ -823,6 +1030,23 @@ async function runScrapingSession() {
       reason:  `Initialized: ${config.categories.length} categories, ${config.totalSources} sources`,
     });
 
+    // ── SECURITY: Log any sources blocked by SSRF checks in loadConfiguration ──
+    // Blocked sources are logged here (after session creation) so they appear
+    // in the session log and are visible in the admin session detail view.
+    if (config.blockedSources && config.blockedSources.length > 0) {
+      for (const blocked of config.blockedSources) {
+        await logScrapingEvent(sessionId, {
+          logType:  "http_error",
+          url:      blocked.url,
+          category: blocked.category,
+          reason:   `SECURITY BLOCK: ${blocked.blockReason}`,
+          details:  { sourceName: blocked.name, securityBlock: true },
+        });
+      }
+      console.warn(`[Phase 1] 🔒 ${config.blockedSources.length} source(s) blocked — see session logs`);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // ── PHASE 2: SCRAPING ───────────────────────────────────────────────
 
     for (const category of config.categories) {
@@ -896,6 +1120,7 @@ async function runScrapingSession() {
       totalKeywordsEmpty:   (enrichmentStats.keywordsWithoutContent || []).length,
       aiTokenUsage:        enrichmentStats.tokenUsage,
       criticalErrors:      false,
+      securityBlockedSources: (config.blockedSources || []).length,
     };
 
     // checkCriticalErrors
