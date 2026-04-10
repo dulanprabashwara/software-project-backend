@@ -337,7 +337,7 @@ model Subscription {
 }
 
 model ai_article_logs {
-  id                String   @id
+  id                String   @id @default(cuid())
   userPrompt        String
   keywordsPresented String[]
   keywordsSelected  String[]
