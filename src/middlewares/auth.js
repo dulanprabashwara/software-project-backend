@@ -53,27 +53,43 @@ const authenticate = async (req, res, next) => {
       }
     }
 
-    // Update online status
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { isOnline: true, lastSeen: new Date() },
-    });
+    // Update online status (fire-and-forget, don't block the request)
+    prisma.user
+      .update({
+        where: { id: user.id },
+        data: { isOnline: true, lastSeen: new Date() },
+      })
+      .catch((err) => console.error("Failed to update online status:", err));
 
     req.user = user;
     next();
   } catch (error) {
-    console.error("Authentication error:", error.message);
+    console.error("Authentication/Database error:", error.message);
 
-    if (error.code === "auth/id-token-expired") {
+    // If the error comes from Firebase Auth verifyIdToken (usually starts with 'auth/')
+    if (
+      error.code &&
+      typeof error.code === "string" &&
+      error.code.startsWith("auth/")
+    ) {
+      if (error.code === "auth/id-token-expired") {
+        return res.status(401).json({
+          success: false,
+          message: "Token expired. Please log in again.",
+        });
+      }
       return res.status(401).json({
         success: false,
-        message: "Token expired. Please log in again.",
+        message: "Invalid or expired token.",
       });
     }
 
-    return res.status(401).json({
+    // Otherwise, it is likely a Prisma database connection error or generic error
+    return res.status(500).json({
       success: false,
-      message: "Invalid or expired token.",
+      message:
+        "An internal server/database error occurred during authentication.",
+      error: error.message,
     });
   }
 };
@@ -126,4 +142,33 @@ const requirePremium = (req, res, next) => {
   next();
 };
 
-module.exports = { authenticate, authorize, requirePremium };
+/**
+ * Middleware: Optional authentication.
+ * Silently attaches req.user if a valid Bearer token is present.
+ * Does NOT reject the request if the token is missing or invalid.
+ * Use on public routes where knowing the current user is helpful but not required.
+ */
+const optionalAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return next(); // No token — proceed as anonymous
+    }
+
+    const idToken = authHeader.split("Bearer ")[1];
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+
+    const user = await prisma.user.findUnique({
+      where: { firebaseUid: decodedToken.uid },
+    });
+
+    if (user) {
+      req.user = user;
+    }
+  } catch {
+    // Token invalid or expired — silently ignore and proceed as anonymous
+  }
+  next();
+};
+
+module.exports = { authenticate, authorize, requirePremium, optionalAuth };

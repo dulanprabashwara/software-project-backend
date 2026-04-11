@@ -373,6 +373,81 @@ const incrementTopicHit = async (topicName) => {
   });
 };
 
+// Get all offers
+const getAllOffers = async () => {
+  return await prisma.offer.findMany({
+    orderBy: { createdAt: 'desc' }
+  });
+};
+
+// Create a new offer
+const createOffer = async (data) => {
+  // add Stripe API logic here!
+  return await prisma.offer.create({
+    data: {
+      name: data.name,
+      discount_percent: parseInt(data.discount_percent),
+      is_active: true
+    }
+  });
+};
+
+//updateOffer
+const updateOffer = async (id, data) => {
+  return await prisma.offer.update({
+    where: { id: id },
+    data: {
+      name: data.name,
+      discount_percent: parseInt(data.discount_percent),
+      stripe_coupon_id: data.stripe_coupon_id,
+      is_active: data.is_active,
+      features: data.features
+    }
+  });
+};
+
+//scraping sources
+const getScrapingSources = async () => {
+  return await prisma.scrapingSource.findMany({
+    orderBy: { createdAt: 'desc' }
+  });
+};
+
+const createScrapingSource = async (data) => {
+  return await prisma.scrapingSource.create({
+    data: {
+      name: data.name,
+      url: data.url,
+      category: data.category,
+      scrapeWindow: data.scrapeWindow, 
+      minWordCount: parseInt(data.minWordCount) || 300,
+      excludedKeywords: data.excludedKeywords || [],
+      status: data.status || "active"
+    }
+  });
+};
+
+const updateScrapingSource = async (id, data) => {
+  return await prisma.scrapingSource.update({
+    where: { id: id },
+    data: {
+      name: data.name,
+      url: data.url,
+      category: data.category,
+      scrapeWindow: data.scrapeWindow,
+      minWordCount: parseInt(data.minWordCount) || 300,
+      excludedKeywords: data.excludedKeywords || [],
+      status: data.status
+    }
+  });
+};
+
+const deleteScrapingSource = async (id) => {
+  return await prisma.scrapingSource.delete({
+    where: { id: id }
+  });
+};
+
 module.exports = {
   getDashboard,
   refreshDashboard,
@@ -389,4 +464,11 @@ module.exports = {
   updateAiConfig,
   getTrendingTopics,
   incrementTopicHit,
+  getAllOffers,
+  createOffer,
+  updateOffer,
+  getScrapingSources,
+  createScrapingSource,
+  updateScrapingSource,
+  deleteScrapingSource,
 };

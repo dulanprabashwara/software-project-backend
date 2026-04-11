@@ -31,4 +31,16 @@ router.put("/ai-config", adminController.updateAiConfig);
 // Trending
 router.get("/trending", adminController.getTrendingTopics);
 
+// Subscription Offers
+router.get("/offers", adminController.getOffers);
+router.post("/offers", adminController.createOffer);
+router.put("/offers/:id", adminController.updateOffer);
+
+// AI Scraping Sources
+router.get("/scraping-sources", adminController.getScrapingSources);
+router.post("/scraping-sources", adminController.createScrapingSource);
+router.post("/validate-url", adminController.validateUrl);
+router.put("/scraping-sources/:id", adminController.updateScrapingSource);
+router.delete("/scraping-sources/:id", adminController.deleteScrapingSource);
+
 module.exports = router;

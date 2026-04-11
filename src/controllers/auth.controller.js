@@ -17,6 +17,7 @@ const getUidFromToken = async (req) => {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     return decodedToken.uid;
   } catch (error) {
+    console.error("Firebase Token Verification Error in sync:", error);
     throw new ApiError(401, "Invalid or expired token.");
   }
 };

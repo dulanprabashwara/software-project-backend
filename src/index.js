@@ -12,6 +12,7 @@ const errorHandler = require("./middlewares/errorHandler");
 const { apiLimiter } = require("./middlewares/rateLimiter");
 const initializeSocket = require("./sockets");
 const prisma = require("./config/prisma");
+const { startScrapingJobs } = require("./jobs/scraper.job");
 
 // ─── App Setup ──────────────────────────────
 
@@ -36,6 +37,10 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
+
+// Stripe webhook needs raw body — must come BEFORE express.json()
+app.use("/api/payments/webhook", express.raw({ type: "application/json" }));
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -113,6 +118,9 @@ server.listen(PORT, () => {
   │                                         │
   └─────────────────────────────────────────┘
   `);
+    if (process.env.NODE_ENV !== "test") {
+    startScrapingJobs();
+  }
 });
 
 // ─── Graceful Shutdown ──────────────────────

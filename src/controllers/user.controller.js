@@ -20,7 +20,25 @@ const getProfile = asyncHandler(async (req, res) => {
 });
 
 /**
- * PUT /api/v1/users/profile
+ * GET /api/v1/users/me
+ * Get the currently authenticated user's full profile (with stats, etc.)
+ */
+const getMe = asyncHandler(async (req, res) => {
+  const currentUserId = req.user.id;
+  // We can just use the existing getUserProfile service using the ID
+  const profile = await userService.getUserProfile(
+    currentUserId,
+    currentUserId,
+  );
+
+  sendSuccess(res, {
+    message: "Current user profile retrieved.",
+    data: profile,
+  });
+});
+
+/**
+ * PUT /api/v1/users/profile or /api/v1/users/me
  * Update current user's profile.
  */
 const updateProfile = asyncHandler(async (req, res) => {
@@ -58,4 +76,4 @@ const searchUsers = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { getProfile, updateProfile, searchUsers };
+module.exports = { getProfile, getMe, updateProfile, searchUsers };
