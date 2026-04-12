@@ -48,9 +48,11 @@ const client = new OpenAI({
 
 // Free model priority list — best for classification/structured JSON first
 const ENRICHMENT_MODELS = [
-  "google/gemini-2.0-flash-exp:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "arcee-ai/trinity-large-preview:free",
+    "arcee-ai/trinity-large-preview:free",
+    "nousresearch/hermes-3-llama-3.1-405b:free",
+    "openai/gpt-oss-120b:free",
+    "google/gemma-4-31b-it:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
 ];
 
 const BATCH_SIZE = 3; // articles per AI call — kept small for free model reliability
