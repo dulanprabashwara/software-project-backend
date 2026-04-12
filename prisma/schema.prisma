@@ -43,6 +43,8 @@ model User {
   stories            Story[]
   subscriptions      Subscription[]
   stats              UserStats?
+  wordpressConnection WordPressConnection?
+  wpPublishJobs       WordPressPublishJob[]
 
   @@map("users")
 }
@@ -75,6 +77,7 @@ model Article {
   readHistory     ReadHistory[]
   reports         ReportedArticle[]
   savedBy         SavedArticle[]
+  wpPublishJobs   WordPressPublishJob[]
 
   @@index([authorId])
   @@index([status])
@@ -456,6 +459,44 @@ model KeywordScrapingStats {
   @@index([sessionId])
   @@map("keyword_scraping_stats")
 }
+model WordPressConnection {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  siteUrl     String
+  siteId      String
+  accessToken String
+  wpUsername  String?
+  wpEmail     String?
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publishJobs WordPressPublishJob[]
+
+  @@map("wordpress_connections")
+}
+
+model WordPressPublishJob {
+  id          String      @id @default(cuid())
+  articleId   String
+  userId      String
+  wpConnId    String
+  scheduledAt DateTime
+  status      WpJobStatus @default(PENDING)
+  wpPostId    String?
+  wpPostUrl   String?
+  draftUrl    String?
+  errorMsg    String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  article      Article              @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wpConnection WordPressConnection  @relation(fields: [wpConnId],  references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("wordpress_publish_jobs")
+}
 
 enum Role {
   USER
@@ -482,4 +523,13 @@ enum NotificationType {
   MENTION
   SYSTEM
   NEW_ARTICLE
+}
+enum WpJobStatus {
+  PENDING      // job is waiting to be processed by the cron
+  IN_PROGRESS  // cron has picked it up and is calling WordPress API right now
+  PUBLISHED    // successfully published to WordPress
+  FAILED       // WordPress API call failed; draftUrl may have a fallback link
+  CANCELLED    // deliberately not published (e.g. the article failed to publish
+               //   on our own platform first, so WordPress is skipped to prevent
+               //   orphan content with no canonical source)
 }
