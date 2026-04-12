@@ -1,33 +1,21 @@
 const asyncHandler = require("../utils/asyncHandler");
-const { sendSuccess } = require("../utils/response");
+const prisma = require("../config/prisma");
 const wordpressService = require("../services/wordpress.service");
 
 const FRONTEND_URL = process.env.CLIENT_URL || "http://localhost:3000";
 
-// ─── Initiate OAuth ──────────────────────────────────────────────────────────
-
-/**
- * GET /api/wordpress/auth
- * Returns the WordPress.com OAuth authorization URL.
- * Frontend redirects the user to this URL.
- */
+// GET /api/wordpress/auth — returns OAuth URL for frontend to redirect to
 const initiateAuth = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const authUrl = wordpressService.initiateWordPressAuth(userId);
-  sendSuccess(res, { authUrl }, "WordPress OAuth URL generated.");
+  // Use res.json() directly — sendSuccess in this codebase does not include data
+  res.json({ success: true, data: { authUrl } });
 });
 
-// ─── OAuth Callback ──────────────────────────────────────────────────────────
-
-/**
- * GET /api/wordpress/callback
- * WordPress.com redirects here after the user authorizes the app.
- * This is a browser redirect, so we redirect back to the frontend when done.
- */
+// GET /api/wordpress/callback — WordPress.com redirects here after OAuth approval
 const handleCallback = asyncHandler(async (req, res) => {
   const { code, state, error } = req.query;
 
-  // If the user denied authorization
   if (error) {
     return res.redirect(
       `${FRONTEND_URL}/profile/edit?wp_status=error&wp_message=${encodeURIComponent(
@@ -45,11 +33,7 @@ const handleCallback = asyncHandler(async (req, res) => {
   }
 
   try {
-    const connection = await wordpressService.handleWordPressCallback(
-      code,
-      state
-    );
-    // Redirect back to the profile edit page with a success flag
+    const connection = await wordpressService.handleWordPressCallback(code, state);
     return res.redirect(
       `${FRONTEND_URL}/profile/edit?wp_status=connected&wp_username=${encodeURIComponent(
         connection.wpUsername || ""
@@ -64,56 +48,41 @@ const handleCallback = asyncHandler(async (req, res) => {
   }
 });
 
-// ─── Check Connection Status ─────────────────────────────────────────────────
-
-/**
- * GET /api/wordpress/status
- * Returns the current WordPress connection for the authenticated user.
- */
+// GET /api/wordpress/status — returns current connection state for the user
 const getStatus = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const connection = await wordpressService.getWordPressConnection(userId);
 
   if (!connection) {
-    return sendSuccess(
-      res,
-      { connected: false },
-      "WordPress is not connected."
-    );
+    return res.json({ success: true, data: { connected: false } });
   }
 
-  return sendSuccess(
-    res,
-    {
-      connected: true,
-      siteUrl: connection.siteUrl,
-      wpUsername: connection.wpUsername,
+  // Fetch avatar from our User record to display in the publish page
+  const user = await prisma.user.findUnique({
+    where:  { id: userId },
+    select: { avatarUrl: true },
+  });
+
+  return res.json({
+    success: true,
+    data: {
+      connected:   true,
+      siteUrl:     connection.siteUrl,
+      wpUsername:  connection.wpUsername,
       connectedAt: connection.connectedAt,
+      avatarUrl:   user?.avatarUrl || null,
     },
-    "WordPress is connected."
-  );
+  });
 });
 
-// ─── Disconnect ──────────────────────────────────────────────────────────────
-
-/**
- * DELETE /api/wordpress/disconnect
- * Removes the WordPress connection for the authenticated user.
- */
+// DELETE /api/wordpress/disconnect — removes the WordPress connection
 const disconnect = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   await wordpressService.disconnectWordPress(userId);
-  sendSuccess(res, { disconnected: true }, "WordPress disconnected successfully.");
+  res.json({ success: true, data: { disconnected: true } });
 });
 
-// ─── Schedule / Publish ──────────────────────────────────────────────────────
-
-/**
- * POST /api/wordpress/publish
- * Body: { articleId, scheduledAt? }
- *   - scheduledAt omitted or null  → publish immediately
- *   - scheduledAt ISO string       → schedule for that time
- */
+// POST /api/wordpress/publish — immediate or scheduled publish to WordPress
 const publishToWordPress = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const { articleId, scheduledAt } = req.body;
@@ -132,30 +101,18 @@ const publishToWordPress = asyncHandler(async (req, res) => {
   res.status(statusCode).json({ success: result.success, data: result });
 });
 
-// ─── Get Publish Job Status ──────────────────────────────────────────────────
-
-/**
- * GET /api/wordpress/publish-status/:articleId
- * Returns the WordPress publish job status for a given article.
- */
+// GET /api/wordpress/publish-status/:articleId — returns latest job status
 const getPublishStatus = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const { articleId } = req.params;
 
-  const job = await wordpressService.getWordPressPublishStatus(
-    articleId,
-    userId
-  );
+  const job = await wordpressService.getWordPressPublishStatus(articleId, userId);
 
   if (!job) {
-    return sendSuccess(
-      res,
-      { found: false },
-      "No WordPress publish job found for this article."
-    );
+    return res.json({ success: true, data: { found: false } });
   }
 
-  return sendSuccess(res, { found: true, job }, "WordPress publish job fetched.");
+  return res.json({ success: true, data: { found: true, job } });
 });
 
 module.exports = {
