@@ -504,6 +504,7 @@ enum Role {
 }
 
 enum ArticleStatus {
+  EDITING
   DRAFT
   PUBLISHED
   SCHEDULED
