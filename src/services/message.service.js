@@ -108,12 +108,12 @@ const getConversationList = async (userId) => {
     });
   }
 
-  // Sort by latest message
-  conversations.sort(
-    (a, b) =>
-      new Date(b.lastMessage.sentAt).getTime() -
-      new Date(a.lastMessage.sentAt).getTime(),
-  );
+  // Sort conversations by the most recent message
+  conversations.sort((a, b) => {
+    const timeA = a.lastMessage ? new Date(a.lastMessage.sentAt).getTime() : 0;
+    const timeB = b.lastMessage ? new Date(b.lastMessage.sentAt).getTime() : 0;
+    return timeB - timeA;
+  });
 
   return conversations;
 };
