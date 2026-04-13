@@ -40,6 +40,15 @@ const getArticleById = asyncHandler(async (req, res) => {
   });
 });
 
+const getCurrentEditing = asyncHandler(async (req, res) => {
+  const article = await articleService.getCurrentEditingArticle(req.user.id);
+
+  sendSuccess(res, {
+    message: "Current editing article retrieved.",
+    data: article,
+  });
+});
+
 const getFeed = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
   const { tag, search, sortBy, authorId } = req.query;
@@ -102,6 +111,7 @@ module.exports = {
   createArticle,
   getArticle,
   getArticleById,
+  getCurrentEditing,
   getFeed,
   updateArticle,
   deleteArticle,
