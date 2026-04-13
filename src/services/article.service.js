@@ -205,8 +205,32 @@ async function getArticleById(articleId, userId) {
   return article;
 }
 
-/**
- * Create a new article.
+async function getCurrentEditingArticle(userId) {
+  const article = await prisma.article.findFirst({
+    where: {
+      authorId: userId,
+      status: ARTICLE_STATUS.EDITING,
+    },
+    orderBy: {
+      updatedAt: "desc",
+    },
+    include: {
+      author: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+        },
+      },
+    },
+  });
+
+  return article || null;
+}
+
+/*
+ Create a new article.
  */
 async function createArticle(authorId, payload) {
   const normalizedStatus = normalizeArticleStatus(payload.status);
@@ -236,8 +260,8 @@ async function createArticle(authorId, payload) {
   return article;
 }
 
-/**
- * Get a single article by slug.
+/*
+ Get a single article by slug.
  */
 async function getArticleBySlug(slug, currentUserId = null) {
   const article = await prisma.article.findUnique({
@@ -324,8 +348,8 @@ async function getArticleBySlug(slug, currentUserId = null) {
   return { ...article, isLiked, isSaved };
 }
 
-/**
- * Get published articles feed.
+/*
+  Get published articles feed.
  */
 async function getArticleFeed({
   page = 1,
@@ -390,8 +414,8 @@ async function getArticleFeed({
   return { articles, total };
 }
 
-/**
- * Update an article.
+/*
+  Update an article.
  */
 async function updateArticle(articleId, authorId, payload) {
   const existingArticle = await prisma.article.findUnique({
@@ -412,7 +436,9 @@ async function updateArticle(articleId, authorId, payload) {
     payload.title !== undefined &&
     payload.title.trim() !== existingArticle.title
   ) {
-    updateData.slug = await generateUniqueSlug(payload.title.trim() || "Untitled");
+    updateData.slug = await generateUniqueSlug(
+      payload.title.trim() || "Untitled",
+    );
   }
 
   const updatedArticle = await prisma.article.update({
@@ -440,8 +466,8 @@ async function updateArticle(articleId, authorId, payload) {
   return updatedArticle;
 }
 
-/**
- * Delete an article.
+/*
+  Delete an article.
  */
 async function deleteArticle(articleId, userId, userRole) {
   const article = await prisma.article.findUnique({
@@ -467,8 +493,8 @@ async function deleteArticle(articleId, userId, userRole) {
   return { deleted: true };
 }
 
-/**
- * Record a read on an article.
+/*
+  Record a read on an article.
  */
 async function recordRead(articleId, userId) {
   await prisma.readHistory.upsert({
@@ -504,9 +530,9 @@ async function recordRead(articleId, userId) {
   }
 }
 
-/**
- * Get only intentional drafts.
- * EDITING articles are excluded from this list.
+/*
+  Get only intentional drafts.
+  EDITING articles are excluded from this list.
  */
 async function getUserDrafts(userId, page = 1, limit = 10) {
   const skip = (page - 1) * limit;
@@ -532,6 +558,7 @@ async function getUserDrafts(userId, page = 1, limit = 10) {
 module.exports = {
   createArticle,
   getArticleById,
+  getCurrentEditingArticle,
   getArticleBySlug,
   getArticleFeed,
   updateArticle,

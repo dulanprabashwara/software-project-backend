@@ -4,8 +4,11 @@
   "description": "Backend API for Easy Blogger — a professional blogging platform",
   "main": "src/index.js",
   "scripts": {
+    "prestart": "npm run prisma:generate",
     "start": "node src/index.js",
+    "predev": "npm run prisma:generate",
     "dev": "nodemon src/index.js",
+    "postinstall": "npm run prisma:generate",
     "prisma:generate": "npx prisma generate",
     "prisma:migrate": "npx prisma migrate dev",
     "prisma:studio": "npx prisma studio",
