@@ -1,5 +1,3 @@
-/* software-project-backend/src/services/article.service.js */
-
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 const {
@@ -7,41 +5,10 @@ const {
   calculateReadingTime,
 } = require("../utils/helpers");
 
-const ARTICLE_STATUS = Object.freeze({
-  EDITING: "EDITING",
-  DRAFT: "DRAFT",
-  PUBLISHED: "PUBLISHED",
-  SCHEDULED: "SCHEDULED",
-});
-
-function normalizeArticleStatus(status) {
-  if (!status) return ARTICLE_STATUS.EDITING;
-
-  const normalized = String(status).trim().toUpperCase();
-
-  switch (normalized) {
-    case ARTICLE_STATUS.EDITING:
-      return ARTICLE_STATUS.EDITING;
-    case ARTICLE_STATUS.DRAFT:
-      return ARTICLE_STATUS.DRAFT;
-    case ARTICLE_STATUS.PUBLISHED:
-      return ARTICLE_STATUS.PUBLISHED;
-    case ARTICLE_STATUS.SCHEDULED:
-      return ARTICLE_STATUS.SCHEDULED;
-    default:
-      throw ApiError.badRequest(`Invalid article status: ${status}`);
-  }
-}
-
-function requireCompleteArticle({ title, content }, status) {
-  if (!title?.trim() || !content?.trim()) {
-    throw ApiError.badRequest(
-      `Title and content are required when status is ${status}.`,
-    );
-  }
-}
-
-function buildArticleCreateData(authorId, payload, slug) {
+/**
+ * Create a new article.
+ */
+const createArticle = async (authorId, data) => {
   const {
     title,
     content,
@@ -51,169 +18,34 @@ function buildArticleCreateData(authorId, payload, slug) {
     status,
     scheduledAt,
     isAiGenerated,
-  } = payload;
+  } = data;
 
-  const normalizedStatus = normalizeArticleStatus(status);
-
-  if (normalizedStatus !== ARTICLE_STATUS.EDITING) {
-    requireCompleteArticle({ title, content }, normalizedStatus);
+  if (!title || !content) {
+    throw ApiError.badRequest("Title and content are required.");
   }
 
+  const slug = await generateUniqueSlug(title);
+  const readingTime = calculateReadingTime(content);
+
   const articleData = {
-    title: title?.trim() || "Untitled",
+    title,
     slug,
-    content: content || "",
-    summary: summary?.trim() || null,
+    content,
+    summary: summary || null,
     coverImage: coverImage || null,
-    tags: Array.isArray(tags) ? tags : [],
-    readingTime: calculateReadingTime(content || ""),
-    isAiGenerated: Boolean(isAiGenerated),
-    status: normalizedStatus,
+    tags: tags || [],
+    readingTime,
+    isAiGenerated: isAiGenerated || false,
+    status: status || "DRAFT",
     authorId,
   };
 
-  if (normalizedStatus === ARTICLE_STATUS.PUBLISHED) {
+  // Handle scheduling and publishing
+  if (status === "PUBLISHED") {
     articleData.publishedAt = new Date();
-  }
-
-  if (normalizedStatus === ARTICLE_STATUS.SCHEDULED) {
-    if (!scheduledAt) {
-      throw ApiError.badRequest(
-        "scheduledAt is required when status is SCHEDULED.",
-      );
-    }
+  } else if (status === "SCHEDULED" && scheduledAt) {
     articleData.scheduledAt = new Date(scheduledAt);
   }
-
-  return articleData;
-}
-
-function buildArticleUpdateData(existingArticle, payload) {
-  const {
-    title,
-    content,
-    summary,
-    coverImage,
-    tags,
-    status,
-    scheduledAt,
-  } = payload;
-
-  const updateData = {};
-
-  const nextTitle =
-    title !== undefined ? title?.trim() || "" : existingArticle.title;
-  const nextContent =
-    content !== undefined ? content || "" : existingArticle.content;
-
-  const normalizedStatus =
-    status !== undefined
-      ? normalizeArticleStatus(status)
-      : existingArticle.status;
-
-  if (normalizedStatus !== ARTICLE_STATUS.EDITING) {
-    requireCompleteArticle(
-      { title: nextTitle, content: nextContent },
-      normalizedStatus,
-    );
-  }
-
-  if (title !== undefined) {
-    updateData.title = nextTitle || "Untitled";
-  }
-
-  if (content !== undefined) {
-    updateData.content = nextContent;
-    updateData.readingTime = calculateReadingTime(nextContent);
-  }
-
-  if (summary !== undefined) {
-    updateData.summary = summary?.trim() || null;
-  }
-
-  if (coverImage !== undefined) {
-    updateData.coverImage = coverImage || null;
-  }
-
-  if (tags !== undefined) {
-    if (!Array.isArray(tags)) {
-      throw ApiError.badRequest("tags must be an array.");
-    }
-    updateData.tags = tags;
-  }
-
-  if (status !== undefined && normalizedStatus !== existingArticle.status) {
-    updateData.status = normalizedStatus;
-
-    if (normalizedStatus === ARTICLE_STATUS.PUBLISHED) {
-      updateData.publishedAt = new Date();
-    }
-
-    if (normalizedStatus === ARTICLE_STATUS.SCHEDULED) {
-      if (!scheduledAt) {
-        throw ApiError.badRequest(
-          "scheduledAt is required when status is SCHEDULED.",
-        );
-      }
-      updateData.scheduledAt = new Date(scheduledAt);
-    }
-  }
-
-  return updateData;
-}
-
-async function incrementPublishedArticleCount(userId) {
-  await prisma.userStats.upsert({
-    where: { userId },
-    update: { articleCount: { increment: 1 } },
-    create: { userId, articleCount: 1 },
-  });
-}
-
-async function decrementPublishedArticleCount(userId) {
-  await prisma.userStats
-    .update({
-      where: { userId },
-      data: { articleCount: { decrement: 1 } },
-    })
-    .catch(() => {});
-}
-
-async function getArticleById(articleId, userId) {
-  const article = await prisma.article.findUnique({
-    where: { id: articleId },
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
-  });
-
-  if (!article) {
-    throw ApiError.notFound("Article not found.");
-  }
-
-  if (article.authorId !== userId) {
-    throw ApiError.forbidden("You can only access your own articles.");
-  }
-
-  return article;
-}
-
-/*
- Create a new article.
- */
-async function createArticle(authorId, payload) {
-  const normalizedStatus = normalizeArticleStatus(payload.status);
-
-  const baseTitle = payload.title?.trim() || "Untitled";
-  const slug = await generateUniqueSlug(baseTitle);
-  const articleData = buildArticleCreateData(authorId, payload, slug);
 
   const article = await prisma.article.create({
     data: articleData,
@@ -229,17 +61,22 @@ async function createArticle(authorId, payload) {
     },
   });
 
-  if (normalizedStatus === ARTICLE_STATUS.PUBLISHED) {
-    await incrementPublishedArticleCount(authorId);
+  // Update user's article count
+  if (status === "PUBLISHED") {
+    await prisma.userStats.upsert({
+      where: { userId: authorId },
+      update: { articleCount: { increment: 1 } },
+      create: { userId: authorId, articleCount: 1 },
+    });
   }
 
   return article;
-}
+};
 
-/*
- Get a single article by slug.
+/**
+ * Get a single article by slug.
  */
-async function getArticleBySlug(slug, currentUserId = null) {
+const getArticleBySlug = async (slug, currentUserId = null) => {
   const article = await prisma.article.findUnique({
     where: { slug },
     include: {
@@ -253,7 +90,7 @@ async function getArticleBySlug(slug, currentUserId = null) {
         },
       },
       comments: {
-        where: { parentId: null },
+        where: { parentId: null }, // Only top-level comments
         include: {
           author: {
             select: {
@@ -281,74 +118,57 @@ async function getArticleBySlug(slug, currentUserId = null) {
         take: 20,
       },
       _count: {
-        select: {
-          comments: true,
-          likes: true,
-          shares: true,
-        },
+        select: { comments: true, likes: true, shares: true },
       },
     },
   });
 
-  if (!article) {
-    throw ApiError.notFound("Article not found.");
-  }
+  if (!article) throw ApiError.notFound("Article not found.");
 
+  // Check if current user has liked or saved this article
   let isLiked = false;
   let isSaved = false;
-
   if (currentUserId) {
     const [like, saved] = await Promise.all([
       prisma.articleLike.findUnique({
         where: {
-          userId_articleId: {
-            userId: currentUserId,
-            articleId: article.id,
-          },
+          userId_articleId: { userId: currentUserId, articleId: article.id },
         },
       }),
       prisma.savedArticle.findUnique({
         where: {
-          userId_articleId: {
-            userId: currentUserId,
-            articleId: article.id,
-          },
+          userId_articleId: { userId: currentUserId, articleId: article.id },
         },
       }),
     ]);
-
-    isLiked = Boolean(like);
-    isSaved = Boolean(saved);
+    isLiked = !!like;
+    isSaved = !!saved;
   }
 
   return { ...article, isLiked, isSaved };
-}
+};
 
-/*
- Get published articles feed.
+/**
+ * Get published articles feed with pagination.
  */
-async function getArticleFeed({
+const getArticleFeed = async ({
   page = 1,
   limit = 10,
   tag,
   authorId,
   search,
   sortBy = "latest",
-}) {
+}) => {
   const skip = (page - 1) * limit;
 
-  const where = {
-    status: ARTICLE_STATUS.PUBLISHED,
-  };
+  const where = { status: "PUBLISHED" };
 
   if (tag) {
     where.tags = { has: tag };
   }
-
   if (authorId) {
     where.authorId = authorId;
   }
-
   if (search) {
     where.OR = [
       { title: { contains: search, mode: "insensitive" } },
@@ -373,12 +193,7 @@ async function getArticleFeed({
             avatarUrl: true,
           },
         },
-        _count: {
-          select: {
-            comments: true,
-            likes: true,
-          },
-        },
+        _count: { select: { comments: true, likes: true } },
       },
       orderBy,
       skip,
@@ -388,34 +203,56 @@ async function getArticleFeed({
   ]);
 
   return { articles, total };
-}
+};
 
-/*
- Update an article.
+/**
+ * Update an article.
  */
-async function updateArticle(articleId, authorId, payload) {
-  const existingArticle = await prisma.article.findUnique({
-    where: { id: articleId },
-  });
+const updateArticle = async (articleId, authorId, data) => {
+  const article = await prisma.article.findUnique({ where: { id: articleId } });
 
-  if (!existingArticle) {
-    throw ApiError.notFound("Article not found.");
-  }
-
-  if (existingArticle.authorId !== authorId) {
+  if (!article) throw ApiError.notFound("Article not found.");
+  if (article.authorId !== authorId)
     throw ApiError.forbidden("You can only edit your own articles.");
+
+  const { title, content, summary, coverImage, tags, status, scheduledAt } =
+    data;
+
+  const updateData = {};
+
+  if (title) {
+    updateData.title = title;
+    // Only regenerate slug if title changed
+    if (title !== article.title) {
+      updateData.slug = await generateUniqueSlug(title);
+    }
+  }
+  if (content) {
+    updateData.content = content;
+    updateData.readingTime = calculateReadingTime(content);
+  }
+  if (summary !== undefined) updateData.summary = summary;
+  if (coverImage !== undefined) updateData.coverImage = coverImage;
+  if (tags) updateData.tags = tags;
+
+  // Handle status transitions
+  if (status && status !== article.status) {
+    updateData.status = status;
+    if (status === "PUBLISHED" && article.status !== "PUBLISHED") {
+      updateData.publishedAt = new Date();
+      // Increment article count
+      await prisma.userStats.upsert({
+        where: { userId: authorId },
+        update: { articleCount: { increment: 1 } },
+        create: { userId: authorId, articleCount: 1 },
+      });
+    }
+    if (status === "SCHEDULED" && scheduledAt) {
+      updateData.scheduledAt = new Date(scheduledAt);
+    }
   }
 
-  const updateData = buildArticleUpdateData(existingArticle, payload);
-
-  if (
-    payload.title !== undefined &&
-    payload.title.trim() !== existingArticle.title
-  ) {
-    updateData.slug = await generateUniqueSlug(payload.title.trim() || "Untitled");
-  }
-
-  const updatedArticle = await prisma.article.update({
+  const updated = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
     include: {
@@ -430,66 +267,53 @@ async function updateArticle(articleId, authorId, payload) {
     },
   });
 
-  const wasPublished = existingArticle.status === ARTICLE_STATUS.PUBLISHED;
-  const isPublished = updatedArticle.status === ARTICLE_STATUS.PUBLISHED;
+  return updated;
+};
 
-  if (!wasPublished && isPublished) {
-    await incrementPublishedArticleCount(authorId);
-  }
-
-  return updatedArticle;
-}
-
-/*
- Delete an article.
+/**
+ * Delete an article (only by author or admin).
  */
-async function deleteArticle(articleId, userId, userRole) {
-  const article = await prisma.article.findUnique({
-    where: { id: articleId },
-  });
+const deleteArticle = async (articleId, userId, userRole) => {
+  const article = await prisma.article.findUnique({ where: { id: articleId } });
 
-  if (!article) {
-    throw ApiError.notFound("Article not found.");
-  }
-
+  if (!article) throw ApiError.notFound("Article not found.");
   if (article.authorId !== userId && userRole !== "ADMIN") {
     throw ApiError.forbidden("You can only delete your own articles.");
   }
 
-  await prisma.article.delete({
-    where: { id: articleId },
-  });
+  await prisma.article.delete({ where: { id: articleId } });
 
-  if (article.status === ARTICLE_STATUS.PUBLISHED) {
-    await decrementPublishedArticleCount(article.authorId);
+  // Decrement article count if it was published
+  if (article.status === "PUBLISHED") {
+    await prisma.userStats
+      .update({
+        where: { userId: article.authorId },
+        data: { articleCount: { decrement: 1 } },
+      })
+      .catch(() => {}); // Ignore if stats don't exist
   }
 
   return { deleted: true };
-}
+};
 
-/*
- Record a read on an article.
+/**
+ * Record a read on an article.
  */
-async function recordRead(articleId, userId) {
+const recordRead = async (articleId, userId) => {
+  // Upsert read history
   await prisma.readHistory.upsert({
-    where: {
-      userId_articleId: { userId, articleId },
-    },
-    update: {
-      lastReadAt: new Date(),
-      readCount: { increment: 1 },
-    },
-    create: {
-      userId,
-      articleId,
-    },
+    where: { userId_articleId: { userId, articleId } },
+    update: { lastReadAt: new Date(), readCount: { increment: 1 } },
+    create: { userId, articleId },
   });
 
+  // Increment article read count
   await prisma.article.update({
     where: { id: articleId },
     data: { readCount: { increment: 1 } },
   });
 
+  // Update author's total reads
   const article = await prisma.article.findUnique({
     where: { id: articleId },
     select: { authorId: true },
@@ -502,36 +326,31 @@ async function recordRead(articleId, userId) {
       create: { userId: article.authorId, totalReads: 1 },
     });
   }
-}
+};
 
-/*
- Get only intentional drafts.
- EDITING articles are excluded from this list.
+/**
+ * Get user's draft articles.
  */
-async function getUserDrafts(userId, page = 1, limit = 10) {
+const getUserDrafts = async (userId, page = 1, limit = 10) => {
   const skip = (page - 1) * limit;
-
-  const where = {
-    authorId: userId,
-    status: ARTICLE_STATUS.DRAFT,
-  };
 
   const [drafts, total] = await Promise.all([
     prisma.article.findMany({
-      where,
+      where: { authorId: userId, status: "DRAFT" },
       orderBy: { updatedAt: "desc" },
       skip,
       take: limit,
     }),
-    prisma.article.count({ where }),
+    prisma.article.count({
+      where: { authorId: userId, status: "DRAFT" },
+    }),
   ]);
 
   return { drafts, total };
-}
+};
 
 module.exports = {
   createArticle,
-  getArticleById,
   getArticleBySlug,
   getArticleFeed,
   updateArticle,
