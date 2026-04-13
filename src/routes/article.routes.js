@@ -12,6 +12,7 @@ const router = Router();
 // Article CRUD
 router.get("/", articleController.getFeed);
 router.get("/user/drafts", authenticate, articleController.getDrafts);
+router.get("/user/editing", authenticate, articleController.getCurrentEditing);
 router.get("/id/:id", authenticate, articleController.getArticleById);
 router.post("/", authenticate, articleController.createArticle);
 router.get("/:slug", articleController.getArticle);
