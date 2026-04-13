@@ -1,35 +1,39 @@
 // src/services/search.service.js
 // ─────────────────────────────────────────────────────────────────────────────
-// Dedicated search service — completely independent from article.service.js
-// and user.service.js so existing functionality is never affected.
+// Dedicated search service — completely independent of article.service.js and
+// user.service.js so no existing functionality is affected.
 //
-// Ranking strategy (Medium / Dev.to style):
-//   Articles  → title matches first, then summary matches.
-//               Within each group: engagement_score DESC
-//               engagement_score = (likeCount × 3) + (readCount × 1) + (commentCount × 2)
-//   Profiles  → follower_score DESC
-//               follower_score = totalFollowers + (articleCount × 10)
+// RANKING STRATEGY (Medium / Dev.to style)
+// ──────────────────────────────────────────
+//   Articles  →  title matches first, then summary matches.
+//                Within each group: engagement_score DESC
+//                engagement_score = (likeCount × 3) + (readCount × 1) + (commentCount × 2)
+//
+//   Users     →  follower_score DESC
+//                follower_score = totalFollowers + (articleCount × 10)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const prisma = require("../config/prisma");
 
-// ── Weights ──────────────────────────────────────────────────────────────────
+// ── Engagement weights ────────────────────────────────────────────────────────
 const LIKE_W    = 3;
 const READ_W    = 1;
 const COMMENT_W = 2;
 
 const articleEngagement = (a) =>
-  a.likeCount * LIKE_W + a.readCount * READ_W + a.commentCount * COMMENT_W;
+  (a.likeCount    || 0) * LIKE_W   +
+  (a.readCount    || 0) * READ_W   +
+  (a.commentCount || 0) * COMMENT_W;
 
-// ── Shared Prisma include for article queries ────────────────────────────────
+// ── Article include shape ─────────────────────────────────────────────────────
 const ARTICLE_INCLUDE = {
   author: {
     select: {
-      id: true,
-      username: true,
+      id:          true,
+      username:    true,
       displayName: true,
-      avatarUrl: true,
-      isPremium: true,
+      avatarUrl:   true,
+      isPremium:   true,
     },
   },
   _count: { select: { comments: true } },
@@ -37,8 +41,9 @@ const ARTICLE_INCLUDE = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // searchArticles
-// Fetches published articles matching the query, ranked by relevance then
-// engagement. Title matches are always surfaced above summary matches.
+// Returns PUBLISHED articles matching the query, ranked by:
+//   1. Title matches before summary matches
+//   2. Engagement score within each group
 // ─────────────────────────────────────────────────────────────────────────────
 const searchArticles = async ({ query, page = 1, limit = 10 }) => {
   const q = (query || "").trim();
@@ -46,76 +51,74 @@ const searchArticles = async ({ query, page = 1, limit = 10 }) => {
 
   const baseWhere = { status: "PUBLISHED" };
 
-  // ── Step 1: fetch title matches (up to 50) ──────────────────────────────
-  const titleMatches = await prisma.article.findMany({
-    where: {
-      ...baseWhere,
-      title: { contains: q, mode: "insensitive" },
-    },
-    include: ARTICLE_INCLUDE,
-    // Pre-sort by engagement in DB to keep in-memory sort lightweight
-    orderBy: [
-      { likeCount: "desc" },
-      { readCount: "desc" },
-      { commentCount: "desc" },
-    ],
-    take: 50,
-  });
-
-  const titleIds = titleMatches.map((a) => a.id);
-
-  // ── Step 2: fetch summary matches that aren't already in title results ──
-  const summaryMatches = await prisma.article.findMany({
-    where: {
-      ...baseWhere,
-      // Exclude articles already captured by title match
-      ...(titleIds.length > 0 && { NOT: { id: { in: titleIds } } }),
-      summary: { contains: q, mode: "insensitive" },
-    },
-    include: ARTICLE_INCLUDE,
-    orderBy: [
-      { likeCount: "desc" },
-      { readCount: "desc" },
-      { commentCount: "desc" },
-    ],
-    take: 50,
-  });
-
-  // ── Step 3: count total for pagination meta ─────────────────────────────
-  const total = await prisma.article.count({
-    where: {
-      ...baseWhere,
-      OR: [
-        { title:   { contains: q, mode: "insensitive" } },
-        { summary: { contains: q, mode: "insensitive" } },
+  try {
+    // Step 1 — fetch title matches (up to 50, pre-sorted by DB for speed)
+    const titleMatches = await prisma.article.findMany({
+      where: {
+        ...baseWhere,
+        title: { contains: q, mode: "insensitive" },
+      },
+      include: ARTICLE_INCLUDE,
+      orderBy: [
+        { likeCount:    "desc" },
+        { readCount:    "desc" },
+        { commentCount: "desc" },
       ],
-    },
-  });
+      take: 50,
+    });
 
-  // ── Step 4: sort each group by engagement, merge, paginate ─────────────
-  const sortByEngagement = (arr) =>
-    [...arr].sort((a, b) => articleEngagement(b) - articleEngagement(a));
+    const titleIds = titleMatches.map((a) => a.id);
 
-  const merged = [
-    ...sortByEngagement(titleMatches),
-    ...sortByEngagement(summaryMatches),
-  ];
+    // Step 2 — fetch summary matches NOT already captured by title search
+    const summaryMatches = await prisma.article.findMany({
+      where: {
+        ...baseWhere,
+        ...(titleIds.length > 0 && { NOT: { id: { in: titleIds } } }),
+        summary: { contains: q, mode: "insensitive" },
+      },
+      include: ARTICLE_INCLUDE,
+      orderBy: [
+        { likeCount:    "desc" },
+        { readCount:    "desc" },
+        { commentCount: "desc" },
+      ],
+      take: 50,
+    });
 
-  const skip      = (page - 1) * limit;
-  const paginated = merged.slice(skip, skip + limit);
+    // Step 3 — total count for pagination meta
+    const total = await prisma.article.count({
+      where: {
+        ...baseWhere,
+        OR: [
+          { title:   { contains: q, mode: "insensitive" } },
+          { summary: { contains: q, mode: "insensitive" } },
+        ],
+      },
+    });
 
-  return {
-    articles:   paginated,
-    total,
-    page,
-    limit,
-    totalPages: Math.ceil(total / limit),
-  };
+    // Step 4 — sort each group by engagement, merge, paginate
+    const sortByEngagement = (arr) =>
+      [...arr].sort((a, b) => articleEngagement(b) - articleEngagement(a));
+
+    const merged   = [...sortByEngagement(titleMatches), ...sortByEngagement(summaryMatches)];
+    const skip     = (page - 1) * limit;
+    const paginated = merged.slice(skip, skip + limit);
+
+    return { articles: paginated, total, page, limit, totalPages: Math.ceil(total / limit) };
+
+  } catch (err) {
+    // Surface Prisma errors clearly so they are visible in the backend terminal
+    console.error("[search.service] searchArticles error:", err.message || err);
+    throw err;
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // searchUsers
-// Finds users matching username or displayName, ranked by follower count.
+// Finds users matching username or displayName, ranked by follower score.
+//
+// NOTE: _count.select does NOT use a { where } filter here to avoid requiring
+// the `filteredRelationCount` Prisma preview feature.
 // ─────────────────────────────────────────────────────────────────────────────
 const searchUsers = async ({ query, page = 1, limit = 10 }) => {
   const q = (query || "").trim();
@@ -128,95 +131,103 @@ const searchUsers = async ({ query, page = 1, limit = 10 }) => {
     ],
   };
 
-  const [rawUsers, total] = await Promise.all([
-    prisma.user.findMany({
-      where,
-      select: {
-        id:          true,
-        username:    true,
-        displayName: true,
-        avatarUrl:   true,
-        bio:         true,
-        isPremium:   true,
-        stats: {
-          select: {
-            totalFollowers: true,
-            articleCount:   true,
+  try {
+    const [rawUsers, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        select: {
+          id:          true,
+          username:    true,
+          displayName: true,
+          avatarUrl:   true,
+          bio:         true,
+          isPremium:   true,
+          // stats relation gives us pre-aggregated counts kept up-to-date
+          // by the follow.service.js and article.service.js upserts
+          stats: {
+            select: {
+              totalFollowers: true,
+              articleCount:   true,
+            },
+          },
+          // Simple _count — NO { where } filter to stay Prisma 4.x compatible
+          _count: {
+            select: {
+              articles:  true,   // total articles (all statuses)
+              followers: true,   // total followers
+            },
           },
         },
-        _count: {
-          select: {
-            articles:  { where: { status: "PUBLISHED" } },
-            followers: true,
-          },
-        },
-      },
-      // Fetch a generous batch then sort in JS for combined scoring
-      take: Math.max(limit * 5, 50),
-    }),
-    prisma.user.count({ where }),
-  ]);
+        take: Math.max(limit * 5, 50),
+      }),
+      prisma.user.count({ where }),
+    ]);
 
-  // Sort by follower_score = totalFollowers + articleCount × 10
-  const sorted = [...rawUsers].sort((a, b) => {
-    const scoreA =
-      (a.stats?.totalFollowers ?? a._count?.followers ?? 0) +
-      (a.stats?.articleCount   ?? a._count?.articles  ?? 0) * 10;
-    const scoreB =
-      (b.stats?.totalFollowers ?? b._count?.followers ?? 0) +
-      (b.stats?.articleCount   ?? b._count?.articles  ?? 0) * 10;
-    return scoreB - scoreA;
-  });
+    // Sort by follower_score = totalFollowers + articleCount × 10
+    const sorted = [...rawUsers].sort((a, b) => {
+      const scoreA =
+        (a.stats?.totalFollowers ?? a._count?.followers ?? 0) +
+        (a.stats?.articleCount   ?? a._count?.articles  ?? 0) * 10;
+      const scoreB =
+        (b.stats?.totalFollowers ?? b._count?.followers ?? 0) +
+        (b.stats?.articleCount   ?? b._count?.articles  ?? 0) * 10;
+      return scoreB - scoreA;
+    });
 
-  const skip      = (page - 1) * limit;
-  const paginated = sorted.slice(skip, skip + limit);
+    const skip      = (page - 1) * limit;
+    const paginated = sorted.slice(skip, skip + limit);
 
-  return {
-    users:      paginated,
-    total,
-    page,
-    limit,
-    totalPages: Math.ceil(total / limit),
-  };
+    return { users: paginated, total, page, limit, totalPages: Math.ceil(total / limit) };
+
+  } catch (err) {
+    console.error("[search.service] searchUsers error:", err.message || err);
+    throw err;
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // getSearchSuggestions
-// Returns lightweight autocomplete data: top 5 article titles + top 3 users.
-// Called on every debounced keystroke — kept minimal (no content/stats).
+// Lightweight autocomplete: top 5 article titles + top 3 users.
+// Called on every debounced keystroke — kept minimal for speed.
 // ─────────────────────────────────────────────────────────────────────────────
 const getSearchSuggestions = async (query) => {
   const q = (query || "").trim();
   if (q.length < 2) return { articles: [], users: [] };
 
-  const [articles, users] = await Promise.all([
-    prisma.article.findMany({
-      where: {
-        status: "PUBLISHED",
-        title:  { contains: q, mode: "insensitive" },
-      },
-      select: { id: true, title: true, slug: true },
-      orderBy: [{ likeCount: "desc" }, { readCount: "desc" }],
-      take: 5,
-    }),
-    prisma.user.findMany({
-      where: {
-        OR: [
-          { username:    { contains: q, mode: "insensitive" } },
-          { displayName: { contains: q, mode: "insensitive" } },
-        ],
-      },
-      select: {
-        id:          true,
-        username:    true,
-        displayName: true,
-        avatarUrl:   true,
-      },
-      take: 3,
-    }),
-  ]);
+  try {
+    const [articles, users] = await Promise.all([
+      prisma.article.findMany({
+        where: {
+          status: "PUBLISHED",
+          title:  { contains: q, mode: "insensitive" },
+        },
+        select: { id: true, title: true, slug: true },
+        orderBy: [{ likeCount: "desc" }, { readCount: "desc" }],
+        take: 5,
+      }),
+      prisma.user.findMany({
+        where: {
+          OR: [
+            { username:    { contains: q, mode: "insensitive" } },
+            { displayName: { contains: q, mode: "insensitive" } },
+          ],
+        },
+        select: {
+          id:          true,
+          username:    true,
+          displayName: true,
+          avatarUrl:   true,
+        },
+        take: 3,
+      }),
+    ]);
 
-  return { articles, users };
+    return { articles, users };
+
+  } catch (err) {
+    console.error("[search.service] getSearchSuggestions error:", err.message || err);
+    throw err;
+  }
 };
 
 module.exports = { searchArticles, searchUsers, getSearchSuggestions };
