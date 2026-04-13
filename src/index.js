@@ -12,6 +12,8 @@ const errorHandler = require("./middlewares/errorHandler");
 const { apiLimiter } = require("./middlewares/rateLimiter");
 const initializeSocket = require("./sockets");
 const prisma = require("./config/prisma");
+const { startScrapingJobs } = require("./jobs/scraper.job");
+ const { startWordPressJobs } = require("./jobs/wordpress.job");
 
 // ─── App Setup ──────────────────────────────
 
@@ -117,6 +119,10 @@ server.listen(PORT, () => {
   │                                         │
   └─────────────────────────────────────────┘
   `);
+    if (process.env.NODE_ENV !== "test") {
+    startScrapingJobs();
+     startWordPressJobs(); 
+  }
 });
 
 // ─── Graceful Shutdown ──────────────────────
