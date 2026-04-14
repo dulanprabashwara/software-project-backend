@@ -92,10 +92,19 @@ const recordRead = asyncHandler(async (req, res) => {
 
 const getDrafts = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
+
+  let isAiGenerated;
+  if (req.query.isAiGenerated === "true") {
+    isAiGenerated = true;
+  } else if (req.query.isAiGenerated === "false") {
+    isAiGenerated = false;
+  }
+
   const { drafts, total } = await articleService.getUserDrafts(
     req.user.id,
     page,
     limit,
+    { isAiGenerated },
   );
 
   sendPaginated(res, {
