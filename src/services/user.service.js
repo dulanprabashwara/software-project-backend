@@ -31,6 +31,8 @@ const getUserProfile = async (identifier, currentUserId = null) => {
           articles: { where: { status: "PUBLISHED" } },
           followers: true,
           following: true,
+          sentMessages: true,
+          receivedMessages: true,
         },
       },
       // Eagerly check if current user follows this profile (saves 1 DB roundtrip)
@@ -51,10 +53,15 @@ const getUserProfile = async (identifier, currentUserId = null) => {
     isFollowing = user.followers && user.followers.length > 0;
   }
   
+  // Calculate total messages metric for profile stats
+  const totalMessages = (user._count?.sentMessages || 0) + (user._count?.receivedMessages || 0);
+
   // Remove the eager loaded array from the response object
   delete user.followers;
+  delete user._count.sentMessages;
+  delete user._count.receivedMessages;
 
-  return { ...user, isFollowing };
+  return { ...user, isFollowing, messages: totalMessages };
 };
 
 /**
