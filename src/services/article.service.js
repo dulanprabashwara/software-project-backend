@@ -534,7 +534,7 @@ async function recordRead(articleId, userId) {
   Get only intentional drafts.
   EDITING articles are excluded from this list.
  */
-async function getUserDrafts(userId, page = 1, limit = 10) {
+async function getUserDrafts(userId, page = 1, limit = 10, filters = {}) {
   const skip = (page - 1) * limit;
 
   const where = {
@@ -542,12 +542,26 @@ async function getUserDrafts(userId, page = 1, limit = 10) {
     status: ARTICLE_STATUS.DRAFT,
   };
 
+  if (typeof filters.isAiGenerated === "boolean") {
+    where.isAiGenerated = filters.isAiGenerated;
+  }
+
   const [drafts, total] = await Promise.all([
     prisma.article.findMany({
       where,
       orderBy: { updatedAt: "desc" },
       skip,
       take: limit,
+      include: {
+        author: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+          },
+        },
+      },
     }),
     prisma.article.count({ where }),
   ]);
