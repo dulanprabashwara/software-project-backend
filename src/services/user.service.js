@@ -53,15 +53,20 @@ const getUserProfile = async (identifier, currentUserId = null) => {
     isFollowing = user.followers && user.followers.length > 0;
   }
   
-  // Calculate total messages metric for profile stats
-  const totalMessages = (user._count?.sentMessages || 0) + (user._count?.receivedMessages || 0);
+  // Calculate unread message count for profile display
+  const unreadMessageCount = await prisma.message.count({
+    where: {
+      receiverId: user.id,
+      isRead: false,
+    },
+  });
 
   // Remove the eager loaded array from the response object
   delete user.followers;
   delete user._count.sentMessages;
   delete user._count.receivedMessages;
 
-  return { ...user, isFollowing, messages: totalMessages };
+  return { ...user, isFollowing, unreadMessageCount };
 };
 
 /**
