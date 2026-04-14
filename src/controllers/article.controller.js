@@ -40,6 +40,15 @@ const getArticleById = asyncHandler(async (req, res) => {
   });
 });
 
+const getCurrentEditing = asyncHandler(async (req, res) => {
+  const article = await articleService.getCurrentEditingArticle(req.user.id);
+
+  sendSuccess(res, {
+    message: "Current editing article retrieved.",
+    data: article,
+  });
+});
+
 const getFeed = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
   const { tag, search, sortBy, authorId } = req.query;
@@ -83,10 +92,19 @@ const recordRead = asyncHandler(async (req, res) => {
 
 const getDrafts = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
+
+  let isAiGenerated;
+  if (req.query.isAiGenerated === "true") {
+    isAiGenerated = true;
+  } else if (req.query.isAiGenerated === "false") {
+    isAiGenerated = false;
+  }
+
   const { drafts, total } = await articleService.getUserDrafts(
     req.user.id,
     page,
     limit,
+    { isAiGenerated },
   );
 
   sendPaginated(res, {
@@ -102,6 +120,7 @@ module.exports = {
   createArticle,
   getArticle,
   getArticleById,
+  getCurrentEditing,
   getFeed,
   updateArticle,
   deleteArticle,
