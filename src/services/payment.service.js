@@ -143,6 +143,19 @@ const handleWebhookEvent = async (event) => {
       break;
     }
 
+    case "customer.subscription.updated": {
+      const subscription = event.data.object;
+      
+      // If the user clicked cancel in the portal (which defaults to cancel at period end),
+      // we forcefully cancel it immediately here so you don't have to wait to test again.
+      if (subscription.cancel_at_period_end === true) {
+        console.log(`⚠️ Subscription set to cancel at period end. Forcing immediate cancellation for testing: ${subscription.id}`);
+        await stripe.subscriptions.cancel(subscription.id);
+        // This triggers 'customer.subscription.deleted' next, which actually updates the DB.
+      }
+      break;
+    }
+
     case "customer.subscription.deleted": {
       const subscription = event.data.object;
       const stripeSubscriptionId = subscription.id;
@@ -219,12 +232,10 @@ const cancelSubscription = async (userId) => {
     throw ApiError.notFound("No active subscription found.");
   }
 
-  // Cancel at period end (user keeps premium until billing cycle ends)
-  await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
-    cancel_at_period_end: true,
-  });
+  // Cancel immediately for testing purposes
+  await stripe.subscriptions.cancel(subscription.stripeSubscriptionId);
 
-  return { message: "Subscription will cancel at end of billing period." };
+  return { message: "Subscription has been canceled immediately." };
 };
 
 // ─── Create Customer Portal Session ─────────

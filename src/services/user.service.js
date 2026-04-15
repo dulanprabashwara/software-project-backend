@@ -31,6 +31,8 @@ const getUserProfile = async (identifier, currentUserId = null) => {
           articles: { where: { status: "PUBLISHED" } },
           followers: true,
           following: true,
+          sentMessages: true,
+          receivedMessages: true,
         },
       },
       // Eagerly check if current user follows this profile (saves 1 DB roundtrip)
@@ -51,10 +53,20 @@ const getUserProfile = async (identifier, currentUserId = null) => {
     isFollowing = user.followers && user.followers.length > 0;
   }
   
+  // Calculate unread message count for profile display
+  const unreadMessageCount = await prisma.message.count({
+    where: {
+      receiverId: user.id,
+      isRead: false,
+    },
+  });
+
   // Remove the eager loaded array from the response object
   delete user.followers;
+  delete user._count.sentMessages;
+  delete user._count.receivedMessages;
 
-  return { ...user, isFollowing };
+  return { ...user, isFollowing, unreadMessageCount };
 };
 
 /**
@@ -133,4 +145,29 @@ const searchUsers = async (query, page = 1, limit = 10) => {
   return { users, total };
 };
 
-module.exports = { getUserProfile, updateProfile, searchUsers };
+/**
+ * Delete a user account and all associated data.
+ * Most relations use onDelete: Cascade in the schema, but
+ * Subscription and AuditLog do not, so we clean them up manually.
+ */
+const deleteAccount = async (userId, firebaseUid) => {
+  const admin = require("../config/firebase");
+
+  // 1. Delete non-cascading relations first
+  await prisma.subscription.deleteMany({ where: { userId } });
+  await prisma.auditLog.deleteMany({ where: { adminId: userId } });
+
+  // 2. Delete the user row — all Cascade relations are cleaned up automatically
+  await prisma.user.delete({ where: { id: userId } });
+
+  // 3. Delete the Firebase Auth account
+  try {
+    await admin.auth().deleteUser(firebaseUid);
+  } catch (err) {
+    // If Firebase deletion fails the DB row is already gone.
+    // Log but don't throw — the account is effectively deleted.
+    console.error("Failed to delete Firebase auth account:", err.message);
+  }
+};
+
+module.exports = { getUserProfile, updateProfile, searchUsers, deleteAccount };
