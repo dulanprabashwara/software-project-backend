@@ -145,4 +145,29 @@ const searchUsers = async (query, page = 1, limit = 10) => {
   return { users, total };
 };
 
-module.exports = { getUserProfile, updateProfile, searchUsers };
+/**
+ * Delete a user account and all associated data.
+ * Most relations use onDelete: Cascade in the schema, but
+ * Subscription and AuditLog do not, so we clean them up manually.
+ */
+const deleteAccount = async (userId, firebaseUid) => {
+  const admin = require("../config/firebase");
+
+  // 1. Delete non-cascading relations first
+  await prisma.subscription.deleteMany({ where: { userId } });
+  await prisma.auditLog.deleteMany({ where: { adminId: userId } });
+
+  // 2. Delete the user row — all Cascade relations are cleaned up automatically
+  await prisma.user.delete({ where: { id: userId } });
+
+  // 3. Delete the Firebase Auth account
+  try {
+    await admin.auth().deleteUser(firebaseUid);
+  } catch (err) {
+    // If Firebase deletion fails the DB row is already gone.
+    // Log but don't throw — the account is effectively deleted.
+    console.error("Failed to delete Firebase auth account:", err.message);
+  }
+};
+
+module.exports = { getUserProfile, updateProfile, searchUsers, deleteAccount };
