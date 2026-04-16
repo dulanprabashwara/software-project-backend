@@ -78,6 +78,56 @@ const updateArticle = asyncHandler(async (req, res) => {
   });
 });
 
+const startEditExisting = asyncHandler(async (req, res) => {
+  const article = await articleService.startExistingArticleEditing(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Existing article editing session started.",
+    data: article,
+  });
+});
+
+const autosaveEditExisting = asyncHandler(async (req, res) => {
+  const article = await articleService.autosaveExistingArticle(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Existing article autosaved.",
+    data: article,
+  });
+});
+
+const discardEditExisting = asyncHandler(async (req, res) => {
+  const article = await articleService.discardExistingArticleEdits(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Article changes discarded successfully.",
+    data: article,
+  });
+});
+
+const saveEditExistingAsDraft = asyncHandler(async (req, res) => {
+  const article = await articleService.saveExistingArticleAsDraft(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Edited article saved as draft successfully.",
+    data: article,
+  });
+});
+
 const deleteArticle = asyncHandler(async (req, res) => {
   await articleService.deleteArticle(req.params.id, req.user.id, req.user.role);
 
@@ -123,6 +173,10 @@ module.exports = {
   getCurrentEditing,
   getFeed,
   updateArticle,
+  startEditExisting,
+  autosaveEditExisting,
+  discardEditExisting,
+  saveEditExistingAsDraft,
   deleteArticle,
   recordRead,
   getDrafts,
