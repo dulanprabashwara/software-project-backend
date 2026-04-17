@@ -1,3 +1,4 @@
+// @ts-nocheck
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendPaginated } = require("../utils/response");
 const adminService = require("../services/admin.service");
@@ -135,7 +136,7 @@ const getTrendingTopics = asyncHandler(async (/** @type {any} */ req, res) => {
 });
 
 // ─── Offers ───────────────────────────────
-const getOffers = async (req, res, next) => {
+const getOffers = asyncHandler(async (/** @type {any} */ req, res, next) => {
   try {
     // Assuming adminService is already imported at the top of this file
     const offers = await adminService.getAllOffers();
@@ -143,68 +144,73 @@ const getOffers = async (req, res, next) => {
   } catch (error) {
     next(error); // Passes the error to your teammate's error handler
   }
-};
+});
 
-const createOffer = async (req, res, next) => {
+const createOffer = asyncHandler(async (req, res, next) => {
   try {
-    const newOffer = await adminService.createOffer(req.body);
+    const adminId = req.user.id;
+    const newOffer = await adminService.createOffer(req.body, adminId);
     res.status(201).json({ success: true, data: newOffer });
   } catch (error) {
     next(error);
   }
-};
+});
 
-const updateOffer = async (req, res, next) => {
+const updateOffer = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params; // Grabs the ID from the URL
-    const updatedOffer = await adminService.updateOffer(id, req.body);
+    const adminId = req.user.id;
+    const updatedOffer = await adminService.updateOffer(id, req.body,adminId);
     res.status(200).json({ success: true, data: updatedOffer });
   } catch (error) {
     next(error);
   }
-};
+});
 
 // ─── scraping sources ───────────────────────────────
-const getScrapingSources = async (req, res, next) => {
+const getScrapingSources = asyncHandler(async (req, res, next) => {
   try {
     const sources = await adminService.getScrapingSources();
     res.status(200).json({ success: true, data: sources });
   } catch (error) {
     next(error);
   }
-};
+});
 
-const createScrapingSource = async (req, res, next) => {
+const createScrapingSource = asyncHandler(async (req, res, next) => {
   try {
-    const newSource = await adminService.createScrapingSource(req.body);
+    const adminId = req.user.id;
+    const newSource = await adminService.createScrapingSource(req.body,adminId);
     res.status(201).json({ success: true, data: newSource });
   } catch (error) {
     next(error);
   }
-};
+});
 
-const updateScrapingSource = async (req, res, next) => {
+const updateScrapingSource = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
-    const updatedSource = await adminService.updateScrapingSource(id, req.body);
+    const adminId = req.user.id;
+    const updatedSource = await adminService.updateScrapingSource(id, req.body,adminId);
     res.status(200).json({ success: true, data: updatedSource });
   } catch (error) {
     next(error);
   }
-};
+});
 
-const deleteScrapingSource = async (req, res, next) => {
+const deleteScrapingSource = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
+    const adminId = req.user.id;
     await adminService.deleteScrapingSource(id);
     res.status(200).json({ success: true, message: "Source deleted successfully" });
   } catch (error) {
     next(error);
   }
-};
+});
 
 //  ─── URL validation ───────────────────────────────
-const validateUrl = async (req, res, next) => {
+const validateUrl = asyncHandler(async (req, res, next) => {
   try {
     const { url } = req.body;
     
@@ -230,7 +236,7 @@ const validateUrl = async (req, res, next) => {
     // The domain doesn't exist at all, or the site is completely down
     return res.status(200).json({ success: true, data: { valid: false } });
   }
-};
+});
 
 module.exports = {
   getDashboard,
