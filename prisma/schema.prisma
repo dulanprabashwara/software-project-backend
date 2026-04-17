@@ -60,6 +60,8 @@ model Article {
   isAiGenerated            Boolean           @default(false)
 
   isEdited                 Boolean           @default(false)
+  isEditAsNew              Boolean           @default(false)
+  sourceArticleId          String?
 
   editingBackupTitle       String?
   editingBackupContent     String?
@@ -91,6 +93,7 @@ model Article {
   @@index([status])
   @@index([publishedAt])
   @@index([slug])
+  @@index([sourceArticleId])
   @@map("articles")
 }
 
