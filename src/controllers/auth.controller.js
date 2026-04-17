@@ -5,7 +5,14 @@ const admin = require("../config/firebase");
 const ApiError = require("../utils/ApiError");
 
 /**
- * Helper to verify ID token and get UID
+ * @function getUidFromToken
+ * @description
+ * Extracts and cryptographically verifies the Firebase UID from an incoming Authorization header.
+ * WHY: This acts as the secure identity parser for authentication flows, preventing spoofed UIDs.
+ * 
+ * @param {Object} req - Express request object containing `headers.authorization`.
+ * @returns {Promise<string>} The verified Firebase UID.
+ * @throws {ApiError} 401 if token is missing, invalid, or expired.
  */
 const getUidFromToken = async (req) => {
   const authHeader = req.headers.authorization;
@@ -23,8 +30,16 @@ const getUidFromToken = async (req) => {
 };
 
 /**
+ * @function register
+ * @description
  * POST /api/v1/auth/register
- * Register a new user (sync Firebase ↔ local DB).
+ * Handles manual user registration via Email/Password.
+ * WHY: Manual registration requires explicitly claiming a unique `username`. This endpoint 
+ * catches preemptive conflicts (email/username taken) before Postgres creation.
+ * 
+ * @param {Object} req - Express request object containing registration details (email, username).
+ * @param {Object} res - Express response object.
+ * @returns {Promise<void>} Sends HTTP 201 with the created Postgres User object.
  */
 const register = asyncHandler(async (req, res) => {
   const { email, username, displayName, avatarUrl } = req.body;
@@ -52,9 +67,17 @@ const register = asyncHandler(async (req, res) => {
 });
 
 /**
+ * @function sync
+ * @description
  * POST /api/v1/auth/sync
- * Sync Firebase user with local database on login.
- * Called after Firebase frontend authentication.
+ * Syncs an authenticated Firebase session with the local Postgres database.
+ * WHY: For social logins (Google/GitHub) or immediate post-signup, the frontend doesn't directly 
+ * dictate Postgres schema. This endpoint securely auto-provisions or retrieves the Postgres User 
+ * record purely based on the trusted Firebase token content.
+ * 
+ * @param {Object} req - Express request object. Token is extracted via headers.
+ * @param {Object} res - Express response object.
+ * @returns {Promise<void>} Sends HTTP 200 with the synced Postgres User object.
  */
 const sync = asyncHandler(async (req, res) => {
   // Securely get UID from verified token
@@ -69,8 +92,16 @@ const sync = asyncHandler(async (req, res) => {
 });
 
 /**
+ * @function getMe
+ * @description
  * GET /api/v1/auth/me
- * Get current authenticated user's profile.
+ * Retrieves the currently authenticated user's profile.
+ * WHY: Allows the frontend context to easily re-hydrate current user session state 
+ * (like role, stats, premium status) without passing complex payloads. Fully respects `req.user`.
+ * 
+ * @param {Object} req - Express request object. Expects `req.user` attached by `authenticate` middleware.
+ * @param {Object} res - Express response object.
+ * @returns {Promise<void>} Sends HTTP 200 with the `req.user` object.
  */
 const getMe = asyncHandler(async (req, res) => {
   sendSuccess(res, {
