@@ -128,6 +128,56 @@ const saveEditExistingAsDraft = asyncHandler(async (req, res) => {
   });
 });
 
+const startEditAsNew = asyncHandler(async (req, res) => {
+  const article = await articleService.startEditAsNewArticle(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    statusCode: 201,
+    message: "Edit-as-new article created successfully.",
+    data: article,
+  });
+});
+
+const autosaveEditAsNew = asyncHandler(async (req, res) => {
+  const article = await articleService.autosaveEditAsNewArticle(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Edit-as-new article autosaved successfully.",
+    data: article,
+  });
+});
+
+const saveEditAsNewAsDraft = asyncHandler(async (req, res) => {
+  const article = await articleService.saveEditAsNewArticleAsDraft(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Edit-as-new article saved as draft successfully.",
+    data: article,
+  });
+});
+
+const discardEditAsNew = asyncHandler(async (req, res) => {
+  await articleService.discardEditAsNewArticle(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Edit-as-new article discarded successfully.",
+  });
+});
+
 const deleteArticle = asyncHandler(async (req, res) => {
   await articleService.deleteArticle(req.params.id, req.user.id, req.user.role);
 
@@ -177,6 +227,10 @@ module.exports = {
   autosaveEditExisting,
   discardEditExisting,
   saveEditExistingAsDraft,
+  startEditAsNew,
+  autosaveEditAsNew,
+  saveEditAsNewAsDraft,
+  discardEditAsNew,
   deleteArticle,
   recordRead,
   getDrafts,
