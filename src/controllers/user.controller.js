@@ -76,4 +76,16 @@ const searchUsers = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { getProfile, getMe, updateProfile, searchUsers };
+/**
+ * DELETE /api/users/me
+ * Delete the currently authenticated user's account and all associated data.
+ */
+const deleteAccount = asyncHandler(async (req, res) => {
+  await userService.deleteAccount(req.user.id, req.user.firebaseUid);
+
+  sendSuccess(res, {
+    message: "Account deleted successfully.",
+  });
+});
+
+module.exports = { getProfile, getMe, updateProfile, searchUsers, deleteAccount };

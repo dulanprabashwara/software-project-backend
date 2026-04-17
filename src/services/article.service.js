@@ -41,6 +41,31 @@ function requireCompleteArticle({ title, content }, status) {
   }
 }
 
+function buildEditExistingPayload(payload) {
+  return {
+    title: payload.title?.trim() || "Untitled",
+    content: payload.content || "",
+    coverImage: payload.coverImage || null,
+    readingTime: calculateReadingTime(payload.content || ""),
+  };
+}
+
+async function getOwnedArticleOrThrow(articleId, userId) {
+  const article = await prisma.article.findUnique({
+    where: { id: articleId },
+  });
+
+  if (!article) {
+    throw ApiError.notFound("Article not found.");
+  }
+
+  if (article.authorId !== userId) {
+    throw ApiError.forbidden("You can only edit your own articles.");
+  }
+
+  return article;
+}
+
 function buildArticleCreateData(authorId, payload, slug) {
   const {
     title,
@@ -82,6 +107,7 @@ function buildArticleCreateData(authorId, payload, slug) {
         "scheduledAt is required when status is SCHEDULED.",
       );
     }
+
     articleData.scheduledAt = new Date(scheduledAt);
   }
 
@@ -139,6 +165,7 @@ function buildArticleUpdateData(existingArticle, payload) {
     if (!Array.isArray(tags)) {
       throw ApiError.badRequest("tags must be an array.");
     }
+
     updateData.tags = tags;
   }
 
@@ -155,6 +182,7 @@ function buildArticleUpdateData(existingArticle, payload) {
           "scheduledAt is required when status is SCHEDULED.",
         );
       }
+
       updateData.scheduledAt = new Date(scheduledAt);
     }
   }
@@ -229,9 +257,48 @@ async function getCurrentEditingArticle(userId) {
   return article || null;
 }
 
-/*
- Create a new article.
- */
+async function startExistingArticleEditing(articleId, userId) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  if (article.status === ARTICLE_STATUS.PUBLISHED) {
+    throw ApiError.badRequest(
+      "Published articles cannot be edited from this page.",
+    );
+  }
+
+  const hasBackup =
+    article.editingBackupTitle !== null ||
+    article.editingBackupContent !== null ||
+    article.editingBackupCoverImage !== null;
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: {
+      status: ARTICLE_STATUS.EDITING,
+      ...(hasBackup
+        ? {}
+        : {
+            editingBackupTitle: article.title,
+            editingBackupContent: article.content,
+            editingBackupCoverImage: article.coverImage,
+            editingStartedAt: article.updatedAt,
+          }),
+    },
+    include: {
+      author: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+        },
+      },
+    },
+  });
+
+  return updatedArticle;
+}
+
 async function createArticle(authorId, payload) {
   const normalizedStatus = normalizeArticleStatus(payload.status);
 
@@ -260,9 +327,6 @@ async function createArticle(authorId, payload) {
   return article;
 }
 
-/*
- Get a single article by slug.
- */
 async function getArticleBySlug(slug, currentUserId = null) {
   const article = await prisma.article.findUnique({
     where: { slug },
@@ -348,9 +412,6 @@ async function getArticleBySlug(slug, currentUserId = null) {
   return { ...article, isLiked, isSaved };
 }
 
-/*
-  Get published articles feed.
- */
 async function getArticleFeed({
   page = 1,
   limit = 10,
@@ -414,9 +475,6 @@ async function getArticleFeed({
   return { articles, total };
 }
 
-/*
-  Update an article.
- */
 async function updateArticle(articleId, authorId, payload) {
   const existingArticle = await prisma.article.findUnique({
     where: { id: articleId },
@@ -466,9 +524,122 @@ async function updateArticle(articleId, authorId, payload) {
   return updatedArticle;
 }
 
-/*
-  Delete an article.
- */
+async function autosaveExistingArticle(articleId, userId, payload) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  const updateData = {
+    ...buildEditExistingPayload(payload),
+    status: ARTICLE_STATUS.EDITING,
+  };
+
+  if (
+    payload.title &&
+    payload.title.trim() &&
+    payload.title.trim() !== article.title
+  ) {
+    updateData.slug = await generateUniqueSlug(payload.title.trim());
+  }
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: updateData,
+    include: {
+      author: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+        },
+      },
+    },
+  });
+
+  return updatedArticle;
+}
+
+async function discardExistingArticleEdits(articleId, userId) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  const restoredTitle = article.editingBackupTitle;
+  const restoredContent = article.editingBackupContent;
+  const restoredCoverImage = article.editingBackupCoverImage;
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: {
+      title: restoredTitle,
+      content: restoredContent,
+      coverImage: restoredCoverImage,
+      readingTime: calculateReadingTime(restoredContent || ""),
+      status: ARTICLE_STATUS.DRAFT,
+      updatedAt: article.editingStartedAt || article.updatedAt,
+      editingBackupTitle: null,
+      editingBackupContent: null,
+      editingBackupCoverImage: null,
+      editingStartedAt: null,
+    },
+    include: {
+      author: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+        },
+      },
+    },
+  });
+
+  return updatedArticle;
+}
+
+async function saveExistingArticleAsDraft(articleId, userId, payload) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  const nextTitle = payload.title?.trim() || "";
+  const nextContent = payload.content || "";
+
+  requireCompleteArticle(
+    {
+      title: nextTitle,
+      content: nextContent,
+    },
+    ARTICLE_STATUS.DRAFT,
+  );
+
+  const updateData = {
+    ...buildEditExistingPayload(payload),
+    status: ARTICLE_STATUS.DRAFT,
+    isEdited: true,
+    editingBackupTitle: null,
+    editingBackupContent: null,
+    editingBackupCoverImage: null,
+    editingStartedAt: null,
+  };
+
+  if (nextTitle && nextTitle !== article.title) {
+    updateData.slug = await generateUniqueSlug(nextTitle);
+  }
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: updateData,
+    include: {
+      author: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+        },
+      },
+    },
+  });
+
+  return updatedArticle;
+}
+
 async function deleteArticle(articleId, userId, userRole) {
   const article = await prisma.article.findUnique({
     where: { id: articleId },
@@ -493,9 +664,6 @@ async function deleteArticle(articleId, userId, userRole) {
   return { deleted: true };
 }
 
-/*
-  Record a read on an article.
- */
 async function recordRead(articleId, userId) {
   await prisma.readHistory.upsert({
     where: {
@@ -530,10 +698,6 @@ async function recordRead(articleId, userId) {
   }
 }
 
-/*
-  Get only intentional drafts.
-  EDITING articles are excluded from this list.
- */
 async function getUserDrafts(userId, page = 1, limit = 10, filters = {}) {
   const skip = (page - 1) * limit;
 
@@ -576,6 +740,10 @@ module.exports = {
   getArticleBySlug,
   getArticleFeed,
   updateArticle,
+  startExistingArticleEditing,
+  autosaveExistingArticle,
+  discardExistingArticleEdits,
+  saveExistingArticleAsDraft,
   deleteArticle,
   recordRead,
   getUserDrafts,

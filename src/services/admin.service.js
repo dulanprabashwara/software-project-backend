@@ -1,13 +1,31 @@
+// @ts-nocheck
 const { PrismaClient, Prisma } = require("@prisma/client");
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // ─── Dashboard ──────────────────────────────
+/**
+ * Helper function to generate an array of the last 30 days in 'MM/DD' format
+ */
+const getLast30Days = () => {
+  const dates = [];
+  const startDates = []; // Store raw dates for querying
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    d.setHours(0, 0, 0, 0);
+    startDates.push(new Date(d)); // Midnight of that day
+    dates.push(`${d.getMonth() + 1}/${d.getDate()}`);
+  }
+  return { labels: dates, rawDates: startDates };
+};
 
 /**
  * Get or create the admin dashboard singleton.
  */
 const getDashboard = async () => {
+  // 1. Get the basic dashboard counts
   let dashboard = await prisma.adminDashboard.findUnique({
     where: { id: "singleton" },
   });
@@ -18,12 +36,58 @@ const getDashboard = async () => {
     });
   }
 
-  return dashboard;
+  // 2. Generate the 30-day calendar
+  const { labels, rawDates } = getLast30Days();
+  const thirtyDaysAgo = rawDates[0];
+
+  // 3. Fetch all activity from the last 30 days
+  const [recentComments, recentLikes, recentReads] = await Promise.all([
+    prisma.comment.findMany({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+    prisma.articleLike.findMany({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+    prisma.readHistory.findMany({ where: { lastReadAt: { gte: thirtyDaysAgo } } })
+  ]);
+
+  // 4. Initialize empty arrays for our chart data (filled with zeros)
+  const chartDatasets = {
+    comments: new Array(30).fill(0),
+    ratings: new Array(30).fill(0),
+    reads: new Array(30).fill(0)
+  };
+
+  // 5. Sort the data into the correct days!
+  const sortIntoDays = (items, dateField, targetArray) => {
+    items.forEach(item => {
+      const itemDate = new Date(item[dateField]);
+      itemDate.setHours(0, 0, 0, 0); // Normalize to midnight
+      
+      // Find which day out of the 30 this item belongs to
+      const dayIndex = rawDates.findIndex(d => d.getTime() === itemDate.getTime());
+      if (dayIndex !== -1) {
+        targetArray[dayIndex] += 1; // Or += item.readCount for reads!
+      }
+    });
+  };
+
+  sortIntoDays(recentComments, 'createdAt', chartDatasets.comments);
+  sortIntoDays(recentLikes, 'createdAt', chartDatasets.ratings);
+  sortIntoDays(recentReads, 'lastReadAt', chartDatasets.reads);
+
+  // 6. Return the perfectly formatted payload for your React frontend
+  return {
+    kpis: {
+      pendingReports: await prisma.reportedArticle.count({ where: { status: 'PENDING' } }),
+      activePremiumUsers: dashboard.premiumUsers,
+      totalUsers: dashboard.totalUsers,
+      dailyEngagement: recentComments.length + recentLikes.length // Simple engagement metric
+    },
+    chartData: {
+      labels: labels,
+      datasets: chartDatasets
+    }
+  };
 };
 
-/**
- * Refresh (recalculate) dashboard data from real counts.
- */
+
 const refreshDashboard = async () => {
   const [totalUsers, totalArticles, premiumUsers] = await Promise.all([
     prisma.user.count(),
@@ -37,7 +101,7 @@ const refreshDashboard = async () => {
     create: { id: "singleton", totalUsers, totalArticles, premiumUsers },
   });
 
-  return dashboard;
+  return await getDashboard();
 };
 
 // ─── User Management ────────────────────────
@@ -381,29 +445,60 @@ const getAllOffers = async () => {
 };
 
 // Create a new offer
-const createOffer = async (data) => {
-  // add Stripe API logic here!
-  return await prisma.offer.create({
+const createOffer = async (data, adminId) => {
+  
+  // 1. Tell Stripe to create the Product (e.g., "Pro Creator")
+  const stripeProduct = await stripe.products.create({
+    name: data.name,
+  });
+
+  // 2. Tell Stripe to create the Price for that product
+  // Note: Stripe calculates money in cents! So $9.99 needs to be sent as 999.
+  // We use data.price if you added it to your frontend, otherwise we default to 999.
+  const stripePrice = await stripe.prices.create({
+    product: stripeProduct.id,
+    unit_amount: data.price ? Math.round(parseFloat(data.price) * 100) : 999, 
+    currency: 'usd',
+    recurring: { interval: 'month' }, 
+  });
+
+  // 3. Save the offer to database, using the newly generated Stripe ID!
+  const offer = await prisma.offer.create({
     data: {
       name: data.name,
-      discount_percent: parseInt(data.discount_percent),
-      is_active: true
+      price: parseFloat(data.price) || 0,
+      discount_percent: parseInt(data.discount_percent) || 0,
+      stripe_coupon_id: stripePrice.id, //Automated ID saved.
+      is_active: true,
+      features: data.features || {}
     }
   });
+
+  // 4. Log the action
+  await prisma.auditLog.create({
+    data: { action: "CREATE_OFFER", targetId: offer.id, targetType: "Offer", adminId, details: `Created automated Stripe offer: ${offer.name}` }
+  });
+  
+  return offer;
 };
 
 //updateOffer
-const updateOffer = async (id, data) => {
-  return await prisma.offer.update({
+const updateOffer = async (id, data, adminId) => {
+  const offer = await prisma.offer.update({
     where: { id: id },
     data: {
       name: data.name,
-      discount_percent: parseInt(data.discount_percent),
-      stripe_coupon_id: data.stripe_coupon_id,
+      price: parseFloat(data.price) || 0,
+      discount_percent: parseInt(data.discount_percent)|| 0,
       is_active: data.is_active,
       features: data.features
     }
   });
+
+  await prisma.auditLog.create({
+    data: { action: "UPDATE_OFFER", targetId: offer.id, targetType: "Offer", adminId, details: `Updated offer: ${offer.name}` }
+  });
+  return offer;
 };
 
 //scraping sources
@@ -413,8 +508,8 @@ const getScrapingSources = async () => {
   });
 };
 
-const createScrapingSource = async (data) => {
-  return await prisma.scrapingSource.create({
+const createScrapingSource = async (data, adminId) => {
+  const source = await prisma.scrapingSource.create({
     data: {
       name: data.name,
       url: data.url,
@@ -425,10 +520,15 @@ const createScrapingSource = async (data) => {
       status: data.status || "active"
     }
   });
+
+  await prisma.auditLog.create({
+    data: { action: "CREATE_SCRAPING_SOURCE", targetId: source.id, targetType: "ScrapingSource", adminId, details: `Added source: ${source.name}` }
+  });
+  return source;
 };
 
-const updateScrapingSource = async (id, data) => {
-  return await prisma.scrapingSource.update({
+const updateScrapingSource = async (id, data, adminId) => {
+  const source = await prisma.scrapingSource.update({
     where: { id: id },
     data: {
       name: data.name,
@@ -440,12 +540,24 @@ const updateScrapingSource = async (id, data) => {
       status: data.status
     }
   });
+
+  await prisma.auditLog.create({
+    data: { action: "UPDATE_SCRAPING_SOURCE", targetId: source.id, targetType: "ScrapingSource", adminId, details: `Updated source: ${source.name}` }
+  });
+  return source;
 };
 
-const deleteScrapingSource = async (id) => {
-  return await prisma.scrapingSource.delete({
-    where: { id: id }
-  });
+const deleteScrapingSource = async (id, adminId) => {
+  const sourceToDelete = await prisma.scrapingSource.findUnique({ where: { id: id } });
+  
+  await prisma.scrapingSource.delete({ where: { id: id } });
+
+  if (sourceToDelete) {
+    await prisma.auditLog.create({
+      data: { action: "DELETE_SCRAPING_SOURCE", targetId: id, targetType: "ScrapingSource", adminId, details: `Deleted source: ${sourceToDelete.name}` }
+    });
+  }
+  return true;
 };
 
 module.exports = {

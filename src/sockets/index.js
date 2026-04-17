@@ -58,6 +58,10 @@ const initializeSocket = (httpServer) => {
     }
   });
 
+  // Track active connection counts per user to prevent React Strict Mode / hot-reloads race conditions
+  const userConnections = new Map();
+  const offlineTimeouts = new Map();
+
   // ── Connection handler ──
   io.on("connection", async (socket) => {
     console.log(
@@ -67,17 +71,29 @@ const initializeSocket = (httpServer) => {
     // Join a personal room for targeted messages
     socket.join(`user:${socket.data.userId}`);
 
-    // Mark user as online
-    await prisma.user.update({
-      where: { id: socket.data.userId },
-      data: { isOnline: true, lastSeen: new Date() },
-    });
+    const userId = socket.data.userId;
+    const currentCount = userConnections.get(userId) || 0;
+    userConnections.set(userId, currentCount + 1);
 
-    // Broadcast online status to followers
-    socket.broadcast.emit("user:online", {
-      userId: socket.data.userId,
-      username: socket.data.userData.username,
-    });
+    // Cancel any pending offline timeout
+    if (offlineTimeouts.has(userId)) {
+      clearTimeout(offlineTimeouts.get(userId));
+      offlineTimeouts.delete(userId);
+    }
+
+    if (currentCount === 0) {
+      // First connection, mark user as online
+      await prisma.user.update({
+        where: { id: userId },
+        data: { isOnline: true, lastSeen: new Date() },
+      });
+
+      // Broadcast online status to followers
+      socket.broadcast.emit("user:online", {
+        userId,
+        username: socket.data.userData.username,
+      });
+    }
 
     // ── Private message ──
     socket.on("message:send", async (data, callback) => {
@@ -88,8 +104,8 @@ const initializeSocket = (httpServer) => {
           return callback?.({ error: "Receiver ID and content are required" });
         }
 
-        // --- SECURITY ENFORCEMENT 1: Must Follow to Message ---
-        // Check if the sender follows the receiver
+        // --- SECURITY ENFORCEMENT 1: Follow or Prior History ---
+        // Check if the sender follows the receiver OR if they have prior chat history
         const isFollowing = await prisma.follow.findUnique({
           where: {
             followerId_followingId: {
@@ -99,9 +115,27 @@ const initializeSocket = (httpServer) => {
           },
         });
 
-        if (!isFollowing) {
+        let canMessage = !!isFollowing;
+
+        if (!canMessage) {
+          // Check for prior message history between the two users
+          const priorMessage = await prisma.message.findFirst({
+            where: {
+              OR: [
+                { senderId: socket.data.userId, receiverId },
+                { senderId: receiverId, receiverId: socket.data.userId },
+              ],
+            },
+            select: { id: true }, // we only need to know it exists
+          });
+          if (priorMessage) {
+            canMessage = true;
+          }
+        }
+
+        if (!canMessage) {
           return callback?.({
-            error: "You can only message users you follow.",
+            error: "You can only start conversations with users you follow.",
           });
         }
         // -----------------------------------------------------
@@ -223,15 +257,34 @@ const initializeSocket = (httpServer) => {
     // ── Disconnect ──
     socket.on("disconnect", async () => {
       console.log(`💤 User disconnected: ${socket.data.userData.username}`);
+      
+      const userId = socket.data.userId;
+      let count = userConnections.get(userId) || 0;
+      count = Math.max(0, count - 1);
 
-      await prisma.user.update({
-        where: { id: socket.data.userId },
-        data: { isOnline: false, lastSeen: new Date() },
-      });
+      if (count === 0) {
+        userConnections.delete(userId);
 
-      socket.broadcast.emit("user:offline", {
-        userId: socket.data.userId,
-      });
+        // Wait 4 seconds to allow reconnects during page reloads/React Strict Mode
+        const timeout = setTimeout(async () => {
+          if (!userConnections.has(userId)) {
+            try {
+              await prisma.user.update({
+                where: { id: userId },
+                data: { isOnline: false, lastSeen: new Date() },
+              });
+              socket.broadcast.emit("user:offline", { userId });
+            } catch (err) {
+              console.error("Failed to mark user offline:", err.message);
+            }
+          }
+          offlineTimeouts.delete(userId);
+        }, 4000);
+
+        offlineTimeouts.set(userId, timeout);
+      } else {
+        userConnections.set(userId, count);
+      }
     });
   });
 

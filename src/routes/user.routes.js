@@ -15,6 +15,9 @@ router.get("/me", authenticate, userController.getMe);
 router.put("/me", authenticate, userController.updateProfile);
 router.put("/profile", authenticate, userController.updateProfile); // Keep old alias just in case
 
+// Delete own account (protected)
+router.delete("/me", authenticate, userController.deleteAccount);
+
 // User profile by ID or username (public, but optionalAuth so isFollowing works)
 router.get("/:identifier", optionalAuth, userController.getProfile);
 

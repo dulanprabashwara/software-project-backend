@@ -50,39 +50,50 @@ model User {
 }
 
 model Article {
-  id              String            @id @default(cuid())
-  title           String
-  slug            String            @unique
-  content         String
-  summary         String?
-  coverImage      String?
-  status          ArticleStatus     @default(DRAFT)
-  isAiGenerated   Boolean           @default(false)
-  scheduledAt     DateTime?
-  publishedAt     DateTime?
-  readCount       Int               @default(0)
-  likeCount       Int               @default(0)
-  shareCount      Int               @default(0)
-  commentCount    Int               @default(0)
-  tags            String[]
-  readingTime     Int               @default(0)
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-  authorId        String
-  ai_article_logs ai_article_logs?
-  likes           ArticleLike[]
-  shares          ArticleShare[]
-  author          User              @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  comments        Comment[]
-  readHistory     ReadHistory[]
-  reports         ReportedArticle[]
-  savedBy         SavedArticle[]
-  wpPublishJobs   WordPressPublishJob[]
+  id                       String            @id @default(cuid())
+  title                    String
+  slug                     String            @unique
+  content                  String
+  summary                  String?
+  coverImage               String?
+  status                   ArticleStatus     @default(DRAFT)
+  isAiGenerated            Boolean           @default(false)
+
+  isEdited                 Boolean           @default(false)
+  isEditAsNew              Boolean           @default(false)
+  sourceArticleId          String?
+
+  editingBackupTitle       String?
+  editingBackupContent     String?
+  editingBackupCoverImage  String?
+  editingStartedAt         DateTime?
+
+  scheduledAt              DateTime?
+  publishedAt              DateTime?
+  readCount                Int               @default(0)
+  likeCount                Int               @default(0)
+  shareCount               Int               @default(0)
+  commentCount             Int               @default(0)
+  tags                     String[]
+  readingTime              Int               @default(0)
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
+  authorId                 String
+  ai_article_logs          ai_article_logs?
+  likes                    ArticleLike[]
+  shares                   ArticleShare[]
+  author                   User              @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments                 Comment[]
+  readHistory              ReadHistory[]
+  reports                  ReportedArticle[]
+  savedBy                  SavedArticle[]
+  wpPublishJobs            WordPressPublishJob[]
 
   @@index([authorId])
   @@index([status])
   @@index([publishedAt])
   @@index([slug])
+  @@index([sourceArticleId])
   @@map("articles")
 }
 
@@ -311,6 +322,7 @@ model TrendingTopic {
 model Offer {
   id               String         @id @default(cuid())
   name             String
+  price            Float          @default(0)
   discount_percent Int
   stripe_coupon_id String?
   is_active        Boolean        @default(true)
