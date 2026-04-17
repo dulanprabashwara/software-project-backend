@@ -60,6 +60,8 @@ model Article {
   isAiGenerated            Boolean           @default(false)
 
   isEdited                 Boolean           @default(false)
+  isEditAsNew              Boolean           @default(false)
+  sourceArticleId          String?
 
   editingBackupTitle       String?
   editingBackupContent     String?
@@ -91,6 +93,7 @@ model Article {
   @@index([status])
   @@index([publishedAt])
   @@index([slug])
+  @@index([sourceArticleId])
   @@map("articles")
 }
 
@@ -319,6 +322,7 @@ model TrendingTopic {
 model Offer {
   id               String         @id @default(cuid())
   name             String
+  price            Float          @default(0)
   discount_percent Int
   stripe_coupon_id String?
   is_active        Boolean        @default(true)
