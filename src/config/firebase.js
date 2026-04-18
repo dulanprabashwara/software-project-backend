@@ -1,9 +1,15 @@
 const admin = require("firebase-admin");
 
 /**
- * Initialize Firebase Admin SDK.
- * Uses environment variables for credentials instead of a JSON key file
- * so we never commit secrets to source control.
+ * @fileoverview Firebase Admin SDK Configuration
+ * @description
+ * Initializes the highly-privileged Firebase Admin SDK using environment variables.
+ * WHY: This specific initialization strategy prevents committing sensitive JSON key files 
+ * to version control while allowing the server to interact with Firebase services (like 
+ * token verification) with full administrative privileges.
+ * 
+ * @module config/firebase
+ * @returns {Object} The initialized firebase-admin instance.
  */
 if (!admin.apps.length) {
   admin.initializeApp({
