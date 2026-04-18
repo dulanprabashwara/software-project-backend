@@ -50,6 +50,15 @@ function buildEditExistingPayload(payload) {
   };
 }
 
+function buildEditAsNewPayload(article, payload) {
+  return {
+    title: article.title,
+    content: payload.content || "",
+    coverImage: payload.coverImage || null,
+    readingTime: calculateReadingTime(payload.content || ""),
+  };
+}
+
 async function getOwnedArticleOrThrow(articleId, userId) {
   const article = await prisma.article.findUnique({
     where: { id: articleId },
@@ -297,6 +306,87 @@ async function startExistingArticleEditing(articleId, userId) {
   });
 
   return updatedArticle;
+}
+
+async function startEditAsNewArticle(sourceArticleId, userId) {
+  const sourceArticle = await getOwnedArticleOrThrow(sourceArticleId, userId);
+
+  if (sourceArticle.status === ARTICLE_STATUS.PUBLISHED) {
+    throw ApiError.badRequest(
+      "Published articles cannot be edited as new from this page.",
+    );
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const existingCopies = await tx.article.findMany({
+      where: {
+        authorId: userId,
+        status: ARTICLE_STATUS.EDITING,
+        isEditAsNew: true,
+        sourceArticleId,
+      },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      include: {
+        author: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
+
+    if (existingCopies.length > 0) {
+      const [primaryCopy, ...duplicateCopies] = existingCopies;
+
+      if (duplicateCopies.length > 0) {
+        await tx.article.deleteMany({
+          where: {
+            id: {
+              in: duplicateCopies.map((article) => article.id),
+            },
+          },
+        });
+      }
+
+      return primaryCopy;
+    }
+
+    const slug = await generateUniqueSlug(
+      sourceArticle.title?.trim() || "Untitled",
+    );
+
+    return tx.article.create({
+      data: {
+        title: sourceArticle.title,
+        slug,
+        content: "",
+        summary: null,
+        coverImage: null,
+        tags: Array.isArray(sourceArticle.tags) ? sourceArticle.tags : [],
+        readingTime: 0,
+        status: ARTICLE_STATUS.EDITING,
+        isAiGenerated: Boolean(sourceArticle.isAiGenerated),
+        isEditAsNew: true,
+        sourceArticleId: sourceArticle.id,
+        authorId: userId,
+      },
+      include: {
+        author: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
+  });
+
+  return result;
 }
 
 async function createArticle(authorId, payload) {
@@ -558,6 +648,34 @@ async function autosaveExistingArticle(articleId, userId, payload) {
   return updatedArticle;
 }
 
+async function autosaveEditAsNewArticle(articleId, userId, payload) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  if (!article.isEditAsNew) {
+    throw ApiError.badRequest("This article is not an edit-as-new article.");
+  }
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: {
+      ...buildEditAsNewPayload(article, payload),
+      status: ARTICLE_STATUS.EDITING,
+    },
+    include: {
+      author: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+        },
+      },
+    },
+  });
+
+  return updatedArticle;
+}
+
 async function discardExistingArticleEdits(articleId, userId) {
   const article = await getOwnedArticleOrThrow(articleId, userId);
 
@@ -573,7 +691,6 @@ async function discardExistingArticleEdits(articleId, userId) {
       coverImage: restoredCoverImage,
       readingTime: calculateReadingTime(restoredContent || ""),
       status: ARTICLE_STATUS.DRAFT,
-      updatedAt: article.editingStartedAt || article.updatedAt,
       editingBackupTitle: null,
       editingBackupContent: null,
       editingBackupCoverImage: null,
@@ -592,6 +709,20 @@ async function discardExistingArticleEdits(articleId, userId) {
   });
 
   return updatedArticle;
+}
+
+async function discardEditAsNewArticle(articleId, userId) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  if (!article.isEditAsNew) {
+    throw ApiError.badRequest("This article is not an edit-as-new article.");
+  }
+
+  await prisma.article.delete({
+    where: { id: articleId },
+  });
+
+  return { deleted: true };
 }
 
 async function saveExistingArticleAsDraft(articleId, userId, payload) {
@@ -625,6 +756,45 @@ async function saveExistingArticleAsDraft(articleId, userId, payload) {
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
+    include: {
+      author: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+        },
+      },
+    },
+  });
+
+  return updatedArticle;
+}
+
+async function saveEditAsNewArticleAsDraft(articleId, userId, payload) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  if (!article.isEditAsNew) {
+    throw ApiError.badRequest("This article is not an edit-as-new article.");
+  }
+
+  const nextContent = payload.content || "";
+
+  requireCompleteArticle(
+    {
+      title: article.title,
+      content: nextContent,
+    },
+    ARTICLE_STATUS.DRAFT,
+  );
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: {
+      ...buildEditAsNewPayload(article, payload),
+      status: ARTICLE_STATUS.DRAFT,
+      isEditAsNew: true,
+    },
     include: {
       author: {
         select: {
@@ -744,6 +914,10 @@ module.exports = {
   autosaveExistingArticle,
   discardExistingArticleEdits,
   saveExistingArticleAsDraft,
+  startEditAsNewArticle,
+  autosaveEditAsNewArticle,
+  discardEditAsNewArticle,
+  saveEditAsNewArticleAsDraft,
   deleteArticle,
   recordRead,
   getUserDrafts,
