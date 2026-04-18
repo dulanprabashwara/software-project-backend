@@ -691,6 +691,7 @@ async function discardExistingArticleEdits(articleId, userId) {
       coverImage: restoredCoverImage,
       readingTime: calculateReadingTime(restoredContent || ""),
       status: ARTICLE_STATUS.DRAFT,
+      updatedAt: article.editingStartedAt || article.updatedAt,
       editingBackupTitle: null,
       editingBackupContent: null,
       editingBackupCoverImage: null,
