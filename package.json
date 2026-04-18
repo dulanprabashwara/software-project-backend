@@ -13,10 +13,10 @@
     "prisma:migrate": "npx prisma migrate dev",
     "prisma:studio": "npx prisma studio",
     "prisma:seed": "node prisma/seed.js",
-    "test":          "jest --config=tests/jest.config.js",
-    "test:watch":    "jest --config=tests/jest.config.js --watch",
+    "test": "jest --config=tests/jest.config.js",
+    "test:watch": "jest --config=tests/jest.config.js --watch",
     "test:coverage": "jest --config=tests/jest.config.js --coverage",
-    "test:verbose":  "jest --config=tests/jest.config.js --verbose"
+    "test:verbose": "jest --config=tests/jest.config.js --verbose"
   },
   "prisma": {
     "seed": "node prisma/seed.js"
