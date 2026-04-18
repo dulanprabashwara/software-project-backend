@@ -7,8 +7,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// @description
+/// The core User entity mapping external authentication to localized business logic.
+/// WHY: We decouple the application from Firebase by storing a localized copy of the user. 
+/// The `firebaseUid` field serves as the secure, immutable bridge between Firebase Auth 
+/// (which handles passwords/JWTs) and our Postgres database (which handles roles and data).
 model User {
   id                 String            @id @default(cuid())
+  /// Unique identifier provided by Firebase Auth upon registration.
   firebaseUid        String            @unique
   email              String            @unique
   username           String            @unique

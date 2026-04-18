@@ -16,10 +16,18 @@ router.get("/user/editing", authenticate, articleController.getCurrentEditing);
 router.get("/id/:id", authenticate, articleController.getArticleById);
 router.post("/", authenticate, articleController.createArticle);
 
+// Edit existing
 router.post("/:id/edit-existing/start",authenticate,articleController.startEditExisting,);
 router.put("/:id/edit-existing/autosave",authenticate,articleController.autosaveEditExisting,);
 router.put("/:id/edit-existing/save-draft",authenticate,articleController.saveEditExistingAsDraft,);
 router.post("/:id/edit-existing/discard",authenticate,articleController.discardEditExisting,);
+
+// Edit as new
+router.post("/:id/edit-as-new/start",authenticate,articleController.startEditAsNew,);
+router.put("/:id/edit-as-new/autosave",authenticate,articleController.autosaveEditAsNew,);
+router.put("/:id/edit-as-new/save-draft",authenticate,articleController.saveEditAsNewAsDraft,);
+router.post("/:id/edit-as-new/discard",authenticate,articleController.discardEditAsNew,
+);
 
 router.get("/:slug", articleController.getArticle);
 router.put("/:id", authenticate, articleController.updateArticle);

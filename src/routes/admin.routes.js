@@ -42,5 +42,6 @@ router.post("/scraping-sources", adminController.createScrapingSource);
 router.post("/validate-url", adminController.validateUrl);
 router.put("/scraping-sources/:id", adminController.updateScrapingSource);
 router.delete("/scraping-sources/:id", adminController.deleteScrapingSource);
+router.get('/scraping/default-keywords', adminController.getDefaultKeywords);
 
 module.exports = router;

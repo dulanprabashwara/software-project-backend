@@ -1,8 +1,7 @@
 const { PrismaClient } = require("@prisma/client");
 
 /**
- * Singleton PrismaClient instance.
- * Prevents multiple instances during hot-reloading in development.
+ * create a single prisma client to use in other services files to execute prisma commands
  *
  * connection_limit=5 keeps the pool within NeonDB free-tier limits (avoids
  * "connection pool timeout" errors). pool_timeout=20 gives extra headroom

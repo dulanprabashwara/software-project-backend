@@ -3,6 +3,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendPaginated } = require("../utils/response");
 const adminService = require("../services/admin.service");
 const { parsePagination } = require("../utils/helpers");
+const { excludedKeywords } = require('../config/excludedKeywords');
 
 // ─── Dashboard ──────────────────────────────
 
@@ -209,6 +210,14 @@ const deleteScrapingSource = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getDefaultKeywords = asyncHandler(async (req, res, next) => {
+  try {
+    res.status(200).json({ success: true, data: excludedKeywords });
+  } catch (error) {
+    next(error);
+  }
+});
+
 //  ─── URL validation ───────────────────────────────
 const validateUrl = asyncHandler(async (req, res, next) => {
   try {
@@ -260,4 +269,5 @@ module.exports = {
   validateUrl,
   updateScrapingSource,
   deleteScrapingSource,
+  getDefaultKeywords,
 };
