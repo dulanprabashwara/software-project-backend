@@ -41,8 +41,19 @@ const searchArticles = async ({ query, page = 1, limit = 10, currentUserId = nul
         title:  { contains: q, mode: "insensitive" },
       },
       include: ARTICLE_INCLUDE,
-      orderBy: [{ likeCount: "desc" }, { readCount: "desc" }, { commentCount: "desc" }],
-      take: 50,
+// ... inside prisma.article.findMany
+        orderBy: [
+          {
+            averageRating: "desc" // Use the  rating score
+          },
+          {
+            ratingCount: "desc"  // Use the number of ratings as a tie-breaker
+          },
+          {
+            readCount: "desc"    // use readCount  
+          }
+        ],
+// ... rest of the query      take: 50,
     });
 
     const titleIds = titleMatches.map((a) => a.id);
@@ -55,8 +66,17 @@ const searchArticles = async ({ query, page = 1, limit = 10, currentUserId = nul
         summary: { contains: q, mode: "insensitive" },
       },
       include: ARTICLE_INCLUDE,
-      orderBy: [{ likeCount: "desc" }, { readCount: "desc" }, { commentCount: "desc" }],
-      take: 50,
+orderBy: [
+          {
+            averageRating: "desc" // Use the  rating score
+          },
+          {
+            ratingCount: "desc"  // Use the number of ratings as a tie-breaker
+          },
+          {
+            readCount: "desc"    // use readCount  
+          }
+        ],      take: 50,
     });
 
     // Step 3 — total count for pagination meta
@@ -223,7 +243,20 @@ const getSearchSuggestions = async (query) => {
           title:  { contains: q, mode: "insensitive" },
         },
         select:  { id: true, title: true, slug: true },
-        orderBy: [{ likeCount: "desc" }, { readCount: "desc" }],
+        // ... inside prisma.article.findMany
+
+orderBy: [
+  {
+    averageRating: "desc" // Use the  rating score
+  },
+  {
+    ratingCount: "desc"  // Use the number of ratings as a tie-breaker
+  },
+  {
+    readCount: "desc"    // use readCount 
+  }
+],
+// ... rest of the query
         take:    5,
       }),
       prisma.user.findMany({

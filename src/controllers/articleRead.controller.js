@@ -23,8 +23,7 @@ exports.getArticleById = async (req, res) => {
           }
         },
         _count: {
-          select: { 
-            likes: true, 
+          select: {  
             comments: true 
           }
         }
