@@ -39,10 +39,7 @@ router.post("/:articleId/like", authenticate, engagementController.toggleLike);
 router.post("/:articleId/share",authenticate,engagementController.shareArticle,);
 router.post("/:articleId/save", authenticate, engagementController.toggleSave);
 
-// Comments
-router.get("/:articleId/comments", commentController.getComments);
-router.post("/:articleId/comments", authenticate, commentController.addComment);
-
+ 
 // Report
 router.post("/:articleId/report", authenticate, adminController.reportArticle);
 

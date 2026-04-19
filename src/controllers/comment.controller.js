@@ -1,65 +1,94 @@
-const asyncHandler = require("../utils/asyncHandler");
-const { sendSuccess, sendPaginated } = require("../utils/response");
-const commentService = require("../services/comment.service");
-const { parsePagination } = require("../utils/helpers");
+const prisma = require("../config/prisma");
 
 /**
- * POST /api/v1/articles/:articleId/comments
- * Add a comment to an article.
+ * @description Fetch all comments for a specific article
  */
-const addComment = asyncHandler(async (req, res) => {
-  const { content, parentId } = req.body;
-  const comment = await commentService.addComment(
-    req.params.articleId,
-    req.user.id,
-    content,
-    parentId,
-  );
-
-  sendSuccess(res, {
-    statusCode: 201,
-    message: "Comment added.",
-    data: comment,
-  });
-});
+const getComments = async (req, res) => {
+  try {
+    const { articleId } = req.params;
+    const comments = await prisma.comment.findMany({
+      where: { articleId },
+      include: {
+        author: {
+          select: { id: true, displayName: true, avatarUrl: true, role: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.status(200).json(comments);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 /**
- * GET /api/v1/articles/:articleId/comments
- * Get comments for an article.
+ * @description Create a new comment or reply
  */
-const getComments = asyncHandler(async (req, res) => {
-  const { page, limit } = parsePagination(req.query);
-  const { comments, total } = await commentService.getArticleComments(
-    req.params.articleId,
-    page,
-    limit,
-  );
+const createComment = async (req, res) => {
+  try {
+    const { articleId, content, parentId } = req.body;
+    
+    // req.user is populated by your auth middleware
+    const authorId = req.user.id; 
 
-  sendPaginated(res, { data: comments, page, limit, total });
-});
+    const newComment = await prisma.comment.create({
+      data: {
+        content,
+        articleId,
+        authorId,
+        parentId: parentId || null,
+      },
+      include: {
+        author: {
+          select: { id: true, displayName: true }
+        }
+      }
+    });
+
+    res.status(201).json(newComment);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 /**
- * PUT /api/v1/comments/:id
- * Update a comment.
+ * @description Rate an article (1-5)
  */
-const updateComment = asyncHandler(async (req, res) => {
-  const comment = await commentService.updateComment(
-    req.params.id,
-    req.user.id,
-    req.body.content,
-  );
+const rateArticle = async (req, res) => {
+  try {
+    const { articleId } = req.params;
+    const { rating } = req.body;
+    const userId = req.user.id;
 
-  sendSuccess(res, { message: "Comment updated.", data: comment });
-});
+    const userRating = await prisma.articleRating.upsert({
+      where: {
+        userId_articleId: { 
+          userId: userId, 
+          articleId: articleId 
+        }
+      },
+      // If record exists, only update the score
+      update: { 
+        score: rating 
+      },
+      // If record is new, set everything
+      create: { 
+        userId: userId, 
+        articleId: articleId, 
+        score: rating 
+      }
+    });
 
-/**
- * DELETE /api/v1/comments/:id
- * Delete a comment.
- */
-const deleteComment = asyncHandler(async (req, res) => {
-  await commentService.deleteComment(req.params.id, req.user.id, req.user.role);
+    res.status(200).json({ success: true, data: userRating });
+  } catch (error) {
+    console.error("Rating Error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
-  sendSuccess(res, { message: "Comment deleted." });
-});
-
-module.exports = { addComment, getComments, updateComment, deleteComment };
+// CRITICAL: All functions must be in this export object
+module.exports = {
+  getComments,
+  createComment,
+  rateArticle
+};
