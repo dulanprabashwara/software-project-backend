@@ -1,17 +1,48 @@
 // backend/controllers/homefeed.controller.js
 const prisma = require("../config/prisma");
 
-exports.getFeed = async (req, res) => {
+// Endpoint 1: Main Feed Articles
+exports.getMainFeed = async (req, res) => {
   try {
-    // We remove EVERYTHING except the basic findMany
     const articles = await prisma.article.findMany({
-      orderBy: { createdAt: "desc" }
+      where: { status: "DRAFT" }, 
+      orderBy: { createdAt: "desc" },
+      include: {
+        author: {
+          select: {
+            displayName: true,
+            username: true,
+            avatarUrl: true,
+          },
+        },
+      },
     });
-
-    console.log("SUCCESS: Found in DB ->", articles.length);
-    res.status(200).json({ articles });
+    res.status(200).json(articles); // Returning just the array
   } catch (error) {
-    console.error("PRISMA ERROR:", error);
-    res.status(500).json({ error: error.message });
+    console.error("MAIN FEED ERROR:", error.message);
+    res.status(500).json({ error: "Failed to fetch main feed" });
+  }
+};
+
+// Endpoint 2: Trending Articles
+exports.getTrending = async (req, res) => {
+  try {
+    const trending = await prisma.article.findMany({
+      where: { status: "DRAFT" },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: {
+        id: true,
+        title: true,
+        createdAt: true,
+        author: {
+          select: { displayName: true }
+        }
+      }
+    });
+    res.status(200).json(trending); // Returning just the array
+  } catch (error) {
+    console.error("TRENDING ERROR:", error.message);
+    res.status(500).json({ error: "Failed to fetch trending" });
   }
 };
