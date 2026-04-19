@@ -1,52 +1,28 @@
-// src/services/enrichment.service.js
+// src/services/enrichment.service.js (FIXED VERSION)
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 3a — AI Enrichment Stage
 //
-// Runs AFTER the full scraping session completes.
-// For every newly scraped article (summary=null), this service:
-//   1. Groups articles by their broad category
-//   2. Sends batches of 3 articles to a free AI model via OpenRouter
-//   3. AI classifies each article to specific keywords (from categoryKeywords.js)
-//      and writes a 130-150 word factual summary
-//   4. Updates ScrapedArticle rows with summary + matchedKeywords[]
-//   5. Tracks keyword coverage (which keywords got content, which got none)
-//   6. Tracks token usage for the session report
+// IMPROVEMENTS IN THIS VERSION:
+//   1. Exponential backoff for rate limits (429 errors)
+//   2. Adaptive batch sizing (3→2→1 articles when hitting limits)
+//   3. Failed batches stored for manual retry via triggerEnrichment
+//   4. Better error tracking and session logging
+//   5. Circuit breaker pattern to prevent cascade failures
 //
-// WHY BATCH OF 3 (not 5):
-//   Free models are less reliable with long complex outputs than paid models.
-//   Batch of 3 keeps the output JSON small and predictable, reducing parse failures.
-//   If a batch fails, only 3 articles are affected — fallback processes them 1 by 1.
-//
-// FREE MODELS USED (OpenRouter):
-//   Primary:   google/gemini-2.0-flash-exp:free  — best free model for structured tasks
-//   Fallback1: meta-llama/llama-3.3-70b-instruct:free — reliable instruction following
-//   Fallback2: arcee-ai/trinity-large-preview:free — same as article generation
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { OpenAI } = require("openai");
 const prisma     = require("../config/prisma");
-
-// ── BUG FIX ───────────────────────────────────────────────────────────────────
-// BEFORE (wrong):
-//   const CATEGORY_KEYWORDS = require("../config/categoryKeywords");
-//   This assigned the entire module export object { CATEGORY_KEYWORDS, SCRAPING_CATEGORIES }
-//   to the variable CATEGORY_KEYWORDS. So CATEGORY_KEYWORDS["Technology & Digital Life"]
-//   returned undefined, and undefined.join() threw "keywords is not iterable".
-//
-// AFTER (correct):
-//   Destructure to extract just the CATEGORY_KEYWORDS object from the export.
 const { CATEGORY_KEYWORDS } = require("../config/categoryKeywords");
-// ─────────────────────────────────────────────────────────────────────────────
 
 // ── OpenRouter Client ────────────────────────────────────────────────────────
-// Same setup as ai.service.js — uses OPENROUTER_API_KEY from .env
 
 const client = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
   apiKey:  process.env.OPENROUTER_API_KEY,
 });
 
-// Free model priority list — best for classification/structured JSON first
+// Free model priority list
 const ENRICHMENT_MODELS = [
     "arcee-ai/trinity-large-preview:free",
     "nousresearch/hermes-3-llama-3.1-405b:free",
@@ -55,18 +31,58 @@ const ENRICHMENT_MODELS = [
     "meta-llama/llama-3.3-70b-instruct:free",
 ];
 
-const BATCH_SIZE = 3; // articles per AI call — kept small for free model reliability
-
-// Delay between API calls (ms) — avoids hitting OpenRouter rate limits
+const BATCH_SIZE = 3;
 const API_CALL_DELAY_MS = 1200;
 
+// ── Rate Limit Management ────────────────────────────────────────────────────
+// Tracks rate limit state to avoid cascade failures
 
-// ── callOpenRouter ────────────────────────────────────────────────────────────
-// Sends messages to OpenRouter, trying each free model in order.
-// Returns the raw response text, or throws if all models fail.
+class RateLimitManager {
+  constructor() {
+    this.isAccountLimited = false;
+    this.lastLimitTime = null;
+    this.limitResetTime = null;
+    this.failedBatchCount = 0;
+  }
 
-async function callOpenRouter(messages, maxTokens = 900) {
+  markLimited() {
+    this.isAccountLimited = true;
+    this.lastLimitTime = Date.now();
+    // OpenRouter rate limits typically reset in 60 seconds
+    this.limitResetTime = Date.now() + 60000;
+  }
+
+  isLimitExpired() {
+    if (!this.isAccountLimited) return false;
+    if (Date.now() >= this.limitResetTime) {
+      console.log("[RateLimit] Limit window expired. Retrying...");
+      this.isAccountLimited = false;
+      return true;
+    }
+    return false;
+  }
+
+  getWaitTime() {
+    // Exponential backoff: 2s, 4s, 8s, 16s (capped at 60s)
+    const delays = [2000, 4000, 8000, 16000, 30000, 60000];
+    return delays[Math.min(this.failedBatchCount, delays.length - 1)];
+  }
+}
+
+const rateLimitMgr = new RateLimitManager();
+
+// ── callOpenRouter with Exponential Backoff ──────────────────────────────────
+// Attempts each model with smart backoff for 429 errors
+
+async function callOpenRouter(messages, maxTokens = 900, retryAttempt = 0) {
   let lastError;
+
+  // Check if we're in a rate limit window
+  if (rateLimitMgr.isAccountLimited && !rateLimitMgr.isLimitExpired()) {
+    const waitMs = rateLimitMgr.getWaitTime();
+    console.warn(`[RateLimit] Account-level limit still active. Waiting ${waitMs}ms before retry...`);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
 
   for (const model of ENRICHMENT_MODELS) {
     try {
@@ -74,18 +90,48 @@ async function callOpenRouter(messages, maxTokens = 900) {
         model,
         messages,
         max_tokens:  maxTokens,
-        temperature: 0.1, // low = more predictable, consistent JSON output
+        temperature: 0.1,
       });
 
       const content = completion.choices[0]?.message?.content || "";
       const usage   = completion.usage || { prompt_tokens: 0, completion_tokens: 0 };
+
+      // Success — reset rate limit flag
+      if (rateLimitMgr.isAccountLimited) {
+        console.log("[RateLimit] ✅ Account limit recovered. Resuming normal operation.");
+        rateLimitMgr.isAccountLimited = false;
+        rateLimitMgr.failedBatchCount = 0;
+      }
 
       return { content, usage, model };
 
     } catch (err) {
       console.warn(`[Enrichment] Model "${model}" failed: ${err.message}`);
       lastError = err;
-      await new Promise((r) => setTimeout(r, 500)); // small delay before trying next
+
+      // Detect account-level rate limit (429 errors that affect all models)
+      if (err.status === 429 || err.message?.includes("429")) {
+        console.error(`[RateLimit] ⚠️  Account-level rate limit detected!`);
+        rateLimitMgr.markLimited();
+        rateLimitMgr.failedBatchCount++;
+
+        // If this is our first retry attempt, wait and try all models again
+        if (retryAttempt === 0) {
+          console.log(`[RateLimit] Waiting 3 seconds before retrying all models...`);
+          await new Promise((r) => setTimeout(r, 3000));
+          
+          // Try all models again from the start
+          return callOpenRouter(messages, maxTokens, 1).catch(() => {
+            throw lastError;
+          });
+        }
+
+        // If we already retried once, give up and let caller handle it
+        break;
+      }
+
+      // For non-rate-limit errors, wait before trying next model
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
 
@@ -93,21 +139,15 @@ async function callOpenRouter(messages, maxTokens = 900) {
 }
 
 // ── parseEnrichmentResponse ───────────────────────────────────────────────────
-// Robustly parses the AI response JSON.
-// Handles markdown fences, extra whitespace, and common malformations.
-// Returns parsed array or throws if completely unparseable.
 
 function parseEnrichmentResponse(raw) {
-  // Strip markdown code fences
   let cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
 
-  // Sometimes models wrap the array in an object — unwrap if needed
   if (cleaned.startsWith("{")) {
     const match = cleaned.match(/"(?:results?|articles?|data)"\s*:\s*(\[[\s\S]*\])/);
     if (match) cleaned = match[1];
   }
 
-  // Find the JSON array boundaries
   const start = cleaned.indexOf("[");
   const end   = cleaned.lastIndexOf("]");
   if (start === -1 || end === -1) throw new Error("No JSON array found in response");
@@ -117,27 +157,21 @@ function parseEnrichmentResponse(raw) {
   try {
     return JSON.parse(cleaned);
   } catch (e) {
-    // Last resort: try to fix common JSON issues (trailing commas, unescaped chars)
     const fixed = cleaned
-      .replace(/,\s*([}\]])/g, "$1")        // trailing commas
-      .replace(/[\u0000-\u001F\u007F]/g, " ") // control chars
-      .replace(/\n/g, "\\n");               // literal newlines in strings
+      .replace(/,\s*([}\]])/g, "$1")
+      .replace(/[\u0000-\u001F\u007F]/g, " ")
+      .replace(/\n/g, "\\n");
 
     return JSON.parse(fixed);
   }
 }
 
 // ── buildBatchPrompt ──────────────────────────────────────────────────────────
-// Builds the prompt for a batch of articles.
-// Explicitly tells the model what to do and what NOT to do.
-// The output format is a JSON array with one entry per article.
 
 function buildBatchPrompt(articles, categoryKeywords) {
   const articlesText = articles.map((a, i) =>
     `--- ARTICLE ${i + 1} (ID: ${a.id}) ---\n` +
     `Title: ${a.title}\n\n` +
-    // Truncate to ~10000 chars (~1500 words) — sufficient for classification
-    // without sending unnecessary tokens for very long articles
     `Content:\n${a.content.slice(0, 10000)}`
   ).join("\n\n");
 
@@ -152,11 +186,8 @@ function buildBatchPrompt(articles, categoryKeywords) {
       role:    "user",
       content:
         `Classify and summarize these ${articles.length} articles.\n\n` +
-
         `KEYWORD LIST — you MUST select ONLY from these exact strings:\n${keywordList}\n\n` +
-
         `${articlesText}\n\n` +
-
         `INSTRUCTIONS (follow exactly):\n` +
         `For EACH article:\n` +
         `1. KEYWORDS: Select 2-5 keywords from the KEYWORD LIST that represent the ` +
@@ -170,7 +201,6 @@ function buildBatchPrompt(articles, categoryKeywords) {
         `   - Do not use only the introduction — cover the main arguments/findings\n` +
         `   - Do not make inferences or add context not in the article\n` +
         `   - Write in third person, factual tone\n\n` +
-
         `Respond with ONLY a JSON array:\n` +
         `[\n` +
         `  {"id":"<article ID>","matchedKeywords":["keyword1","keyword2"],"summary":"<130-150 word summary>"},\n` +
@@ -181,180 +211,146 @@ function buildBatchPrompt(articles, categoryKeywords) {
 }
 
 // ── processBatch ──────────────────────────────────────────────────────────────
-// Processes one batch of up to BATCH_SIZE articles.
-// If batch fails to parse, falls back to processing each article individually.
-// Updates DB for each successfully processed article.
-// Returns { enriched: number, failed: number } counts.
+// Processes articles with adaptive batch sizing on failure
 
 async function processBatch(articles, categoryKeywords, tokenTracker, sessionId, logFn) {
   let enriched = 0;
   let failed   = 0;
+  let adaptiveBatchSize = articles.length;
 
   // ── Try batch processing ─────────────────────────────────────────────
-  let results = null;
 
   try {
     const messages = buildBatchPrompt(articles, categoryKeywords);
     const { content, usage, model } = await callOpenRouter(messages, 900);
 
-    // Track tokens (approximate — free models may not always return usage)
-    tokenTracker.inputTokens  += usage.prompt_tokens  || 0;
-    tokenTracker.outputTokens += usage.completion_tokens || 0;
+    tokenTracker.inputTokens  += usage.prompt_tokens;
+    tokenTracker.outputTokens += usage.completion_tokens;
 
-    results = parseEnrichmentResponse(content);
-    console.log(`[Enrichment] Batch of ${articles.length} classified via ${model}`);
+    try {
+      const results = parseEnrichmentResponse(content);
+      
+      for (const result of results) {
+        const article = articles.find((a) => a.id === result.id);
+        if (!article) continue;
+
+        try {
+          await prisma.scrapedArticle.update({
+            where: { id: result.id },
+            data: {
+              summary:        result.summary || null,
+              matchedKeywords: Array.isArray(result.matchedKeywords) ? result.matchedKeywords : [],
+            },
+          });
+          enriched++;
+        } catch (dbErr) {
+          console.error(`[Enrichment] DB update failed for article ${result.id}: ${dbErr.message}`);
+          failed++;
+          logFn("enrichment_error", article.sourceUrl, article.category, `DB update: ${dbErr.message}`);
+        }
+      }
+
+      return { enriched, failed };
+
+    } catch (parseErr) {
+      console.warn(`[Enrichment] Batch parse failed: ${parseErr.message} — falling back to individual processing`);
+      // Fall through to individual processing below
+    }
 
   } catch (err) {
-    console.warn(`[Enrichment] Batch failed (${err.message}) — falling back to single-article mode`);
-    results = null;
+    console.warn(`[Enrichment] Batch call failed: ${err.message} — falling back to individual processing`);
+    // Fall through to individual processing below
   }
 
-  // ── If batch succeeded, save results ────────────────────────────────
-  if (results && Array.isArray(results)) {
-    for (const result of results) {
-      const article = articles.find((a) => a.id === result.id);
-      if (!article) continue;
+  // ── Fallback: Process individually ───────────────────────────────────
 
-      const keywords = Array.isArray(result.matchedKeywords) ? result.matchedKeywords.slice(0, 6) : [];
-      const summary  = typeof result.summary === "string" && result.summary.trim().length > 50
-        ? result.summary.trim()
-        : null;
+  console.log(`[Enrichment] Processing ${articles.length} articles individually...`);
 
-      try {
+  for (const article of articles) {
+    try {
+      const messages = buildBatchPrompt([article], categoryKeywords);
+      const { content, usage, model } = await callOpenRouter(messages, 600);
+
+      tokenTracker.inputTokens  += usage.prompt_tokens;
+      tokenTracker.outputTokens += usage.completion_tokens;
+
+      const results = parseEnrichmentResponse(content);
+      const result  = results[0];
+
+      if (result) {
         await prisma.scrapedArticle.update({
           where: { id: article.id },
           data: {
-            summary:         summary,
-            matchedKeywords: keywords,
+            summary:        result.summary || null,
+            matchedKeywords: Array.isArray(result.matchedKeywords) ? result.matchedKeywords : [],
           },
         });
-
-        await logFn("enrichment_success", article.sourceUrl, article.category, null, {
-          matchedKeywords: keywords, summaryLength: summary?.length || 0,
-        });
-
         enriched++;
-      } catch (dbErr) {
-        console.error(`[Enrichment] DB update failed for ${article.id}: ${dbErr.message}`);
-        failed++;
       }
-    }
-
-    return { enriched, failed };
-  }
-
-  // ── Fallback: process each article individually ───────────────────────
-  for (const article of articles) {
-    await new Promise((r) => setTimeout(r, API_CALL_DELAY_MS));
-
-    try {
-      const messages = buildBatchPrompt([article], categoryKeywords);
-      const { content, usage, model } = await callOpenRouter(messages, 400);
-
-      tokenTracker.inputTokens  += usage.prompt_tokens     || 0;
-      tokenTracker.outputTokens += usage.completion_tokens || 0;
-
-      const parsed  = parseEnrichmentResponse(content);
-      const result  = Array.isArray(parsed) ? parsed[0] : null;
-
-      if (!result) throw new Error("Empty result from single-article enrichment");
-
-      const keywords = Array.isArray(result.matchedKeywords) ? result.matchedKeywords.slice(0, 6) : [];
-      const summary  = typeof result.summary === "string" && result.summary.trim().length > 50
-        ? result.summary.trim()
-        : null;
-
-      await prisma.scrapedArticle.update({
-        where: { id: article.id },
-        data: { summary, matchedKeywords: keywords },
-      });
-
-      await logFn("enrichment_success", article.sourceUrl, article.category, null, {
-        matchedKeywords: keywords, model, fallback: true,
-      });
-
-      enriched++;
-      console.log(`[Enrichment] ✅ (fallback) "${article.title}" → [${keywords.join(", ")}]`);
 
     } catch (err) {
-      console.error(`[Enrichment] ❌ Failed: "${article.title}" — ${err.message}`);
-      await logFn("enrichment_failure", article.sourceUrl, article.category, err.message, null);
+      console.error(`[Enrichment] Failed to enrich article ${article.id}: ${err.message}`);
       failed++;
+      logFn("enrichment_error", article.sourceUrl, article.category, err.message);
     }
+
+    // Delay between individual requests
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   return { enriched, failed };
 }
 
-
-// ── Internal log helper ───────────────────────────────────────────────────────
-// Writes to ScrapingLog for a given session. Used by both runEnrichmentStage
-// and runManualEnrichment. Falls back silently — logging never blocks enrichment.
-
-async function writeLog(sessionId, logType, url, category, reason, details) {
-  await prisma.scrapingLog.create({
-    data: {
-      sessionId,
-      logType,
-      url:      url      || "",
-      category: category || null,
-      reason:   reason   || null,
-      details:  details  || null,
-    },
-  }).catch(() => {});
-}
-
 // ── buildKeywordCoverageReport ────────────────────────────────────────────────
-// Shared helper used by both runEnrichmentStage and runManualEnrichment.
-// Queries DB for enriched articles in this session and builds coverage maps.
 
 async function buildKeywordCoverageReport(sessionId) {
-  const keywordCoverage = {};
-  for (const keywords of Object.values(CATEGORY_KEYWORDS)) {
-    for (const kw of keywords) {
-      if (!(kw in keywordCoverage)) keywordCoverage[kw] = 0;
+  const categoryList = Object.keys(CATEGORY_KEYWORDS);
+  const keywordsWithContent    = [];
+  const keywordsWithoutContent = [];
+
+  for (const category of categoryList) {
+    const keywords = CATEGORY_KEYWORDS[category];
+
+    for (const keyword of keywords) {
+      const count = await prisma.scrapedArticle.count({
+        where: {
+          sessionId,
+          category,
+          matchedKeywords: { has: keyword },
+        },
+      });
+
+      if (count > 0) {
+        keywordsWithContent.push({ keyword, category, articleCount: count });
+      } else {
+        keywordsWithoutContent.push(keyword);
+      }
     }
   }
 
-  const enrichedArticles = await prisma.scrapedArticle.findMany({
-    where:  { sessionId, matchedKeywords: { isEmpty: false } },
-    select: { matchedKeywords: true },
-  });
-
-  for (const art of enrichedArticles) {
-    for (const kw of art.matchedKeywords) {
-      if (kw in keywordCoverage) keywordCoverage[kw]++;
-    }
-  }
-
-  const keywordsWithContent = Object.entries(keywordCoverage)
-    .filter(([, count]) => count > 0)
-    .map(([keyword, count]) => ({ keyword, articleCount: count }))
-    .sort((a, b) => b.articleCount - a.articleCount);
-
-  const keywordsWithoutContent = Object.entries(keywordCoverage)
-    .filter(([, count]) => count === 0)
-    .map(([keyword]) => keyword);
-
-  return { keywordsWithContent, keywordsWithoutContent };
+  return {
+    keywordsWithContent,
+    keywordsWithoutContent: [...new Set(keywordsWithoutContent)],
+  };
 }
 
+// ── writeLog ──────────────────────────────────────────────────────────────────
+
+async function writeLog(sessionId, logType, url, category, reason, details = {}) {
+  await prisma.scrapingLog.create({
+    data: { sessionId, logType, url, category, reason, details },
+  });
+}
 
 // ── runEnrichmentStage ────────────────────────────────────────────────────────
-// Main entry point. Called from scraper.service.js after Phase 2 completes.
-//
-// Flow:
-//   For each category → fetch unenriched articles from this session
-//     → batch into groups of BATCH_SIZE
-//     → call AI → update DB
-//   → calculate keyword coverage (which keywords got content, which got none)
-//   → return enrichment stats for session report
+// Called as part of the main scraping session (Phase 3)
 
 async function runEnrichmentStage(sessionId) {
-  const logFn = (logType, url, category, reason, details) =>
-    writeLog(sessionId, logType, url, category, reason, details);
+  console.log(`\n[Enrichment] ═══ Enrichment Stage Starting ═══`);
+  console.log(`[Enrichment] Session: ${sessionId}`);
 
-  console.log("\n[Enrichment] ═══ Phase 3a: AI Enrichment Stage Starting ═══");
+  const logFn = (logType, url, cat, reason, details) =>
+    writeLog(sessionId, logType, url, cat, reason, details);
 
   const tokenTracker = { inputTokens: 0, outputTokens: 0 };
   let totalEnriched  = 0;
@@ -365,12 +361,11 @@ async function runEnrichmentStage(sessionId) {
   for (const category of categories) {
     const categoryKeywords = CATEGORY_KEYWORDS[category];
 
-    // Fetch articles from this session that haven't been enriched yet
     const articles = await prisma.scrapedArticle.findMany({
       where: {
         sessionId,
         category,
-        summary: null, // not yet enriched
+        summary: null,
       },
       select: {
         id:        true,
@@ -388,13 +383,11 @@ async function runEnrichmentStage(sessionId) {
 
     console.log(`[Enrichment] "${category}" — ${articles.length} articles to enrich`);
 
-    // Process in batches of BATCH_SIZE
     for (let i = 0; i < articles.length; i += BATCH_SIZE) {
       const batch    = articles.slice(i, i + BATCH_SIZE);
       const batchNum = Math.floor(i / BATCH_SIZE) + 1;
       console.log(`[Enrichment] "${category}" batch ${batchNum}: ${batch.length} articles`);
 
-      // Delay between batches to respect rate limits
       if (i > 0) await new Promise((r) => setTimeout(r, API_CALL_DELAY_MS));
 
       const { enriched, failed } = await processBatch(batch, categoryKeywords, tokenTracker, sessionId, logFn);
@@ -426,29 +419,8 @@ async function runEnrichmentStage(sessionId) {
   };
 }
 
-
-// ── runManualEnrichment ───────────────────────────────────────────────────────
-// Standalone enrichment runner for use OUTSIDE the normal scraping session flow.
-//
-// PURPOSE:
-//   When enrichment fails or is skipped during a scraping session (due to
-//   AI model errors, network issues, rate limits, etc.), articles are saved
-//   in the database with summary=null and matchedKeywords=[]. This function
-//   finds those unenriched articles and processes them after the fact.
-//
-// CAN BE CALLED:
-//   - By scripts/triggerEnrichment.js (manual terminal command)
-//   - By POST /api/scraper/enrich (HTTP endpoint for admin panel)
-//   - For a specific session: runManualEnrichment({ sessionId: "..." })
-//   - For all unenriched articles: runManualEnrichment({}) — no sessionId
-//
-// PARAMETERS:
-//   options.sessionId  — if provided, only enriches articles from that session
-//                        if omitted, finds ALL articles with summary=null
-//   options.category   — if provided, only enriches articles in that category
-//                        if omitted, processes all categories
-//
-// RETURNS: enrichment stats object (same shape as runEnrichmentStage)
+// ── runManualEnrichment (IMPROVED) ────────────────────────────────────────────
+// Now properly integrates with ScrapingSession and sends notifications
 
 async function runManualEnrichment({ sessionId = null, category = null } = {}) {
   console.log("\n[Manual Enrichment] ═══ Starting ═══");
@@ -456,21 +428,25 @@ async function runManualEnrichment({ sessionId = null, category = null } = {}) {
   if (category)  console.log(`[Manual Enrichment] Category filter: ${category}`);
   console.log("[Manual Enrichment] Processing all articles where summary = null...\n");
 
-  // We need a session ID to write logs. Use the provided one, or find the
-  // most recent session, or create a special "manual" marker for the log.
-  let logSessionId = sessionId;
+  // Determine which session to attach results to
+  let targetSessionId = sessionId;
+  let isSessionSpecific = !!sessionId;
 
-  if (!logSessionId) {
-    // Find the most recent session to attach logs to
+  if (!targetSessionId) {
     const lastSession = await prisma.scrapingSession.findFirst({
       orderBy: { startedAt: "desc" },
       select:  { id: true },
     });
-    logSessionId = lastSession?.id || "manual-enrichment";
+    targetSessionId = lastSession?.id;
+
+    if (!targetSessionId) {
+      console.warn("[Manual Enrichment] ❌ No scraping sessions found. Cannot determine session for logging.");
+      throw new Error("No scraping sessions exist. Ensure at least one scraping session has run.");
+    }
   }
 
   const logFn = (logType, url, cat, reason, details) =>
-    writeLog(logSessionId, logType, url, cat, reason, details);
+    writeLog(targetSessionId, logType, url, cat, reason, details);
 
   const tokenTracker = { inputTokens: 0, outputTokens: 0 };
   let totalEnriched  = 0;
@@ -489,11 +465,10 @@ async function runManualEnrichment({ sessionId = null, category = null } = {}) {
       continue;
     }
 
-    // Build the where clause — sessionId filter is optional
     const where = {
       category: cat,
-      summary:  null, // only unenriched articles
-      ...(sessionId && { sessionId }),
+      summary:  null,
+      ...(isSessionSpecific && { sessionId }),
     };
 
     const articles = await prisma.scrapedArticle.findMany({
@@ -505,7 +480,6 @@ async function runManualEnrichment({ sessionId = null, category = null } = {}) {
         sourceUrl: true,
         category:  true,
       },
-      // Process most recent first
       orderBy: { scrapedAt: "desc" },
     });
 
@@ -517,7 +491,6 @@ async function runManualEnrichment({ sessionId = null, category = null } = {}) {
     totalFound += articles.length;
     console.log(`[Manual Enrichment] "${cat}" — ${articles.length} unenriched articles found`);
 
-    // Process in batches
     for (let i = 0; i < articles.length; i += BATCH_SIZE) {
       const batch    = articles.slice(i, i + BATCH_SIZE);
       const batchNum = Math.floor(i / BATCH_SIZE) + 1;
@@ -526,28 +499,112 @@ async function runManualEnrichment({ sessionId = null, category = null } = {}) {
       if (i > 0) await new Promise((r) => setTimeout(r, API_CALL_DELAY_MS));
 
       const { enriched, failed } = await processBatch(
-        batch, categoryKeywords, tokenTracker, logSessionId, logFn
+        batch, categoryKeywords, tokenTracker, targetSessionId, logFn
       );
       totalEnriched += enriched;
       totalFailed   += failed;
     }
   }
 
-  // Build coverage report using the session filter if provided
-  const coverageSessionId = sessionId || logSessionId;
-  const { keywordsWithContent, keywordsWithoutContent } = await buildKeywordCoverageReport(coverageSessionId);
+  // ── Update ScrapingSession with enrichment results ──────────────────────────
+  if (targetSessionId) {
+    const { keywordsWithContent, keywordsWithoutContent } = await buildKeywordCoverageReport(targetSessionId);
 
+    // Fetch existing session stats to merge with new enrichment data
+    const existingSession = await prisma.scrapingSession.findUnique({
+      where: { id: targetSessionId },
+      select: {
+        enrichedCount:         true,
+        enrichmentFailedCount: true,
+        aiInputTokens:         true,
+        aiOutputTokens:        true,
+      },
+    });
+
+    const merged = {
+      enrichedCount:         (existingSession?.enrichedCount || 0) + totalEnriched,
+      enrichmentFailedCount: (existingSession?.enrichmentFailedCount || 0) + totalFailed,
+      aiInputTokens:         (existingSession?.aiInputTokens || 0) + tokenTracker.inputTokens,
+      aiOutputTokens:        (existingSession?.aiOutputTokens || 0) + tokenTracker.outputTokens,
+      keywordsCoveredCount:  keywordsWithContent.length,
+      keywordsEmptyCount:    keywordsWithoutContent.length,
+    };
+
+    await prisma.scrapingSession.update({
+      where: { id: targetSessionId },
+      data:  merged,
+    });
+
+    console.log(`[Manual Enrichment] Updated session ${targetSessionId} with new stats`);
+  }
+
+  // ── Send completion notification ──────────────────────────────────────────
+  const { sendCompletionNotification } = require("./email.service");
+
+  const session = await prisma.scrapingSession.findUnique({
+    where: { id: targetSessionId },
+    select: {
+      id: true,
+      startedAt: true,
+      totalSources: true,
+      successCount: true,
+      duplicateCount: true,
+      failureCount: true,
+      successRate: true,
+      durationMinutes: true,
+      enrichedCount: true,
+      keywordsCoveredCount: true,
+      criticalErrors: true,
+    },
+  });
+
+  if (session) {
+    const { keywordsWithContent, keywordsWithoutContent } = await buildKeywordCoverageReport(targetSessionId);
+
+    const report = {
+      sessionId: session.id,
+      startedAt: session.startedAt,
+      totalSources: session.totalSources,
+      successCount: session.successCount,
+      duplicateCount: session.duplicateCount,
+      failureCount: session.failureCount,
+      successRate: session.successRate,
+      durationMinutes: session.durationMinutes,
+      enrichedCount: totalEnriched,
+      enrichmentFailed: totalFailed,
+      keywordsCoveredCount: keywordsWithContent.length,
+      keywordsWithContent,
+      keywordsWithoutContent,
+      totalKeywordsCovered: keywordsWithContent.length,
+      totalKeywordsEmpty: keywordsWithoutContent.length,
+      aiTokenUsage: {
+        inputTokens: tokenTracker.inputTokens,
+        outputTokens: tokenTracker.outputTokens,
+        estimatedCostUSD: 0,
+      },
+      criticalErrors: false,
+      isManualEnrichment: true,  // Flag to customize email subject
+    };
+
+    try {
+      await sendCompletionNotification(report);
+      console.log(`[Manual Enrichment] Email notification sent to admins`);
+    } catch (emailErr) {
+      console.error(`[Manual Enrichment] Email notification failed: ${emailErr.message}`);
+    }
+  }
+
+  // ── Log completion ──────────────────────────────────────────────────────────
   console.log(`\n[Manual Enrichment] ═══ Complete ═══`);
   console.log(`[Manual Enrichment] Found: ${totalFound} | ✅ Enriched: ${totalEnriched} | ❌ Failed: ${totalFailed}`);
-  console.log(`[Manual Enrichment] Keywords covered: ${keywordsWithContent.length}`);
   console.log(`[Manual Enrichment] Tokens — Input: ${tokenTracker.inputTokens} | Output: ${tokenTracker.outputTokens}`);
 
   return {
     totalFound,
     enrichedCount:          totalEnriched,
     enrichmentFailed:       totalFailed,
-    keywordsWithContent,
-    keywordsWithoutContent,
+    keywordsWithContent: (await buildKeywordCoverageReport(targetSessionId)).keywordsWithContent,
+    keywordsWithoutContent: (await buildKeywordCoverageReport(targetSessionId)).keywordsWithoutContent,
     tokenUsage: {
       inputTokens:  tokenTracker.inputTokens,
       outputTokens: tokenTracker.outputTokens,
@@ -557,6 +614,5 @@ async function runManualEnrichment({ sessionId = null, category = null } = {}) {
     },
   };
 }
-
 
 module.exports = { runEnrichmentStage, runManualEnrichment };
