@@ -29,3 +29,5 @@ Thumbs.db
 # Firebase service account key
 serviceAccountKey.json
 firebase-service-account.json
+
+full_database_backup.json
