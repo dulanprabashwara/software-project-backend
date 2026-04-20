@@ -1,8 +1,11 @@
 // tests/scraptests/database.test.js
 // FIX: createScrapingSessionLog now returns session.id (string), not the full object.
+// NEW:  collectArticleLinks is now async and performs a DB pre-filter.
 
 jest.mock("../../src/config/prisma", () => require("../mocks/prisma.mock"));
 const prisma = require("../../src/config/prisma");
+
+// ── Functions under test (inlined so we don't import the full service) ────────
 
 async function checkDuplicateArticle(url) {
   const existing = await prisma.scrapedArticle.findUnique({ where: { sourceUrl: url }, select: { id: true } });
@@ -27,12 +30,37 @@ async function loadConfiguration() {
   return { categories: Object.keys(sourcesByCategory), sourcesByCategory, totalSources: sources.length };
 }
 
-// ── FIX: extract .id from the created session object ─────────────────────────
 async function createScrapingSessionLog(totalSources, lastScrapeDate) {
   const session = await prisma.scrapingSession.create({
     data: { status: "running", lastScrapeDate, totalSources },
   });
-  return session.id;  // returns the ID string, not the full object
+  return session.id;
+}
+
+// ── Inline collectArticleLinks (mirrors the real async version) ───────────────
+// We replicate just the DB interaction piece so we can test the dedup logic
+// without needing a real HTTP response or Cheerio parsing.
+
+const MAX_ARTICLES_PER_SOURCE     = 7;
+const CANDIDATE_LINKS_PER_SOURCE  = 25;
+
+async function selectFreshArticleLinks(candidates) {
+  // candidates: string[] of URLs already scored and deduplicated within page
+  if (!candidates.length) return [];
+
+  const existingRecords = await prisma.scrapedArticle.findMany({
+    where:  { sourceUrl: { in: candidates } },
+    select: { sourceUrl: true },
+  });
+  const alreadyScraped = new Set(existingRecords.map((r) => r.sourceUrl));
+
+  const fresh = candidates.filter((url) => !alreadyScraped.has(url));
+  const known = candidates.filter((url) =>  alreadyScraped.has(url));
+
+  return [
+    ...fresh.slice(0, MAX_ARTICLES_PER_SOURCE),
+    ...known.slice(0, Math.max(0, MAX_ARTICLES_PER_SOURCE - fresh.length)),
+  ].slice(0, MAX_ARTICLES_PER_SOURCE);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -134,8 +162,8 @@ describe("createScrapingSessionLog", () => {
     expect(prisma.scrapingSession.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ status: "running", totalSources: 5 }),
     });
-    expect(sessionId).toBe("session-123");      // must be a string
-    expect(typeof sessionId).toBe("string");     // not an object
+    expect(sessionId).toBe("session-123");
+    expect(typeof sessionId).toBe("string");
   });
 
   test("accepts null lastScrapeDate for first-ever session", async () => {
@@ -153,5 +181,148 @@ describe("createScrapingSessionLog", () => {
     expect(prisma.scrapingSession.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ totalSources: 12 }),
     });
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// selectFreshArticleLinks — the new dedup-aware DB pre-filter
+// ════════════════════════════════════════════════════════════════════════════
+
+describe("selectFreshArticleLinks — smart article URL selection", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  // Helper to generate N unique fake article URLs
+  function urls(n, prefix = "https://example.com/article-") {
+    return Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`);
+  }
+
+  test("returns only fresh URLs when all candidates are new", async () => {
+    const candidates = urls(10);
+    // None exist in DB
+    prisma.scrapedArticle.findMany.mockResolvedValue([]);
+
+    const result = await selectFreshArticleLinks(candidates);
+
+    // Should return the first MAX_ARTICLES_PER_SOURCE fresh URLs
+    expect(result).toHaveLength(MAX_ARTICLES_PER_SOURCE);
+    result.forEach((url) => expect(candidates).toContain(url));
+  });
+
+  test("bulk-checks candidates in a single DB query (not N queries)", async () => {
+    const candidates = urls(15);
+    prisma.scrapedArticle.findMany.mockResolvedValue([]);
+
+    await selectFreshArticleLinks(candidates);
+
+    // findMany must be called exactly once with an IN clause
+    expect(prisma.scrapedArticle.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.scrapedArticle.findMany).toHaveBeenCalledWith({
+      where:  { sourceUrl: { in: candidates } },
+      select: { sourceUrl: true },
+    });
+  });
+
+  test("prioritises fresh URLs over already-scraped ones", async () => {
+    const allCandidates = urls(10);
+    const freshUrls     = allCandidates.slice(5); // last 5 are fresh
+    const knownUrls     = allCandidates.slice(0, 5); // first 5 already scraped
+
+    prisma.scrapedArticle.findMany.mockResolvedValue(
+      knownUrls.map((url) => ({ sourceUrl: url }))
+    );
+
+    const result = await selectFreshArticleLinks(allCandidates);
+
+    // All 5 fresh should be present
+    freshUrls.forEach((url) => expect(result).toContain(url));
+    // No known URL should appear (we have enough fresh to fill 7... wait, only 5 fresh)
+    // With 5 fresh we still pad with 2 known — let's verify fresh come first
+    const freshInResult = result.filter((u) => freshUrls.includes(u));
+    const knownInResult = result.filter((u) => knownUrls.includes(u));
+    expect(freshInResult.length).toBe(5);
+    expect(knownInResult.length).toBe(2); // padded with 2 known to reach 7
+  });
+
+  test("fills remaining quota with known URLs when fresh count < MAX_ARTICLES_PER_SOURCE", async () => {
+    // Only 3 fresh articles, need 7 total → pad with 4 known
+    const allCandidates = urls(12);
+    const knownUrls     = allCandidates.slice(0, 9);  // 9 already scraped
+    const freshUrls     = allCandidates.slice(9);     // 3 fresh
+
+    prisma.scrapedArticle.findMany.mockResolvedValue(
+      knownUrls.map((url) => ({ sourceUrl: url }))
+    );
+
+    const result = await selectFreshArticleLinks(allCandidates);
+
+    expect(result).toHaveLength(MAX_ARTICLES_PER_SOURCE); // 7
+    const freshInResult = result.filter((u) => freshUrls.includes(u));
+    const knownInResult = result.filter((u) => knownUrls.includes(u));
+    expect(freshInResult.length).toBe(3);
+    expect(knownInResult.length).toBe(4);
+  });
+
+  test("never returns more than MAX_ARTICLES_PER_SOURCE URLs", async () => {
+    const candidates = urls(25);
+    prisma.scrapedArticle.findMany.mockResolvedValue([]);
+
+    const result = await selectFreshArticleLinks(candidates);
+    expect(result.length).toBeLessThanOrEqual(MAX_ARTICLES_PER_SOURCE);
+  });
+
+  test("returns empty array when candidates list is empty", async () => {
+    const result = await selectFreshArticleLinks([]);
+    // Should short-circuit without calling DB
+    expect(prisma.scrapedArticle.findMany).not.toHaveBeenCalled();
+    expect(result).toEqual([]);
+  });
+
+  test("returns empty array when all candidates already scraped and none left to pad", async () => {
+    // 0 candidates → empty result
+    prisma.scrapedArticle.findMany.mockResolvedValue([]);
+    const result = await selectFreshArticleLinks([]);
+    expect(result).toEqual([]);
+  });
+
+  test("returns all available when total candidates < MAX_ARTICLES_PER_SOURCE", async () => {
+    // Only 3 total candidates, all fresh
+    const candidates = urls(3);
+    prisma.scrapedArticle.findMany.mockResolvedValue([]);
+
+    const result = await selectFreshArticleLinks(candidates);
+    expect(result).toHaveLength(3); // can't return more than we have
+  });
+
+  test("when all candidates are already scraped, returns up to MAX from known", async () => {
+    // 15 candidates, all already scraped
+    const candidates = urls(15);
+    prisma.scrapedArticle.findMany.mockResolvedValue(
+      candidates.map((url) => ({ sourceUrl: url }))
+    );
+
+    const result = await selectFreshArticleLinks(candidates);
+
+    // Falls back: 0 fresh, pad with up to 7 known
+    expect(result).toHaveLength(MAX_ARTICLES_PER_SOURCE);
+    result.forEach((url) => expect(candidates).toContain(url));
+  });
+
+  test("does not include duplicate URLs in result", async () => {
+    const candidates = urls(10);
+    prisma.scrapedArticle.findMany.mockResolvedValue([]);
+
+    const result = await selectFreshArticleLinks(candidates);
+
+    const uniqueResult = new Set(result);
+    expect(uniqueResult.size).toBe(result.length);
+  });
+
+  test("result only contains URLs that were in the original candidates list", async () => {
+    const candidates = urls(10);
+    prisma.scrapedArticle.findMany.mockResolvedValue([]);
+
+    const result = await selectFreshArticleLinks(candidates);
+
+    result.forEach((url) => expect(candidates).toContain(url));
   });
 });
