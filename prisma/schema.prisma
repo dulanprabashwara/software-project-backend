@@ -465,9 +465,11 @@ model KeywordScrapingStats {
   successCount   Int             @default(0)
   duplicateCount Int             @default(0)
   failureCount   Int             @default(0)
+  createdAt      DateTime        @default(now())
   session        ScrapingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId])
+  @@index([sessionId, category])
   @@map("keyword_scraping_stats")
 }
 
