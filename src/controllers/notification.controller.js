@@ -1,34 +1,38 @@
+const prisma = require("../config/prisma");
 const asyncHandler = require("../utils/asyncHandler");
-const { sendSuccess, sendPaginated } = require("../utils/response");
-const notificationService = require("../services/notification.service");
-const { parsePagination } = require("../utils/helpers");
+const { sendSuccess } = require("../utils/response");
 
-/**
- * GET /api/v1/notifications
- * Get current user's notifications.
- */
+// GET /api/notifications
 const getNotifications = asyncHandler(async (req, res) => {
-  const { page, limit } = parsePagination(req.query);
-  const { notifications, total, unreadCount } =
-    await notificationService.getUserNotifications(req.user.id, page, limit);
+  const userId = req.user.id; // From authenticate middleware
 
-  sendPaginated(res, {
-    data: { notifications, unreadCount },
-    page,
-    limit,
-    total,
+  const notifications = await prisma.notification.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    include: {
+      // We include the actor (the person who followed/commented)
+      // Article ratings are anonymous, so actorId might be null there.
+      user: {
+        select: { displayName: true, avatarUrl: true }
+      }
+    },
+    take: 20 // Limit to last 20
   });
+
+  sendSuccess(res, { data: notifications });
 });
 
-/**
- * PUT /api/v1/notifications/read
- * Mark notifications as read.
- */
+// PATCH /api/notifications/:id/read
 const markAsRead = asyncHandler(async (req, res) => {
-  const { notificationIds } = req.body; // null = mark all
-  await notificationService.markAsRead(req.user.id, notificationIds);
+  const { id } = req.params;
+  const userId = req.user.id;
 
-  sendSuccess(res, { message: "Notifications marked as read." });
+  const notification = await prisma.notification.update({
+    where: { id, userId }, // Ensure user owns the notification
+    data: { isRead: true }
+  });
+
+  sendSuccess(res, { data: notification });
 });
 
 module.exports = { getNotifications, markAsRead };

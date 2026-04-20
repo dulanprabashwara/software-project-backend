@@ -1,13 +1,12 @@
-const { Router } = require("express");
-const notificationController = require("../controllers/notification.controller");
+const express = require("express");
+const router = express.Router();
+const { getNotifications, markAsRead } = require("../controllers/notification.controller");
 const { authenticate } = require("../middlewares/auth");
 
-const router = Router();
-
-// All notification routes are protected
+// All notification routes require a logged-in user
 router.use(authenticate);
 
-router.get("/", notificationController.getNotifications);
-router.put("/read", notificationController.markAsRead);
+router.get("/", getNotifications);
+router.patch("/:id/read", markAsRead);
 
 module.exports = router;

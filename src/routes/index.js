@@ -17,7 +17,7 @@ const stripeRoutes = require("./stripe.routes");
 const scraperRoutes = require("./scraper.routes");
 const wordpressRoutes = require("./wordpress.routes");
 const searchRoutes       = require("./search.routes"); 
- const homefeedRoutes = require("./homefeed.routes");
+const homefeedRoutes = require("./homefeed.routes");
 const articleReadRoutes = require("./articleRead.routes");
 const router = Router();
 
