@@ -431,6 +431,9 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
     },
   });
 
+  // Lazy-require to avoid circular dependency (job module imports service module)
+  const { registerJobTimeout, cancelJobTimeout } = require("../jobs/wordpress.job");
+
   if (existingJob) {
     await prisma.wordPressPublishJob.update({
       where: { id: existingJob.id },
@@ -442,6 +445,9 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
         draftUrl:    null,
       },
     });
+    // Cancel the old timeout and register a new one at the updated time
+    cancelJobTimeout(existingJob.id);
+    registerJobTimeout(existingJob.id, new Date(scheduledAt));
     return {
       success:     true,
       message:     `WordPress publish rescheduled for ${new Date(scheduledAt).toISOString()}.`,
@@ -459,6 +465,9 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
       status:      "PENDING",
     },
   });
+
+  // Register the in-memory timeout — no cron polling needed
+  registerJobTimeout(job.id, job.scheduledAt);
 
   return {
     success:     true,

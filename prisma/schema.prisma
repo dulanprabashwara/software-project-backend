@@ -11,42 +11,41 @@ datasource db {
 /// The `firebaseUid` field serves as the secure, immutable bridge between Firebase Auth 
 /// (which handles passwords/JWTs) and our Postgres database (which handles roles and data).
 model User {
-  id                 String            @id @default(cuid())
-  /// Unique identifier provided by Firebase Auth upon registration.
-  firebaseUid        String            @unique
-  email              String            @unique
-  username           String            @unique
-  displayName        String?
-  bio                String?
-  avatarUrl          String?
-  role               Role              @default(USER)
-  isPremium          Boolean           @default(false)
-  stripeCustomerId   String?           @unique
-  linkedInAccountId  String?
-  wordpressAccountId String?
-  isOnline           Boolean           @default(false)
-  lastSeen           DateTime          @default(now())
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  ai_article_logs    ai_article_logs[]
-  likes              ArticleLike[]
-  shares             ArticleShare[]
-  articles           Article[]
-  auditLogs          AuditLog[]
-  bansIssued         BannedUser[]      @relation("BannedBy")
-  bannedRecord       BannedUser?       @relation("BannedUser")
-  comments           Comment[]
-  following          Follow[]          @relation("Followers")
-  followers          Follow[]          @relation("Following")
-  receivedMessages   Message[]         @relation("ReceivedMessages")
-  sentMessages       Message[]         @relation("SentMessages")
-  notifications      Notification[]
-  readHistory        ReadHistory[]
-  reportedArticles   ReportedArticle[] @relation("Reporter")
-  savedArticles      SavedArticle[]
-  stories            Story[]
-  subscriptions      Subscription[]
-  stats              UserStats?
+  id                  String                @id @default(cuid())
+  firebaseUid         String                @unique
+  email               String                @unique
+  username            String                @unique
+  displayName         String?
+  bio                 String?
+  avatarUrl           String?
+  role                Role                  @default(USER)
+  isPremium           Boolean               @default(false)
+  linkedInAccountId   String?
+  wordpressAccountId  String?
+  isOnline            Boolean               @default(false)
+  lastSeen            DateTime              @default(now())
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  stripeCustomerId    String?               @unique
+  ai_article_logs     ai_article_logs[]
+  rating              ArticleRating[]
+  shares              ArticleShare[]
+  articles            Article[]
+  auditLogs           AuditLog[]
+  bansIssued          BannedUser[]          @relation("BannedBy")
+  bannedRecord        BannedUser?           @relation("BannedUser")
+  comments            Comment[]
+  following           Follow[]              @relation("Followers")
+  followers           Follow[]              @relation("Following")
+  receivedMessages    Message[]             @relation("ReceivedMessages")
+  sentMessages        Message[]             @relation("SentMessages")
+  notifications       Notification[]
+  readHistory         ReadHistory[]
+  reportedArticles    ReportedArticle[]     @relation("Reporter")
+  savedArticles       SavedArticle[]
+  stories             Story[]
+  subscriptions       Subscription[]
+  stats               UserStats?
   wordpressConnection WordPressConnection?
   wpPublishJobs       WordPressPublishJob[]
 
@@ -54,44 +53,42 @@ model User {
 }
 
 model Article {
-  id                       String            @id @default(cuid())
-  title                    String
-  slug                     String            @unique
-  content                  String
-  summary                  String?
-  coverImage               String?
-  status                   ArticleStatus     @default(DRAFT)
-  isAiGenerated            Boolean           @default(false)
-
-  isEdited                 Boolean           @default(false)
-  isEditAsNew              Boolean           @default(false)
-  sourceArticleId          String?
-
-  editingBackupTitle       String?
-  editingBackupContent     String?
-  editingBackupCoverImage  String?
-  editingStartedAt         DateTime?
-
-  scheduledAt              DateTime?
-  publishedAt              DateTime?
-  readCount                Int               @default(0)
-  likeCount                Int               @default(0)
-  shareCount               Int               @default(0)
-  commentCount             Int               @default(0)
-  tags                     String[]
-  readingTime              Int               @default(0)
-  createdAt                DateTime          @default(now())
-  updatedAt                DateTime          @updatedAt
-  authorId                 String
-  ai_article_logs          ai_article_logs?
-  likes                    ArticleLike[]
-  shares                   ArticleShare[]
-  author                   User              @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  comments                 Comment[]
-  readHistory              ReadHistory[]
-  reports                  ReportedArticle[]
-  savedBy                  SavedArticle[]
-  wpPublishJobs            WordPressPublishJob[]
+  id                      String                @id @default(cuid())
+  title                   String
+  slug                    String                @unique
+  content                 String
+  summary                 String?
+  coverImage              String?
+  status                  ArticleStatus         @default(DRAFT)
+  isAiGenerated           Boolean               @default(false)
+  scheduledAt             DateTime?
+  publishedAt             DateTime?
+  readCount               Int                   @default(0)
+  averageRating           Float                 @default(0.0)
+  ratingCount             Int                   @default(0)  
+  shareCount              Int                   @default(0)
+  commentCount            Int                   @default(0)
+  tags                    String[]
+  readingTime             Int                   @default(0)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  authorId                String
+  editingBackupContent    String?
+  editingBackupCoverImage String?
+  editingBackupTitle      String?
+  editingStartedAt        DateTime?
+  isEdited                Boolean               @default(false)
+  isEditAsNew             Boolean               @default(false)
+  sourceArticleId         String?
+  ai_article_logs         ai_article_logs?
+  ratings                 ArticleRating[]  
+  shares                  ArticleShare[]
+  author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments                Comment[]
+  readHistory             ReadHistory[]
+  reports                 ReportedArticle[]
+  savedBy                 SavedArticle[]
+  wpPublishJobs           WordPressPublishJob[]
 
   @@index([authorId])
   @@index([status])
@@ -119,8 +116,9 @@ model Comment {
   @@map("comments")
 }
 
-model ArticleLike {
+model ArticleRating {
   id        String   @id @default(cuid())
+  score     Int      @default(0)
   createdAt DateTime @default(now())
   userId    String
   articleId String
@@ -129,7 +127,7 @@ model ArticleLike {
 
   @@unique([userId, articleId])
   @@index([articleId])
-  @@map("article_likes")
+  @@map("article_ratings")
 }
 
 model ArticleShare {
@@ -217,7 +215,7 @@ model Message {
 model UserStats {
   id             String   @id @default(cuid())
   totalReads     Int      @default(0)
-  totalLikes     Int      @default(0)
+  averageRating  Float    @default(0.0)  
   totalFollowers Int      @default(0)
   totalFollowing Int      @default(0)
   articleCount   Int      @default(0)
@@ -291,23 +289,23 @@ model AuditLog {
 }
 
 model AdminDashboard {
-  id             String @id @default("singleton")
-  totalUsers     Int    @default(0)
-  totalArticles  Int    @default(0)
-  totalRevenue   Float  @default(0)
-  activeSessions Int    @default(0)
-  premiumUsers   Int    @default(0)
+  id             String   @id @default("singleton")
+  totalUsers     Int      @default(0)
+  totalArticles  Int      @default(0)
+  totalRevenue   Float    @default(0)
+  activeSessions Int      @default(0)
+  premiumUsers   Int      @default(0)
   updatedAt      DateTime @updatedAt
 
   @@map("admin_dashboard")
 }
 
 model AiConfig {
-  id            String  @id @default("singleton")
-  modelName     String  @default("gpt-4")
-  apiUsageLimit Int     @default(1000)
-  currentUsage  Int     @default(0)
-  isEnabled     Boolean @default(true)
+  id            String   @id @default("singleton")
+  modelName     String   @default("gpt-4")
+  apiUsageLimit Int      @default(1000)
+  currentUsage  Int      @default(0)
+  isEnabled     Boolean  @default(true)
   updatedAt     DateTime @updatedAt
 
   @@map("ai_config")
@@ -326,13 +324,13 @@ model TrendingTopic {
 model Offer {
   id               String         @id @default(cuid())
   name             String
-  price            Float          @default(0)
   discount_percent Int
   stripe_coupon_id String?
   is_active        Boolean        @default(true)
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
   features         Json?
+  price            Float          @default(0)
   subscriptions    Subscription[]
 
   @@map("offers")
@@ -347,8 +345,8 @@ model Subscription {
   status                 String    @default("active")
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
-  user                   User      @relation(fields: [userId], references: [id])
   offer                  Offer?    @relation(fields: [offerId], references: [id])
+  user                   User      @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([status])
@@ -356,7 +354,7 @@ model Subscription {
 }
 
 model ai_article_logs {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   userPrompt        String
   keywordsPresented String[]
   keywordsSelected  String[]
@@ -365,14 +363,21 @@ model ai_article_logs {
   articleTitle      String
   articleContent    String
   wordCount         Int
-  savedToDraftId    String?  @unique
-  generatedAt       DateTime @default(now())
+  linkedArticleId   String?   @unique @map("savedToDraftId")
+ 
+  aiInputTokens     Int       @default(0)
+  aiOutputTokens    Int       @default(0)
+ 
+   deletedAt         DateTime?
+ 
+  generatedAt       DateTime  @default(now())
   authorId          String
-  users             User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  articles          Article? @relation(fields: [savedToDraftId], references: [id])
-
+  users             User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  articles          Article?  @relation(fields: [linkedArticleId], references: [id])
+ 
   @@index([authorId])
   @@index([generatedAt])
+  @@index([deletedAt])
 }
 
 model ScrapingSource {
@@ -391,30 +396,30 @@ model ScrapingSource {
 }
 
 model ScrapingSession {
-  id                    String    @id @default(cuid())
-  startedAt             DateTime  @default(now())
+  id                    String                 @id @default(cuid())
+  startedAt             DateTime               @default(now())
   completedAt           DateTime?
-  status                String    @default("running")
+  status                String                 @default("running")
   lastScrapeDate        DateTime?
-  totalSources          Int       @default(0)
-  totalUrlsFound        Int       @default(0)
-  successCount          Int       @default(0)
-  duplicateCount        Int       @default(0)
-  failureCount          Int       @default(0)
-  enrichedCount         Int       @default(0)
-  enrichmentFailedCount Int       @default(0)
-  keywordsCoveredCount  Int       @default(0)
-  keywordsEmptyCount    Int       @default(0)
-  aiInputTokens         Int       @default(0)
-  aiOutputTokens        Int       @default(0)
+  totalSources          Int                    @default(0)
+  totalUrlsFound        Int                    @default(0)
+  successCount          Int                    @default(0)
+  duplicateCount        Int                    @default(0)
+  failureCount          Int                    @default(0)
+  enrichedCount         Int                    @default(0)
+  enrichmentFailedCount Int                    @default(0)
+  keywordsCoveredCount  Int                    @default(0)
+  keywordsEmptyCount    Int                    @default(0)
+  aiInputTokens         Int                    @default(0)
+  aiOutputTokens        Int                    @default(0)
   successRate           Float?
   durationMinutes       Float?
   reportData            String?
   reportSentAt          DateTime?
-  criticalErrors        Boolean   @default(false)
-  logs                  ScrapingLog[]
+  criticalErrors        Boolean                @default(false)
   keywordStats          KeywordScrapingStats[]
   scrapedArticles       ScrapedArticle[]
+  logs                  ScrapingLog[]
 
   @@index([startedAt])
   @@index([status])
@@ -470,44 +475,46 @@ model KeywordScrapingStats {
   successCount   Int             @default(0)
   duplicateCount Int             @default(0)
   failureCount   Int             @default(0)
+  createdAt      DateTime        @default(now())
   session        ScrapingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId])
+  @@index([sessionId, category])
   @@map("keyword_scraping_stats")
 }
+
 model WordPressConnection {
-  id          String   @id @default(cuid())
-  userId      String   @unique
+  id          String                @id @default(cuid())
+  userId      String                @unique
   siteUrl     String
   siteId      String
   accessToken String
   wpUsername  String?
   wpEmail     String?
-  connectedAt DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedAt DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   publishJobs WordPressPublishJob[]
 
   @@map("wordpress_connections")
 }
 
 model WordPressPublishJob {
-  id          String      @id @default(cuid())
-  articleId   String
-  userId      String
-  wpConnId    String
-  scheduledAt DateTime
-  status      WpJobStatus @default(PENDING)
-  wpPostId    String?
-  wpPostUrl   String?
-  draftUrl    String?
-  errorMsg    String?
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-
-  article      Article              @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wpConnection WordPressConnection  @relation(fields: [wpConnId],  references: [id], onDelete: Cascade)
+  id           String              @id @default(cuid())
+  articleId    String
+  userId       String
+  wpConnId     String
+  scheduledAt  DateTime
+  status       WpJobStatus         @default(PENDING)
+  wpPostId     String?
+  wpPostUrl    String?
+  draftUrl     String?
+  errorMsg     String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  article      Article             @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wpConnection WordPressConnection @relation(fields: [wpConnId], references: [id], onDelete: Cascade)
 
   @@index([status])
   @@index([scheduledAt])
@@ -520,10 +527,10 @@ enum Role {
 }
 
 enum ArticleStatus {
-  EDITING
   DRAFT
   PUBLISHED
   SCHEDULED
+  EDITING
 }
 
 enum ReportStatus {
@@ -541,12 +548,11 @@ enum NotificationType {
   SYSTEM
   NEW_ARTICLE
 }
+
 enum WpJobStatus {
-  PENDING      // job is waiting to be processed by the cron
-  IN_PROGRESS  // cron has picked it up and is calling WordPress API right now
-  PUBLISHED    // successfully published to WordPress
-  FAILED       // WordPress API call failed; draftUrl may have a fallback link
-  CANCELLED    // deliberately not published (e.g. the article failed to publish
-               //   on our own platform first, so WordPress is skipped to prevent
-               //   orphan content with no canonical source)
+  PENDING
+  IN_PROGRESS
+  PUBLISHED
+  FAILED
+  CANCELLED
 }

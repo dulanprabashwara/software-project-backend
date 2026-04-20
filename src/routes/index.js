@@ -17,7 +17,8 @@ const stripeRoutes = require("./stripe.routes");
 const scraperRoutes = require("./scraper.routes");
 const wordpressRoutes = require("./wordpress.routes");
 const searchRoutes       = require("./search.routes"); 
-
+ const homefeedRoutes = require("./homefeed.routes");
+const articleReadRoutes = require("./articleRead.routes");
 const router = Router();
 
 // ─── API Routes ─────────────────────────────
@@ -38,5 +39,7 @@ router.use("/stripe", stripeRoutes);
 router.use("/scraper", scraperRoutes);
 router.use("/wordpress",  wordpressRoutes);
 router.use("/search",     searchRoutes);  
+router.use("/homefeed", homefeedRoutes);
+router.use("/articleRead", articleReadRoutes);
 
 module.exports = router;

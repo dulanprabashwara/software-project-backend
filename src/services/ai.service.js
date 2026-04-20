@@ -10,9 +10,10 @@ const client = new OpenAI({
 });
 
 const MODELS = [
+  "openai/gpt-oss-120b:free",
+  "google/gemma-4-31b-it:free",
   "arcee-ai/trinity-large-preview:free",
   "nousresearch/hermes-3-llama-3.1-405b:free",
-  "google/gemma-4-31b-it:free",
   "meta-llama/llama-3.3-70b-instruct:free",
 ];
 
@@ -22,8 +23,8 @@ const LENGTH_CONFIG = {
   long:         { min: 2000, max: 9999,  label: "at least 2000 words" },
 };
 
+// ─── Session Cache ─────────────────────────────────────────────────────────────
 const sessionCache = new Map();
-
 setInterval(() => {
   const now = Date.now();
   for (const [id, s] of sessionCache.entries()) {
@@ -31,11 +32,15 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
+// ─── AI helpers ───────────────────────────────────────────────────────────────
+
 async function callAI(messages) {
   for (const model of MODELS) {
     try {
       const completion = await client.chat.completions.create({ model, messages });
-      return completion.choices[0].message.content;
+      const content = completion.choices[0].message.content;
+      const usage   = completion.usage || { prompt_tokens: 0, completion_tokens: 0 };
+      return { content, usage };
     } catch (err) {
       console.warn(`[AI] Model ${model} failed: ${err.message}`);
     }
@@ -65,6 +70,95 @@ function countWords(text) {
   return text.trim().split(/\s+/).filter((w) => w.length > 0).length;
 }
 
+// ─── SCRAPER REFERENCE CONTENT ────────────────────────────────────────────────
+// Fetches enriched scraped summaries for the keywords the user selected.
+// These are sent to the AI as optional reference material.
+//
+// ROTATION METHOD — user-specific, day-based:
+//   Each user gets a different set of reference articles even if they select
+//   the same keyword on the same day. The offset is calculated from:
+//     dayOfYear + hash of authorId + keyword position
+//
+//   This means:
+//   - Two users selecting the same keyword on the same day get DIFFERENT articles
+//   - The same user gets different articles on different days
+//   - All scraped summaries for a keyword are cycled through over time
+//   - No randomness — the selection is deterministic and repeatable
+
+const REFERENCE_ARTICLES_PER_KEYWORD = 2;
+
+// Simple numeric hash of a string — used to make per-user offset
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0; // convert to 32-bit int
+  }
+  return Math.abs(hash);
+}
+
+async function fetchReferenceContent(selectedKeywords, authorId) {
+  if (!selectedKeywords || selectedKeywords.length === 0) return [];
+
+  const today     = new Date();
+  const dayOfYear = Math.floor(
+    (today - new Date(today.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24)
+  );
+
+  // Per-user offset — different user ID produces a different base offset
+  const userOffset = authorId ? simpleHash(authorId) : 0;
+
+  const referenceItems = [];
+
+  for (const keyword of selectedKeywords) {
+    const articles = await prisma.scrapedArticle.findMany({
+      where: {
+        matchedKeywords: { has: keyword },
+        summary:         { not: null },
+      },
+      orderBy: { scrapedAt: "desc" },
+      select:  { id: true, title: true, summary: true },
+      take:    20,
+    });
+
+    if (articles.length === 0) continue;
+
+    // Combine day, user hash, and keyword position for the final offset
+    const keywordPos  = selectedKeywords.indexOf(keyword);
+    const finalOffset = (dayOfYear + userOffset + keywordPos * 7) % articles.length;
+
+    for (let i = 0; i < REFERENCE_ARTICLES_PER_KEYWORD; i++) {
+      const idx     = (finalOffset + i) % articles.length;
+      const article = articles[idx];
+      if (article?.summary) {
+        referenceItems.push({ keyword, title: article.title, summary: article.summary });
+      }
+    }
+  }
+
+  return referenceItems;
+}
+
+function buildReferenceBlock(referenceItems) {
+  if (referenceItems.length === 0) return "";
+
+  const lines = referenceItems.map((item, i) =>
+    `[REF ${i + 1}] Topic: ${item.keyword}\nTitle: ${item.title}\nSummary: ${item.summary}`
+  );
+
+  return (
+    `\n\nREFERENCE MATERIALS (background context from current web content):\n` +
+    `IMPORTANT RULES for using these references:\n` +
+    `- The user's idea, tone, and length instructions come FIRST — always\n` +
+    `- Only use a reference if it is clearly relevant to the user's topic\n` +
+    `- Use references for IDEAS and FACTS only — never copy wording\n` +
+    `- Rewrite every piece of information entirely in your own words\n` +
+    `- Do not follow the structure or paragraph order of any reference\n` +
+    `- The final article must read as fully original writing, not a summary of these sources\n\n` +
+    lines.join("\n\n")
+  );
+}
+
 // ─── ANALYZE ──────────────────────────────────────────────────────────────────
 
 async function analyzePrompt(userInput) {
@@ -88,17 +182,19 @@ async function analyzePrompt(userInput) {
     },
   ];
 
-  const raw      = await callAI(messages);
+  const { content: raw, usage } = await callAI(messages);
   const parsed   = parseAIJson(raw);
   const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 10) : [];
 
   const sessionId = uuidv4();
   sessionCache.set(sessionId, {
     userInput,
-    keywordsPresented:  keywords,
-    hasLengthInPrompt:  Boolean(parsed.hasArticleLengthInPrompt),
-    hasToneInPrompt:    Boolean(parsed.hasToneInPrompt),
-    createdAt:          Date.now(),
+    keywordsPresented:   keywords,
+    hasLengthInPrompt:   Boolean(parsed.hasArticleLengthInPrompt),
+    hasToneInPrompt:     Boolean(parsed.hasToneInPrompt),
+    createdAt:           Date.now(),
+    analyzeInputTokens:  usage.prompt_tokens     || 0,
+    analyzeOutputTokens: usage.completion_tokens || 0,
   });
 
   return {
@@ -123,23 +219,63 @@ async function generateArticle({ sessionId, userInput: directInput, selectedKeyw
   const keywordsSelected  = selectedKeywords ?? [];
   const lengthConfig      = LENGTH_CONFIG[articleLength] || LENGTH_CONFIG.short;
   const articleTone       = tone || "professional";
-  const subtopicsList     = keywordsSelected.length ? keywordsSelected.join(", ") : "none — generate based on user prompt alone";
+  const subtopicsList     = keywordsSelected.length
+    ? keywordsSelected.join(", ")
+    : "none — generate based on user prompt alone";
+
+  // Fetch per-user rotated reference content
+  const referenceItems = await fetchReferenceContent(keywordsSelected, authorId);
+  const referenceBlock = buildReferenceBlock(referenceItems);
 
   const buildMessages = (extra = "") => [
-    { role: "system", content: "You are an expert blog writer. Respond with ONLY valid JSON. No markdown, no extra text." },
-    { role: "user",   content: `Write a blog article:\nIdea: "${userInput}"\nSubtopics: ${subtopicsList}\nLength: ${lengthConfig.label}\nTone: ${articleTone}\n${extra}\n\nRespond ONLY with: {"title":"...","content":"..."}` },
+    {
+      role: "system",
+      content:
+        "You are an expert blog writer creating 100% original content.\n\n" +
+        "PRIORITY ORDER (follow strictly):\n" +
+        "1. USER'S IDEA — write about exactly what the user described\n" +
+        "2. LENGTH and TONE instructions — follow precisely\n" +
+        "3. REFERENCE MATERIALS — use only if relevant, only for facts/ideas, NEVER copy wording\n\n" +
+        "PLAGIARISM RULES (non-negotiable):\n" +
+        "- Write every sentence in your own unique voice\n" +
+        "- Never reproduce phrases or sentence structures from reference materials\n" +
+        "- Do not follow the structure of any reference article\n" +
+        "- All statistics, claims, and ideas from references must be rewritten completely\n" +
+        "- The article must pass plagiarism checks — it must read as original writing\n\n" +
+        "Respond with ONLY valid JSON. No markdown, no extra text.",
+    },
+    {
+      role: "user",
+      content:
+        `Write a blog article:\n` +
+        `Idea: "${userInput}"\n` +
+        `Subtopics: ${subtopicsList}\n` +
+        `Length: ${lengthConfig.label}\n` +
+        `Tone: ${articleTone}\n` +
+        `${extra}` +
+        `${referenceBlock}\n\n` +
+        `Respond ONLY with: {"title":"...","content":"..."}`,
+    },
   ];
 
-  let raw = await callAI(buildMessages());
-  let parsed = parseAIJson(raw);
+  let totalInputTokens  = session?.analyzeInputTokens  || 0;
+  let totalOutputTokens = session?.analyzeOutputTokens || 0;
+
+  const { content: raw, usage: u1 } = await callAI(buildMessages());
+  totalInputTokens  += u1.prompt_tokens     || 0;
+  totalOutputTokens += u1.completion_tokens || 0;
+
+  let parsed    = parseAIJson(raw);
   let wordCount = countWords(parsed.content);
 
   if (wordCount < lengthConfig.min || (articleLength !== "long" && wordCount > lengthConfig.max)) {
     const correction = wordCount < lengthConfig.min
-      ? `IMPORTANT: Too short (${wordCount} words). Must be at least ${lengthConfig.min} words.`
-      : `IMPORTANT: Too long (${wordCount} words). Must be under ${lengthConfig.max} words.`;
-    raw       = await callAI(buildMessages(correction));
-    parsed    = parseAIJson(raw);
+      ? `IMPORTANT: Too short (${wordCount} words). Must be at least ${lengthConfig.min} words.\n`
+      : `IMPORTANT: Too long (${wordCount} words). Must be under ${lengthConfig.max} words.\n`;
+    const { content: raw2, usage: u2 } = await callAI(buildMessages(correction));
+    totalInputTokens  += u2.prompt_tokens     || 0;
+    totalOutputTokens += u2.completion_tokens || 0;
+    parsed    = parseAIJson(raw2);
     wordCount = countWords(parsed.content);
   }
 
@@ -157,11 +293,13 @@ async function generateArticle({ sessionId, userInput: directInput, selectedKeyw
         articleTitle:      parsed.title,
         articleContent:    parsed.content,
         wordCount,
+        aiInputTokens:     totalInputTokens,
+        aiOutputTokens:    totalOutputTokens,
       },
     });
     logId = log.id;
   } catch (dbErr) {
-    console.error("[AI] Failed to save to AiArticleLog:", dbErr.message);
+    console.error("[AI] Failed to save to ai_article_logs:", dbErr.message);
   }
 
   return { title: parsed.title, content: parsed.content, wordCount, logId };
@@ -182,19 +320,53 @@ async function regenerateArticle({ sessionId, userInput: directInput, selectedKe
   const articleTone       = tone || "professional";
   const subtopicsList     = keywordsSelected.length ? keywordsSelected.join(", ") : "none";
 
+  const referenceItems = await fetchReferenceContent(keywordsSelected, authorId);
+  const referenceBlock = buildReferenceBlock(referenceItems);
+
   const buildMessages = (extra = "") => [
-    { role: "system", content: "You are an expert blog writer. Write a DIFFERENT version — new title, new angle, fresh structure. Respond with ONLY valid JSON." },
-    { role: "user",   content: `Write a FRESH, DIFFERENT article:\nIdea: "${userInput}"\nSubtopics: ${subtopicsList}\nLength: ${lengthConfig.label}\nTone: ${articleTone}\n${extra}\n\nRespond ONLY with: {"title":"...","content":"..."}` },
+    {
+      role: "system",
+      content:
+        "You are an expert blog writer creating 100% original content. Write a DIFFERENT version — new title, new angle, fresh structure.\n\n" +
+        "PRIORITY ORDER:\n" +
+        "1. USER'S IDEA — write about exactly what the user described\n" +
+        "2. LENGTH and TONE — follow precisely\n" +
+        "3. REFERENCE MATERIALS — use only if relevant, only for facts/ideas, NEVER copy wording\n\n" +
+        "PLAGIARISM RULES: Write every sentence in your own voice. Never reproduce phrasing from references. " +
+        "All content must be original. Respond with ONLY valid JSON.",
+    },
+    {
+      role: "user",
+      content:
+        `Write a FRESH, DIFFERENT article:\n` +
+        `Idea: "${userInput}"\n` +
+        `Subtopics: ${subtopicsList}\n` +
+        `Length: ${lengthConfig.label}\n` +
+        `Tone: ${articleTone}\n` +
+        `${extra}` +
+        `${referenceBlock}\n\n` +
+        `Respond ONLY with: {"title":"...","content":"..."}`,
+    },
   ];
 
-  let raw = await callAI(buildMessages());
-  let parsed = parseAIJson(raw);
+  let totalInputTokens  = 0;
+  let totalOutputTokens = 0;
+
+  const { content: raw, usage: u1 } = await callAI(buildMessages());
+  totalInputTokens  += u1.prompt_tokens     || 0;
+  totalOutputTokens += u1.completion_tokens || 0;
+
+  let parsed    = parseAIJson(raw);
   let wordCount = countWords(parsed.content);
 
   if (wordCount < lengthConfig.min || (articleLength !== "long" && wordCount > lengthConfig.max)) {
-    const correction = wordCount < lengthConfig.min ? `Too short (${wordCount}w). Expand to ${lengthConfig.min}+.` : `Too long (${wordCount}w). Cut to under ${lengthConfig.max}.`;
-    raw       = await callAI(buildMessages(correction));
-    parsed    = parseAIJson(raw);
+    const correction = wordCount < lengthConfig.min
+      ? `Too short (${wordCount}w). Expand to ${lengthConfig.min}+.\n`
+      : `Too long (${wordCount}w). Cut to under ${lengthConfig.max}.\n`;
+    const { content: raw2, usage: u2 } = await callAI(buildMessages(correction));
+    totalInputTokens  += u2.prompt_tokens     || 0;
+    totalOutputTokens += u2.completion_tokens || 0;
+    parsed    = parseAIJson(raw2);
     wordCount = countWords(parsed.content);
   }
 
@@ -212,11 +384,13 @@ async function regenerateArticle({ sessionId, userInput: directInput, selectedKe
         articleTitle:      parsed.title,
         articleContent:    parsed.content,
         wordCount,
+        aiInputTokens:     totalInputTokens,
+        aiOutputTokens:    totalOutputTokens,
       },
     });
     logId = log.id;
   } catch (dbErr) {
-    console.error("[AI] Failed to save regeneration to AiArticleLog:", dbErr.message);
+    console.error("[AI] Failed to save regeneration to ai_article_logs:", dbErr.message);
   }
 
   return { title: parsed.title, content: parsed.content, wordCount, logId };
@@ -227,17 +401,22 @@ async function regenerateArticle({ sessionId, userInput: directInput, selectedKe
 async function saveDraft({ logId, authorId }) {
   const log = await prisma.ai_article_logs.findUnique({ where: { id: logId } });
   if (!log) throw new Error("Article log not found. It may have expired. Please regenerate.");
+  if (log.authorId && log.authorId !== authorId) throw new Error("You can only save your own articles.");
 
-  if (log.authorId && log.authorId !== authorId) {
-    throw new Error("You can only save your own articles.");
-  }
-
-  if (log.savedToDraftId) {
-    const existingDraft = await prisma.article.findUnique({
-      where: { id: log.savedToDraftId },
+  if (log.linkedArticleId) {
+    const existingArticle = await prisma.article.findUnique({
+      where:   { id: log.linkedArticleId },
       include: { author: { select: { id: true, username: true, displayName: true, avatarUrl: true } } },
     });
-    return { draft: existingDraft, alreadySaved: true };
+    if (existingArticle?.status === "EDITING") {
+      const draft = await prisma.article.update({
+        where:   { id: existingArticle.id },
+        data:    { status: "DRAFT" },
+        include: { author: { select: { id: true, username: true, displayName: true, avatarUrl: true } } },
+      });
+      return { draft, alreadySaved: false };
+    }
+    return { draft: existingArticle, alreadySaved: true };
   }
 
   const slug        = await generateUniqueSlug(log.articleTitle);
@@ -260,41 +439,27 @@ async function saveDraft({ logId, authorId }) {
 
   await prisma.ai_article_logs.update({
     where: { id: logId },
-    data:  { savedToDraftId: draft.id },
+    data:  { linkedArticleId: draft.id },
   });
 
   return { draft, alreadySaved: false };
 }
 
-// ─── LOAD TO EDITOR ────────────────────────────────────────────────────────────
-// Called when user clicks "Edit" on an AI-generated article preview.
-//
-// Creates an Article row with status EDITING and isAiGenerated: true,
-// populated from the AiArticleLog data (title + content).
-// The write/create page calls GET /articles/user/editing on mount, which finds
-// the most recently updated EDITING article — our new one — and loads it into
-// TinyMCE. From that point the manual article workflow handles everything.
-//
-// If the article was already saved as a draft, we reuse that existing Article
-// row and just change its status back to EDITING instead of creating a duplicate.
+// ─── LOAD TO EDITOR ───────────────────────────────────────────────────────────
 
 async function loadToEditor({ logId, authorId }) {
   const log = await prisma.ai_article_logs.findUnique({ where: { id: logId } });
   if (!log) throw new Error("Article log not found.");
-  if (log.authorId && log.authorId !== authorId) {
-    throw new Error("You can only edit your own articles.");
-  }
+  if (log.authorId && log.authorId !== authorId) throw new Error("You can only edit your own articles.");
 
-  // If article was already saved as a draft, reuse that Article row
-  if (log.savedToDraftId) {
+  if (log.linkedArticleId) {
     const article = await prisma.article.update({
-      where: { id: log.savedToDraftId },
+      where: { id: log.linkedArticleId },
       data:  { status: "EDITING", updatedAt: new Date() },
     });
     return { articleId: article.id };
   }
 
-  // Otherwise create a fresh Article row with EDITING status
   const slug        = await generateUniqueSlug(log.articleTitle);
   const readingTime = calculateReadingTime(log.articleContent);
 
@@ -313,31 +478,81 @@ async function loadToEditor({ logId, authorId }) {
     },
   });
 
-  // Link the log to this article so save-draft later updates the same row
   await prisma.ai_article_logs.update({
     where: { id: logId },
-    data:  { savedToDraftId: article.id },
+    data:  { linkedArticleId: article.id },
   });
 
   return { articleId: article.id };
 }
 
+// ─── SOFT DELETE LOG ──────────────────────────────────────────────────────────
+// Sets deletedAt = now(). The article disappears from the list immediately.
+// It can be restored within 1 hour. After that it is permanently deleted
+// by the cleanup that runs at the start of every getArticleLogs call.
+
+async function softDeleteLog({ logId, authorId }) {
+  const log = await prisma.ai_article_logs.findUnique({ where: { id: logId } });
+  if (!log) throw new Error("Article not found.");
+  if (log.authorId !== authorId) throw new Error("You can only delete your own articles.");
+
+  await prisma.ai_article_logs.update({
+    where: { id: logId },
+    data:  { deletedAt: new Date() },
+  });
+}
+
+// ─── RESTORE LOG ──────────────────────────────────────────────────────────────
+// Clears deletedAt so the article reappears in the list.
+// Fails if more than 1 hour has passed (permanent cleanup may have run).
+
+async function restoreLog({ logId, authorId }) {
+  const log = await prisma.ai_article_logs.findUnique({ where: { id: logId } });
+  if (!log) throw new Error("Article not found. It may have been permanently deleted.");
+  if (log.authorId !== authorId) throw new Error("You can only restore your own articles.");
+  if (!log.deletedAt) throw new Error("This article is not deleted.");
+
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  if (log.deletedAt < oneHourAgo) {
+    throw new Error("Restore window has expired. This article has been permanently deleted.");
+  }
+
+  await prisma.ai_article_logs.update({
+    where: { id: logId },
+    data:  { deletedAt: null },
+  });
+}
+
 // ─── GET LOGS (list) ──────────────────────────────────────────────────────────
+// First permanently deletes any soft-deleted entries older than 1 hour.
+// Then returns only active (not soft-deleted) unsaved articles.
 
 async function getArticleLogs(authorId) {
+  // Permanent cleanup — delete entries that were soft-deleted more than 1 hour ago
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  await prisma.ai_article_logs.deleteMany({
+    where: {
+      authorId,
+      deletedAt: { not: null, lte: oneHourAgo },
+    },
+  }).catch((err) => console.error("[AI] Cleanup failed:", err.message));
+
   const logs = await prisma.ai_article_logs.findMany({
     where: {
       authorId,
-      savedToDraftId: null,
+      linkedArticleId: null,
+      deletedAt:       null,  // exclude soft-deleted entries
     },
     orderBy: { generatedAt: "desc" },
     select: {
-      id:            true,
-      articleTitle:  true,
-      generatedAt:   true,
-      wordCount:     true,
-      articleLength: true,
-      tone:          true,
+      id:             true,
+      articleTitle:   true,
+      generatedAt:    true,
+      wordCount:      true,
+      articleLength:  true,
+      tone:           true,
+      aiInputTokens:  true,
+      aiOutputTokens: true,
     },
   });
   return logs;
@@ -348,9 +563,7 @@ async function getArticleLogs(authorId) {
 async function getArticleLogById(id, authorId) {
   const log = await prisma.ai_article_logs.findUnique({ where: { id } });
   if (!log) throw new Error("Article not found.");
-  if (log.authorId && log.authorId !== authorId) {
-    throw new Error("You do not have permission to view this article.");
-  }
+  if (log.authorId && log.authorId !== authorId) throw new Error("You do not have permission to view this article.");
   return log;
 }
 
@@ -360,7 +573,8 @@ module.exports = {
   regenerateArticle,
   saveDraft,
   loadToEditor,
+  softDeleteLog,
+  restoreLog,
   getArticleLogs,
   getArticleLogById,
 };
-
