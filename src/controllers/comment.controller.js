@@ -1,4 +1,5 @@
 const prisma = require("../config/prisma");
+const { createNotification } = require("../services/notification.service");
 
 /**
  * @description Fetch all comments for a specific article
@@ -31,6 +32,17 @@ const createComment = async (req, res) => {
     // req.user is populated by your auth middleware
     const authorId = req.user.id; 
 
+    // 1. Fetch the article to get the authorId (who to notify) and slug (for the link)
+    const article = await prisma.article.findUnique({
+      where: { id: articleId },
+      select: { authorId: true, slug: true }
+    });
+
+    if (!article) {
+      return res.status(404).json({ success: false, message: "Article not found" });
+    }
+
+    // 2. Create the comment in the database
     const newComment = await prisma.comment.create({
       data: {
         content,
@@ -43,6 +55,16 @@ const createComment = async (req, res) => {
           select: { id: true, displayName: true }
         }
       }
+    });
+
+    // 3. Trigger: New Comment Notification
+    await createNotification(req.app, {
+      type: "COMMENT",
+      title: "New Comment",
+      message: `${req.user.displayName || req.user.username} commented on your article.`,
+      link: `/article/${article.slug}#comments`,
+      userId: article.authorId, // Notify the article's author
+      actorId: req.user.id,     // The person who wrote the comment
     });
 
     res.status(201).json(newComment);
@@ -60,6 +82,17 @@ const rateArticle = async (req, res) => {
     const { rating } = req.body;
     const userId = req.user.id;
 
+    // 1. Fetch the article to get data for the notification
+    const article = await prisma.article.findUnique({
+      where: { id: articleId },
+      select: { authorId: true, slug: true }
+    });
+
+    if (!article) {
+      return res.status(404).json({ success: false, message: "Article not found" });
+    }
+
+    // 2. Save the rating
     const userRating = await prisma.articleRating.upsert({
       where: {
         userId_articleId: { 
@@ -77,6 +110,16 @@ const rateArticle = async (req, res) => {
         articleId: articleId, 
         score: rating 
       }
+    });
+
+    // 3. Trigger: New Rating Notification
+    await createNotification(req.app, {
+      type: "LIKE", 
+      title: "New Rating",
+      message: `${req.user.displayName || req.user.username} rated your article ${rating} stars.`,
+      link: `/article/${article.slug}`,
+      userId: article.authorId, // Notify the article's author
+      actorId: req.user.id,     // The person who left the rating
     });
 
     res.status(200).json({ success: true, data: userRating });

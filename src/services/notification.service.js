@@ -1,84 +1,32 @@
 const prisma = require("../config/prisma");
 
 /**
- * Create a notification.
+ * Creates a notification and emits it to the user's existing socket room.
+ * @param {import('express').Application} app - The express app (to access io)
+ * @param {Object} data - Notification data
  */
-const createNotification = async ({
-  userId,
-  type,
-  title,
-  message,
-  link,
-  actorId,
-}) => {
-  const notification = await prisma.notification.create({
-    data: {
-      userId,
-      type,
-      title,
-      message,
-      link: link || null,
-      actorId: actorId || null,
-    },
-  });
+const createNotification = async (app, { type, title, message, link, userId, actorId }) => {
+  try {
+    // Don't notify the user of their own actions
+    if (userId === actorId) return null;
 
-  return notification;
-};
+    // 1. Save to Database
+    const notification = await prisma.notification.create({
+      data: { type, title, message, link, userId, actorId },
+    });
 
-/**
- * Get user's notifications with pagination.
- */
-const getUserNotifications = async (userId, page = 1, limit = 20) => {
-  const skip = (page - 1) * limit;
+    // 2. Emit instantly via Socket.io using YOUR exact room syntax
+    const io = app.get("io");
+    if (io) {
+      io.to(`user:${userId}`).emit("notification:receive", notification);
+    }
 
-  const [notifications, total, unreadCount] = await Promise.all([
-    prisma.notification.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-      skip,
-      take: limit,
-    }),
-    prisma.notification.count({ where: { userId } }),
-    prisma.notification.count({ where: { userId, isRead: false } }),
-  ]);
-
-  return { notifications, total, unreadCount };
-};
-
-/**
- * Mark notification(s) as read.
- */
-const markAsRead = async (userId, notificationIds = null) => {
-  const where = { userId };
-  if (notificationIds) {
-    where.id = { in: notificationIds };
+    return notification;
+  } catch (error) {
+    console.error("Failed to create notification:", error);
+    // Return null instead of throwing so it doesn't break the main route logic
+    return null; 
   }
-
-  await prisma.notification.updateMany({
-    where,
-    data: { isRead: true },
-  });
 };
 
-/**
- * Delete old notifications (older than 30 days).
- */
-const cleanupOldNotifications = async () => {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-
-  const result = await prisma.notification.deleteMany({
-    where: {
-      createdAt: { lt: thirtyDaysAgo },
-      isRead: true,
-    },
-  });
-
-  return { deletedCount: result.count };
-};
-
-module.exports = {
-  createNotification,
-  getUserNotifications,
-  markAsRead,
-  cleanupOldNotifications,
-};
+module.exports = { createNotification };
