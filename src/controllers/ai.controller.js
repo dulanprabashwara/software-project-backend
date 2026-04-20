@@ -11,8 +11,7 @@ const analyzePrompt = asyncHandler(async (req, res) => {
 
 const generateArticle = asyncHandler(async (req, res) => {
   const { sessionId, userInput, selectedKeywords, articleLength, tone } = req.body;
-  if (!userInput?.trim() && !sessionId)
-    throw ApiError.badRequest("userInput or sessionId is required.");
+  if (!userInput?.trim() && !sessionId) throw ApiError.badRequest("userInput or sessionId is required.");
   const result = await aiService.generateArticle({
     sessionId, userInput, selectedKeywords, articleLength, tone,
     authorId: req.user.id,
@@ -22,8 +21,7 @@ const generateArticle = asyncHandler(async (req, res) => {
 
 const regenerateArticle = asyncHandler(async (req, res) => {
   const { sessionId, userInput, selectedKeywords, articleLength, tone } = req.body;
-  if (!userInput?.trim() && !sessionId)
-    throw ApiError.badRequest("userInput or sessionId is required.");
+  if (!userInput?.trim() && !sessionId) throw ApiError.badRequest("userInput or sessionId is required.");
   const result = await aiService.regenerateArticle({
     sessionId, userInput, selectedKeywords, articleLength, tone,
     authorId: req.user.id,
@@ -34,38 +32,45 @@ const regenerateArticle = asyncHandler(async (req, res) => {
 const saveDraft = asyncHandler(async (req, res) => {
   const { logId } = req.body;
   if (!logId) throw ApiError.badRequest("logId is required.");
-  const { draft, alreadySaved } = await aiService.saveDraft({
-    logId,
-    authorId: req.user.id,
-  });
+  const { draft, alreadySaved } = await aiService.saveDraft({ logId, authorId: req.user.id });
   res.status(alreadySaved ? 200 : 201).json({
-    success: true,
-    alreadySaved,
-    message: alreadySaved
-      ? "This article was already saved to drafts."
-      : "Article saved to drafts successfully.",
+    success: true, alreadySaved,
+    message: alreadySaved ? "This article was already saved to drafts." : "Article saved to drafts successfully.",
     draft,
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/ai/load-to-editor
-// Called when user clicks "Edit" on an AI-generated article preview.
-// Creates an Article with status EDITING and isAiGenerated: true from the log.
-// Returns { articleId } — frontend navigates to /write/create.
-// The write/create page calls GET /articles/user/editing on mount, finds this
-// article (most recently updated EDITING), and loads it into TinyMCE.
-// ─────────────────────────────────────────────────────────────────────────────
 const loadToEditor = asyncHandler(async (req, res) => {
   const { logId } = req.body;
   if (!logId) throw ApiError.badRequest("logId is required.");
-
-  const { articleId } = await aiService.loadToEditor({
-    logId,
-    authorId: req.user.id,
-  });
-
+  const { articleId } = await aiService.loadToEditor({ logId, authorId: req.user.id });
   res.status(200).json({ success: true, articleId });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /api/ai/logs/:id
+// Soft-deletes an article log. Sets deletedAt = now().
+// The article disappears from the user's list immediately.
+// The user can restore it within 1 hour via POST /api/ai/logs/:id/restore.
+// After 1 hour, the permanent cleanup in getArticleLogs removes it forever.
+// ─────────────────────────────────────────────────────────────────────────────
+const deleteLog = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!id) throw ApiError.badRequest("Article id is required.");
+  await aiService.softDeleteLog({ logId: id, authorId: req.user.id });
+  res.status(200).json({ success: true, message: "Article deleted. You can restore it within 1 hour." });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/ai/logs/:id/restore
+// Restores a soft-deleted article log. Clears deletedAt.
+// Fails if the 1-hour restore window has expired.
+// ─────────────────────────────────────────────────────────────────────────────
+const restoreLog = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!id) throw ApiError.badRequest("Article id is required.");
+  await aiService.restoreLog({ logId: id, authorId: req.user.id });
+  res.status(200).json({ success: true, message: "Article restored successfully." });
 });
 
 const getArticleLogs = asyncHandler(async (req, res) => {
@@ -81,12 +86,8 @@ const getArticleLogById = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
-  analyzePrompt,
-  generateArticle,
-  regenerateArticle,
-  saveDraft,
-  loadToEditor,
-  getArticleLogs,
-  getArticleLogById,
+  analyzePrompt, generateArticle, regenerateArticle,
+  saveDraft, loadToEditor,
+  deleteLog, restoreLog,
+  getArticleLogs, getArticleLogById,
 };
-

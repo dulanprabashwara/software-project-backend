@@ -351,7 +351,7 @@ model Subscription {
 }
 
 model ai_article_logs {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   userPrompt        String
   keywordsPresented String[]
   keywordsSelected  String[]
@@ -360,14 +360,21 @@ model ai_article_logs {
   articleTitle      String
   articleContent    String
   wordCount         Int
-  savedToDraftId    String?  @unique
-  generatedAt       DateTime @default(now())
+  linkedArticleId   String?   @unique @map("savedToDraftId")
+ 
+  aiInputTokens     Int       @default(0)
+  aiOutputTokens    Int       @default(0)
+ 
+   deletedAt         DateTime?
+ 
+  generatedAt       DateTime  @default(now())
   authorId          String
-  users             User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  articles          Article? @relation(fields: [savedToDraftId], references: [id])
-
+  users             User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  articles          Article?  @relation(fields: [linkedArticleId], references: [id])
+ 
   @@index([authorId])
   @@index([generatedAt])
+  @@index([deletedAt])
 }
 
 model ScrapingSource {
