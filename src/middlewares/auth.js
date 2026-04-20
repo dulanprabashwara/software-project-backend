@@ -5,10 +5,9 @@ const prisma = require("../config/prisma");
  * @function authenticate
  * @description
  * Express middleware to authenticate inbound requests using Firebase ID tokens.
- * WHY: We must verify the cryptographic signature of the incoming JWT token against Firebase 
- * to prove the user's identity before interacting with our own Postgres database. 
- * This protects against forged requests and sets the security boundary.
- * 
+ * WHY: verify the JWT token against Firebase
+ * to prove the user's identity before interacting with our own Postgres database.
+ *
  * @param {Object} req - Express request object. Expects `Authorization: Bearer <token>` in headers.
  * @param {Object} res - Express response object.
  * @param {Function} next - Express next middleware function.
@@ -65,7 +64,7 @@ const authenticate = async (req, res, next) => {
   } catch (error) {
     console.error("Authentication/Database error:", error.message);
 
-    // If the error comes from Firebase Auth verifyIdToken (usually starts with 'auth/')
+    // If the error comes from Firebase Auth verifyIdToken (usually starts with 'auth/'), if the token is invalid or expired
     if (
       error.code &&
       typeof error.code === "string" &&
@@ -97,10 +96,8 @@ const authenticate = async (req, res, next) => {
  * @function authorize
  * @description
  * Express middleware to authorize users based on internal roles.
- * WHY: Prevents privilege escalation by ensuring that only users with specific roles 
- * (like 'ADMIN') can access sensitive endpoints (like deleting articles globally).
  * Must be executed AFTER the `authenticate` middleware to ensure `req.user` is present.
- * 
+ *
  * @param {...string} roles - An array of allowed role strings (e.g., 'ADMIN', 'USER').
  * @returns {Function} Express middleware function checking for role inclusion. Returns 403 on denial.
  */
@@ -128,9 +125,7 @@ const authorize = (...roles) => {
  * @function requirePremium
  * @description
  * Express middleware to restrict access to premium-only features.
- * WHY: Enforces the monetization strategy by blocking standard users from accessing 
- * payload-heavy or exclusive endpoints (like advanced analytics). ADMIns naturally bypass.
- * 
+ *
  * @param {Object} req - Express request object. Expects `req.user` to be populated.
  * @param {Object} res - Express response object.
  * @param {Function} next - Express next middleware function.
@@ -158,10 +153,9 @@ const requirePremium = (req, res, next) => {
  * @function optionalAuth
  * @description
  * Express middleware for endpoints that behave differently depending on auth state.
- * WHY: Some public endpoints (like reading an article) need to know if the viewer is 
- * authenticated (to register read history or highlight likes), but shouldn't block 
+ * WHY: Some public endpoints need to know if the viewer is authenticated , but shouldn't block
  * anonymous/public viewers if no token is provided.
- * 
+ *
  * @param {Object} req - Express request object.
  * @param {Object} res - Express response object.
  * @param {Function} next - Express next middleware function.
