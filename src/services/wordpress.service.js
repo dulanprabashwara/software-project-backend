@@ -352,6 +352,15 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
   //  PATH A: Publish immediately
   // ══════════════════════════════════════════════════════════════════════
   if (!scheduledAt) {
+    // Article must be PUBLISHED on our platform before pushing to WordPress
+    if (article.status !== "PUBLISHED") {
+      return {
+        success:       false,
+        failureReason: "not_published",
+        message:       "Article has not been published on Easy Blogger yet. WordPress publish skipped.",
+      };
+    }
+
     try {
       const { wpPostId, wpPostUrl } = await pushArticleToWordPress(
         article,
