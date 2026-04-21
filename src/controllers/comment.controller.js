@@ -28,47 +28,40 @@ const getComments = async (req, res) => {
 const createComment = async (req, res) => {
   try {
     const { articleId, content, parentId } = req.body;
-    
-    // req.user is populated by your auth middleware
     const authorId = req.user.id; 
 
-    // 1. Fetch the article to get the authorId (who to notify) and slug (for the link)
+    // 1. Fetch the article
     const article = await prisma.article.findUnique({
       where: { id: articleId },
-      select: { authorId: true, slug: true }
+      select: { authorId: true, slug: true, id: true }
     });
 
-    if (!article) {
-      return res.status(404).json({ success: false, message: "Article not found" });
-    }
+    if (!article) return res.status(404).json({ success: false, message: "Article not found" });
 
-    // 2. Create the comment in the database
+    // 2. Create the comment
     const newComment = await prisma.comment.create({
-      data: {
-        content,
-        articleId,
-        authorId,
-        parentId: parentId || null,
-      },
-      include: {
-        author: {
-          select: { id: true, displayName: true }
-        }
-      }
+      data: { content, articleId, authorId, parentId: parentId || null },
+      include: { author: { select: { id: true, displayName: true } } }
     });
 
-    // 3. Trigger: New Comment Notification
-    await createNotification(req.app, {
+    // --- DEBUG LOGS ---
+    console.log("🔔 ATTEMPTING NOTIFICATION");
+    console.log("Dest (Author):", article.authorId);
+    console.log("Source (You):", req.user.id);
+
+    // 3. Trigger Notification
+    const notifResult = await createNotification(req.app, {
       type: "COMMENT",
-      title: "New Comment",
-      message: `${req.user.displayName || req.user.username} commented on your article.`,
-      link: `/article/${article.slug}#comments`,
-      userId: article.authorId, // Notify the article's author
-      actorId: req.user.id,     // The person who wrote the comment
+      destUserId: article.authorId, 
+      sourceUserId: req.user.id,    
+      sourceArticleId: article.id   
     });
+
+    console.log("✅ NOTIFICATION SERVICE FINISHED. Result:", notifResult ? "Saved" : "Ignored/Failed");
 
     res.status(201).json(newComment);
   } catch (error) {
+    console.error("CRASH IN CONTROLLER:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

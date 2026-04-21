@@ -1,30 +1,34 @@
 const prisma = require("../config/prisma");
 
-/**
- * Creates a notification and emits it to the user's existing socket room.
- * @param {import('express').Application} app - The express app (to access io)
- * @param {Object} data - Notification data
- */
-const createNotification = async (app, { type, title, message, link, userId, actorId }) => {
+const createNotification = async (app, { type, destUserId, sourceUserId, sourceArticleId }) => {
   try {
     // Don't notify the user of their own actions
-    if (userId === actorId) return null;
+    if (destUserId === sourceUserId) return null;
 
-    // 1. Save to Database
+    // 1. Save to Database using ONLY your schema's fields
     const notification = await prisma.notification.create({
-      data: { type, title, message, link, userId, actorId },
+      data: { 
+        type, 
+        destUserId,
+        sourceUserId,
+        sourceArticleId
+      },
+      include: {
+        // Fetch the related data so the frontend can build the message
+        sourceUser: { select: { username: true, displayName: true, avatarUrl: true } },
+        sourceArticle: { select: { title: true, slug: true } }
+      }
     });
 
-    // 2. Emit instantly via Socket.io using YOUR exact room syntax
+    // 2. Emit instantly via Socket.io
     const io = app.get("io");
     if (io) {
-      io.to(`user:${userId}`).emit("notification:receive", notification);
+      io.to(`user:${destUserId}`).emit("notification:receive", notification);
     }
 
     return notification;
   } catch (error) {
-    console.error("Failed to create notification:", error);
-    // Return null instead of throwing so it doesn't break the main route logic
+    console.error("❌ Failed to save notification:", error.message);
     return null; 
   }
 };

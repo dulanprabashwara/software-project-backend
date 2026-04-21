@@ -1,38 +1,43 @@
 const prisma = require("../config/prisma");
-const asyncHandler = require("../utils/asyncHandler");
-const { sendSuccess } = require("../utils/response");
 
-// GET /api/notifications
-const getNotifications = asyncHandler(async (req, res) => {
-  const userId = req.user.id; // From authenticate middleware
+exports.getNotifications = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
 
-  const notifications = await prisma.notification.findMany({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-    include: {
-      // We include the actor (the person who followed/commented)
-      // Article ratings are anonymous, so actorId might be null there.
-      user: {
-        select: { displayName: true, avatarUrl: true }
+    const notifications = await prisma.notification.findMany({
+      where: { destUserId: userId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      include: {
+        // Fetch related data for dynamic frontend rendering
+        sourceUser: { select: { username: true, displayName: true, avatarUrl: true } },
+        sourceArticle: { select: { title: true, id: true } }
       }
-    },
-    take: 20 // Limit to last 20
-  });
+    });
 
-  sendSuccess(res, { data: notifications });
-});
+    res.status(200).json({ success: true, data: notifications });
+  } catch (error) {
+    next(error);
+  }
+};
 
-// PATCH /api/notifications/:id/read
-const markAsRead = asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const userId = req.user.id;
+// Function name matches what the router will call
+exports.markAsRead = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { notificationId } = req.body;
 
-  const notification = await prisma.notification.update({
-    where: { id, userId }, // Ensure user owns the notification
-    data: { isRead: true }
-  });
-
-  sendSuccess(res, { data: notification });
-});
-
-module.exports = { getNotifications, markAsRead };
+    if (notificationId) {
+      await prisma.notification.deleteMany({
+        where: { id: notificationId, destUserId: userId },
+      });
+    } else {
+      await prisma.notification.deleteMany({
+        where: { destUserId: userId },
+      });
+    }
+    res.status(200).json({ success: true, message: "Deleted" });
+  } catch (error) {
+    next(error);
+  }
+};

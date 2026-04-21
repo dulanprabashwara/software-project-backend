@@ -12,6 +12,6 @@ router.use(authenticate);
 router.get("/", notificationController.getNotifications);
 
 // PATCH /api/notifications/mark-read
-router.patch("/mark-read", notificationController.markAsRead);
+router.post("/mark-read", notificationController.markAsRead);
 
 module.exports = router;
