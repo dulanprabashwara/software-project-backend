@@ -8,44 +8,44 @@ datasource db {
 }
 
 model User {
-  id                  String                @id @default(cuid())
-  firebaseUid         String                @unique
-  email               String                @unique
-  username            String                @unique
-  displayName         String?
-  bio                 String?
-  avatarUrl           String?
-  role                Role                  @default(USER)
-  isPremium           Boolean               @default(false)
-  linkedInAccountId   String?
-  wordpressAccountId  String?
-  isOnline            Boolean               @default(false)
-  lastSeen            DateTime              @default(now())
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
-  stripeCustomerId    String?               @unique
-  ai_article_logs     ai_article_logs[]
-  rating              ArticleRating[]
-  shares              ArticleShare[]
-  articles            Article[]
-  auditLogs           AuditLog[]
-  bansIssued          BannedUser[]          @relation("BannedBy")
-  bannedRecord        BannedUser?           @relation("BannedUser")
-  comments            Comment[]
-  following           Follow[]              @relation("Followers")
-  followers           Follow[]              @relation("Following")
-  receivedMessages    Message[]             @relation("ReceivedMessages")
-  sentMessages        Message[]             @relation("SentMessages")
-  readHistory         ReadHistory[]
-  reportedArticles    ReportedArticle[]     @relation("Reporter")
-  savedArticles       SavedArticle[]
-  stories             Story[]
-  subscriptions       Subscription[]
-  stats               UserStats?
-  wordpressConnection WordPressConnection?
-  wpPublishJobs       WordPressPublishJob[]
-  notifications          Notification[]    @relation("NotificationDest")
-  notificationsTriggered Notification[]    @relation("NotificationSource")
+  id                     String                @id @default(cuid())
+  firebaseUid            String                @unique
+  email                  String                @unique
+  username               String                @unique
+  displayName            String?
+  bio                    String?
+  avatarUrl              String?
+  role                   Role                  @default(USER)
+  isPremium              Boolean               @default(false)
+  linkedInAccountId      String?
+  wordpressAccountId     String?
+  isOnline               Boolean               @default(false)
+  lastSeen               DateTime              @default(now())
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  stripeCustomerId       String?               @unique
+  ai_article_logs        ai_article_logs[]
+  rating                 ArticleRating[]
+  shares                 ArticleShare[]
+  articles               Article[]
+  auditLogs              AuditLog[]
+  bansIssued             BannedUser[]          @relation("BannedBy")
+  bannedRecord           BannedUser?           @relation("BannedUser")
+  comments               Comment[]
+  following              Follow[]              @relation("Followers")
+  followers              Follow[]              @relation("Following")
+  receivedMessages       Message[]             @relation("ReceivedMessages")
+  sentMessages           Message[]             @relation("SentMessages")
+  notifications          Notification[]        @relation("NotificationDest")
+  notificationsTriggered Notification[]        @relation("NotificationSource")
+  readHistory            ReadHistory[]
+  reportedArticles       ReportedArticle[]     @relation("Reporter")
+  savedArticles          SavedArticle[]
+  stories                Story[]
+  subscriptions          Subscription[]
+  stats                  UserStats?
+  wordpressConnection    WordPressConnection?
+  wpPublishJobs          WordPressPublishJob[]
 
   @@map("users")
 }
@@ -83,11 +83,11 @@ model Article {
   shares                  ArticleShare[]
   author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
   comments                Comment[]
+  notifications           Notification[]
   readHistory             ReadHistory[]
   reports                 ReportedArticle[]
   savedBy                 SavedArticle[]
   wpPublishJobs           WordPressPublishJob[]
-  notifications           Notification[]
 
   @@index([authorId])
   @@index([status])
@@ -226,16 +226,16 @@ model UserStats {
 }
 
 model Notification {
-  id              String             @id @default(cuid())
+  id              String           @id @default(cuid())
   type            NotificationType
   sourceUserId    String?
-  sourceUser      User?              @relation("NotificationSource", fields: [sourceUserId], references: [id], onDelete: Cascade)
   sourceArticleId String?
-  sourceArticle   Article?           @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
   destUserId      String
-  destUser        User               @relation("NotificationDest", fields: [destUserId], references: [id], onDelete: Cascade)
-  isRead          Boolean            @default(false)
-  createdAt       DateTime          @default(now())
+  isRead          Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  destUser        User             @relation("NotificationDest", fields: [destUserId], references: [id], onDelete: Cascade)
+  sourceArticle   Article?         @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
+  sourceUser      User?            @relation("NotificationSource", fields: [sourceUserId], references: [id], onDelete: Cascade)
 
   @@index([destUserId])
   @@index([createdAt])
@@ -328,8 +328,6 @@ model Offer {
   is_active        Boolean        @default(true)
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
-  features         Json?
-  price            Float          @default(0)
   subscriptions    Subscription[]
 
   @@map("offers")
