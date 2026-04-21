@@ -83,11 +83,11 @@ model Article {
   shares                  ArticleShare[]
   author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
   comments                Comment[]
+  notifications           Notification[]
   readHistory             ReadHistory[]
   reports                 ReportedArticle[]
   savedBy                 SavedArticle[]
   wpPublishJobs           WordPressPublishJob[]
-  notifications           Notification[]
 
   @@index([authorId])
   @@index([status])
@@ -228,14 +228,14 @@ model UserStats {
 model Notification {
   id              String           @id @default(cuid())
   type            NotificationType
-  sourceUserId    String?
-  sourceUser      User?            @relation("NotificationSource", fields: [sourceUserId], references: [id], onDelete: Cascade)
-  sourceArticleId String?
-  sourceArticle   Article?         @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
-  destUserId      String?
-  destUser        User?            @relation("NotificationDest", fields: [destUserId], references: [id], onDelete: Cascade)
   isRead          Boolean          @default(false)
   createdAt       DateTime         @default(now())
+  destUserId      String?
+  sourceArticleId String?
+  sourceUserId    String?
+  destUser        User?            @relation("NotificationDest", fields: [destUserId], references: [id], onDelete: Cascade)
+  sourceArticle   Article?         @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
+  sourceUser      User?            @relation("NotificationSource", fields: [sourceUserId], references: [id], onDelete: Cascade)
 
   @@index([destUserId])
   @@index([createdAt])
