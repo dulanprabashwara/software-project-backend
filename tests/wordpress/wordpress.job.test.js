@@ -2,10 +2,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Unit Tests — wordpress.job.js (cron processor) + getWordPressPublishStatus
 // ─────────────────────────────────────────────────────────────────────────────
-
 jest.mock("../../src/config/prisma", () => require("../mocks/prisma.mock.wp"));
 jest.mock("axios",                   () => require("../mocks/axios.mock"));
-jest.mock("node-cron", () => ({ schedule: jest.fn() }));
 
 const prisma = require("../../src/config/prisma");
 const axios  = require("axios");

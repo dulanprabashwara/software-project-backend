@@ -29,9 +29,16 @@ const {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-// Maximum articles to collect per source URL per session.
-// 7 articles × ~40 sources (20 categories × 2 URLs) = ~280 articles max per session.
+// Maximum articles to SAVE per source URL per session.
+// We fetch more candidates than this and filter out already-scraped URLs
+// before reaching this cap. See collectArticleLinks() for details.
 const MAX_ARTICLES_PER_SOURCE = 7;
+
+// How many candidate links to fetch from a source homepage per session.
+// Must be larger than MAX_ARTICLES_PER_SOURCE so we have room to skip
+// duplicates and still fill the quota with fresh articles.
+// e.g. fetch 25 candidates → deduplicate → keep up to 7 fresh ones.
+const CANDIDATE_LINKS_PER_SOURCE = 25;
 
 // Delay range between HTTP requests (milliseconds) — polite scraping
 const RATE_LIMIT_MIN_MS = 1500;
@@ -436,14 +443,33 @@ async function sendHTTPRequest(url, attempt = 1) {
 // ── collectArticleLinks ────────────────────────────────────────────────────
 // Scans the homepage HTML for links that look like individual article pages.
 // Filters out navigation/category/tag/author pages.
-// Returns up to MAX_ARTICLES_PER_SOURCE article URLs.
+//
+// SMART DEDUPLICATION STRATEGY (why this was changed):
+//   The original version returned the top N scored links from the homepage
+//   regardless of whether those URLs already existed in our database.
+//   News homepages show the same top articles week after week (pinned,
+//   "most popular", "editor's picks"), so the scraper kept fetching the same
+//   7 URLs every Saturday and all 7 would be rejected as duplicates —
+//   wasting HTTP requests and enrichment AI quota.
+//
+//   New approach:
+//   1. Collect CANDIDATE_LINKS_PER_SOURCE candidates (25 > 7) from the page.
+//   2. Bulk-check all of them against the database in ONE query.
+//   3. Put already-scraped URLs at the bottom of the priority list.
+//   4. Return up to MAX_ARTICLES_PER_SOURCE (7) — filling the quota with
+//      fresh URLs first, only falling back to already-scraped ones if there
+//      are fewer than 7 fresh articles available.
+//
+//   This way each Saturday's session grabs up to 7 genuinely new articles
+//   per source while still completing the quota if the source hasn't
+//   published enough new content.
 //
 // SECURITY: Added port check — article links pointing to non-standard ports
 // (e.g. :8000, :3000, :22) are skipped. Standard ports (80, 443, 8080, 8443)
 // and no-explicit-port (default) are allowed. This prevents a malicious site
 // from embedding links to internal services in its homepage HTML.
 
-function collectArticleLinks(html, sourceUrl) {
+async function collectArticleLinks(html, sourceUrl) {
   const $ = cheerio.load(html);
   const origin = new URL(sourceUrl).origin;
   const scored = [];
@@ -466,8 +492,6 @@ function collectArticleLinks(html, sourceUrl) {
     const cleanUrl = parsed.origin + parsed.pathname;
 
     // ── SECURITY: Block article links to non-standard ports ───────────────
-    // A legitimate article page is always on port 80, 443, or no explicit port.
-    // Links to custom ports likely point to development servers or internal services.
     const allowedArticlePorts = new Set(["", "80", "443", "8080", "8443"]);
     if (!allowedArticlePorts.has(parsed.port)) return;
     // ─────────────────────────────────────────────────────────────────────
@@ -491,18 +515,44 @@ function collectArticleLinks(html, sourceUrl) {
     scored.push({ url: cleanUrl, score });
   });
 
-  // Sort by score descending, deduplicate, take top N
-  const seen  = new Set();
-  const links = [];
+  // Step 1: Deduplicate within the page itself, take top CANDIDATE_LINKS_PER_SOURCE
+  const seen       = new Set();
+  const candidates = [];
   for (const item of scored.sort((a, b) => b.score - a.score)) {
     if (!seen.has(item.url)) {
       seen.add(item.url);
-      links.push(item.url);
-      if (links.length >= MAX_ARTICLES_PER_SOURCE) break;
+      candidates.push(item.url);
+      if (candidates.length >= CANDIDATE_LINKS_PER_SOURCE) break;
     }
   }
 
-  return links;
+  if (!candidates.length) return [];
+
+  // Step 2: Bulk-check which candidates already exist in our database.
+  // Single query with an IN clause — far cheaper than N individual lookups.
+  const existingRecords = await prisma.scrapedArticle.findMany({
+    where:  { sourceUrl: { in: candidates } },
+    select: { sourceUrl: true },
+  });
+  const alreadyScraped = new Set(existingRecords.map((r) => r.sourceUrl));
+
+  // Step 3: Partition into fresh (never scraped) and known (already in DB).
+  const fresh = candidates.filter((url) => !alreadyScraped.has(url));
+  const known = candidates.filter((url) =>  alreadyScraped.has(url));
+
+  // Step 4: Fill quota with fresh first, pad with known only if needed.
+  // This ensures new articles are always prioritised over revisiting old ones.
+  const selected = [
+    ...fresh.slice(0, MAX_ARTICLES_PER_SOURCE),
+    ...known.slice(0, Math.max(0, MAX_ARTICLES_PER_SOURCE - fresh.length)),
+  ].slice(0, MAX_ARTICLES_PER_SOURCE);
+
+  console.log(
+    `[Phase 2] Link selection: ${fresh.length} fresh + ${known.length} known → ` +
+    `returning ${selected.length} (${Math.min(fresh.length, MAX_ARTICLES_PER_SOURCE)} fresh)`
+  );
+
+  return selected;
 }
 
 // ── parseHTML ─────────────────────────────────────────────────────────────
@@ -880,7 +930,7 @@ async function scrapeSource(source, sessionId, counters) {
   }
 
   // ── Collect article links from homepage ──────────────────────────────
-  const articleLinks = collectArticleLinks(homepageHtml, sourceUrl);
+  const articleLinks = await collectArticleLinks(homepageHtml, sourceUrl);
   console.log(`[Phase 2] Found ${articleLinks.length} article links on "${name}"`);
 
   if (!articleLinks.length) {
@@ -999,6 +1049,42 @@ async function scrapeSource(source, sessionId, counters) {
 // MAIN ORCHESTRATOR — exported and called by scraper.job.js
 // ════════════════════════════════════════════════════════════════════════════
 
+// ── buildPartialReport ────────────────────────────────────────────────────
+// Builds a partial report from in-progress counters.
+// Used when a session is interrupted (SIGTERM/SIGINT) mid-scrape so we
+// can still email admins what was completed before shutdown.
+
+function buildPartialReport(sessionId, startTime, config, counters) {
+  const totalSuccess   = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
+  const totalDuplicate = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
+  const totalFailure   = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
+  const totalUrlsFound = Object.values(counters).reduce((s, c) => s + c.urlsProcessed,  0);
+  const durationMinutes = (Date.now() - startTime) / 60000;
+  const attempted      = totalSuccess + totalFailure;
+
+  return {
+    sessionId,
+    startedAt:            new Date(startTime).toISOString(),
+    completedAt:          new Date().toISOString(),
+    durationMinutes:      parseFloat(durationMinutes.toFixed(2)),
+    totalSources:         config?.totalSources || 0,
+    totalUrlsFound,
+    successCount:         totalSuccess,
+    duplicateCount:       totalDuplicate,
+    failureCount:         totalFailure,
+    successRate:          attempted > 0 ? parseFloat(((totalSuccess / attempted) * 100).toFixed(2)) : null,
+    enrichedCount:        0,
+    enrichmentFailed:     0,
+    keywordsWithContent:  [],
+    keywordsWithoutContent: [],
+    totalKeywordsCovered: 0,
+    totalKeywordsEmpty:   0,
+    aiTokenUsage:         { inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0 },
+    criticalErrors:       true,
+    isInterrupted:        true,  // flag for email template
+  };
+}
+
 async function runScrapingSession() {
   const { runEnrichmentStage } = require("./enrichment.service");
   const { sendCompletionNotification, sendErrorAlert } = require("./email.service");
@@ -1008,21 +1094,72 @@ async function runScrapingSession() {
   console.log(`${"═".repeat(60)}\n`);
 
   let sessionId  = null;
+  let config     = null;
+  let counters   = {};
   const startTime = Date.now();
-  try {
-  // ── DB WAKE-UP ──────────────────────────────────────────────────────────
-  await wakeUpDatabase();
 
-  // ── PHASE 1: INITIALIZATION ─────────────────────────────────────────────
-  const config = await loadConfiguration();
+  // ── Graceful shutdown handler ──────────────────────────────────────────────
+  // Registers SIGTERM and SIGINT listeners so that killing the terminal
+  // (Ctrl+C, server restart, nodemon reload) triggers a "canceled" status
+  // and a partial email instead of leaving the session stuck as "running".
+  //
+  // cleanup() is idempotent — multiple signals don't send multiple emails.
+
+  let cleanupCalled = false;
+
+  const cleanup = async (signal) => {
+    if (cleanupCalled) return;
+    cleanupCalled = true;
+
+    console.warn(`\n[Scraper] ⚠️  ${signal} received — canceling session...`);
+
+    if (!sessionId) {
+      console.warn("[Scraper] Session not yet created — no DB update needed.");
+      process.exit(0);
+    }
+
+    try {
+      await prisma.scrapingSession.update({
+        where: { id: sessionId },
+        data:  { status: "canceled", completedAt: new Date(), criticalErrors: true },
+      });
+
+      const partialReport = buildPartialReport(sessionId, startTime, config, counters);
+
+      // Send partial completion email
+      await sendCompletionNotification(partialReport).catch((e) =>
+        console.error("[Scraper] Interruption email failed:", e.message)
+      );
+
+      console.log(`[Scraper] Session ${sessionId} marked canceled. Partial report emailed.`);
+    } catch (e) {
+      console.error("[Scraper] Cleanup failed:", e.message);
+    }
+
+    // Give async operations time to finish before the process exits
+    setTimeout(() => process.exit(0), 2000);
+  };
+
+  // Attach once — will be removed when session completes normally
+  process.once("SIGTERM", () => cleanup("SIGTERM"));
+  process.once("SIGINT",  () => cleanup("SIGINT"));
+
+  try {
+    // ── DB WAKE-UP ────────────────────────────────────────────────────────
+    await wakeUpDatabase();
+
+    // ── PHASE 1: INITIALIZATION ───────────────────────────────────────────
+    config = await loadConfiguration();
     if (!config.totalSources) {
       console.log("[Scraper] No active sources. Session skipped.");
+      process.removeListener("SIGTERM", cleanup);
+      process.removeListener("SIGINT",  cleanup);
       return;
     }
 
     const lastScrapeDate = await getLastSuccessfulScrapeDate();
     sessionId = await createScrapingSessionLog(config.totalSources, lastScrapeDate);
-    const counters = initializeKeywordCounters(config.categories);
+    counters  = initializeKeywordCounters(config.categories);
 
     await logScrapingEvent(sessionId, {
       logType: "info",
@@ -1030,9 +1167,7 @@ async function runScrapingSession() {
       reason:  `Initialized: ${config.categories.length} categories, ${config.totalSources} sources`,
     });
 
-    // ── SECURITY: Log any sources blocked by SSRF checks in loadConfiguration ──
-    // Blocked sources are logged here (after session creation) so they appear
-    // in the session log and are visible in the admin session detail view.
+    // ── SECURITY: Log blocked sources ─────────────────────────────────────
     if (config.blockedSources && config.blockedSources.length > 0) {
       for (const blocked of config.blockedSources) {
         await logScrapingEvent(sessionId, {
@@ -1045,9 +1180,8 @@ async function runScrapingSession() {
       }
       console.warn(`[Phase 1] 🔒 ${config.blockedSources.length} source(s) blocked — see session logs`);
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
-    // ── PHASE 2: SCRAPING ───────────────────────────────────────────────
+    // ── PHASE 2: SCRAPING ─────────────────────────────────────────────────
 
     for (const category of config.categories) {
       const sources = config.sourcesByCategory[category];
@@ -1057,33 +1191,33 @@ async function runScrapingSession() {
         await scrapeSource(source, sessionId, counters);
       }
 
-      // Save per-category stats after all sources in this category done
       await saveKeywordScrapingStats(sessionId, category, counters);
     }
 
-    // Total counts
-    const totalSuccess  = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
+    const totalSuccess   = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
     const totalDuplicate = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
-    const totalFailure  = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
-    const totalUrlsFound = Object.values(counters).reduce((s, c) => s + c.urlsProcessed, 0);
+    const totalFailure   = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
+    const totalUrlsFound = Object.values(counters).reduce((s, c) => s + c.urlsProcessed,  0);
 
     console.log(`\n[Phase 2] Complete: ✅${totalSuccess} saved | ♻️${totalDuplicate} dupes | ❌${totalFailure} failed`);
 
-    // Update session with Phase 2 counts
     await prisma.scrapingSession.update({
       where: { id: sessionId },
       data: {
         totalUrlsFound,
-        successCount:  totalSuccess,
+        successCount:   totalSuccess,
         duplicateCount: totalDuplicate,
-        failureCount:  totalFailure,
+        failureCount:   totalFailure,
       },
     });
 
-    // ── PHASE 3: ENRICHMENT + REPORTING ────────────────────────────────
+    // ── PHASE 3: ENRICHMENT + REPORTING ──────────────────────────────────
 
-    // AI enrichment — classify + summarize all newly scraped articles
-    let enrichmentStats = { keywordsWithContent: [], keywordsWithoutContent: [], tokenUsage: { inputTokens: 0, outputTokens: 0 } };
+    let enrichmentStats = {
+      keywordsWithContent:    [],
+      keywordsWithoutContent: [],
+      tokenUsage: { inputTokens: 0, outputTokens: 0 },
+    };
     try {
       enrichmentStats = await runEnrichmentStage(sessionId);
     } catch (err) {
@@ -1095,58 +1229,54 @@ async function runScrapingSession() {
       });
     }
 
-    // Calculate final session stats
     const durationMinutes = (Date.now() - startTime) / 60000;
     const attempted       = totalSuccess + totalFailure;
     const successRate     = attempted > 0 ? (totalSuccess / attempted) * 100 : 0;
 
-    // Build session report
     const report = {
       sessionId,
-      startedAt:           new Date(startTime).toISOString(),
-      completedAt:         new Date().toISOString(),
-      durationMinutes:     parseFloat(durationMinutes.toFixed(2)),
-      totalSources:        config.totalSources,
+      startedAt:            new Date(startTime).toISOString(),
+      completedAt:          new Date().toISOString(),
+      durationMinutes:      parseFloat(durationMinutes.toFixed(2)),
+      totalSources:         config.totalSources,
       totalUrlsFound,
-      successCount:        totalSuccess,
-      duplicateCount:      totalDuplicate,
-      failureCount:        totalFailure,
-      successRate:         parseFloat(successRate.toFixed(2)),
-      enrichedCount:       enrichmentStats.enrichedCount       || 0,
-      enrichmentFailed:    enrichmentStats.enrichmentFailed    || 0,
-      keywordsWithContent: enrichmentStats.keywordsWithContent  || [],
+      successCount:         totalSuccess,
+      duplicateCount:       totalDuplicate,
+      failureCount:         totalFailure,
+      successRate:          parseFloat(successRate.toFixed(2)),
+      enrichedCount:        enrichmentStats.enrichedCount       || 0,
+      enrichmentFailed:     enrichmentStats.enrichmentFailed    || 0,
+      keywordsWithContent:  enrichmentStats.keywordsWithContent  || [],
       keywordsWithoutContent: enrichmentStats.keywordsWithoutContent || [],
       totalKeywordsCovered: (enrichmentStats.keywordsWithContent || []).length,
       totalKeywordsEmpty:   (enrichmentStats.keywordsWithoutContent || []).length,
-      aiTokenUsage:        enrichmentStats.tokenUsage,
-      criticalErrors:      false,
+      aiTokenUsage:         enrichmentStats.tokenUsage,
+      criticalErrors:       false,
+      isInterrupted:        false,
       securityBlockedSources: (config.blockedSources || []).length,
     };
 
-    // checkCriticalErrors
     const criticalIssues = checkCriticalErrors(report, counters);
     report.criticalErrors = criticalIssues.length > 0;
 
-    // Update session record with final data
     await prisma.scrapingSession.update({
       where: { id: sessionId },
       data: {
-        status:               "completed",
-        completedAt:          new Date(),
-        successRate:          report.successRate,
-        durationMinutes:      report.durationMinutes,
-        enrichedCount:        report.enrichedCount,
+        status:                "completed",
+        completedAt:           new Date(),
+        successRate:           report.successRate,
+        durationMinutes:       report.durationMinutes,
+        enrichedCount:         report.enrichedCount,
         enrichmentFailedCount: report.enrichmentFailed,
-        keywordsCoveredCount: report.totalKeywordsCovered,
-        keywordsEmptyCount:   report.totalKeywordsEmpty,
-        aiInputTokens:        report.aiTokenUsage?.inputTokens  || 0,
-        aiOutputTokens:       report.aiTokenUsage?.outputTokens || 0,
-        criticalErrors:       report.criticalErrors,
-        reportData:           JSON.stringify(report),
+        keywordsCoveredCount:  report.totalKeywordsCovered,
+        keywordsEmptyCount:    report.totalKeywordsEmpty,
+        aiInputTokens:         report.aiTokenUsage?.inputTokens  || 0,
+        aiOutputTokens:        report.aiTokenUsage?.outputTokens || 0,
+        criticalErrors:        report.criticalErrors,
+        reportData:            JSON.stringify(report),
       },
     });
 
-    // Send critical error alert FIRST if needed
     if (report.criticalErrors) {
       console.warn(`[Phase 3] ⚠️  Critical errors: ${criticalIssues.join(" | ")}`);
       await sendErrorAlert(report, criticalIssues).catch((e) =>
@@ -1154,7 +1284,6 @@ async function runScrapingSession() {
       );
     }
 
-    // Always send completion notification
     await sendCompletionNotification(report).catch((e) =>
       console.error("[Phase 3] Completion email failed:", e.message)
     );
@@ -1164,6 +1293,10 @@ async function runScrapingSession() {
       data:  { reportSentAt: new Date() },
     }).catch(() => {});
 
+    // Clean up signal listeners — session finished normally
+    process.removeListener("SIGTERM", cleanup);
+    process.removeListener("SIGINT",  cleanup);
+
     console.log(`\n${"═".repeat(60)}`);
     console.log(`[Scraper] 🏁 Session complete. ${report.successCount} articles saved. ${report.totalKeywordsCovered} keywords covered.`);
     console.log(`${"═".repeat(60)}\n`);
@@ -1172,6 +1305,9 @@ async function runScrapingSession() {
 
   } catch (err) {
     console.error(`[Scraper] ❌ Session crashed: ${err.message}`);
+
+    process.removeListener("SIGTERM", cleanup);
+    process.removeListener("SIGINT",  cleanup);
 
     if (sessionId) {
       await prisma.scrapingSession.update({
@@ -1189,7 +1325,6 @@ async function runScrapingSession() {
 }
 
 // ── checkCriticalErrors ───────────────────────────────────────────────────
-// Diagram: success rate < 70%, multiple domains failing, DB issues.
 
 function checkCriticalErrors(report, counters) {
   const issues = [];
@@ -1198,7 +1333,6 @@ function checkCriticalErrors(report, counters) {
     issues.push(`Success rate critically low: ${report.successRate}% (threshold: 70%)`);
   }
 
-  // Count categories where every source failed
   const totalFailedCategories = Object.entries(counters)
     .filter(([, c]) => c.successCount === 0 && c.failureCount > 0).length;
   if (totalFailedCategories >= 2) {

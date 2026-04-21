@@ -1,28 +1,7 @@
 // src/services/email.service.js
 // ─────────────────────────────────────────────────────────────────────────────
 // Email Service — Phase 3b
-//
-// Sends two types of emails after every scraping session:
-//   1. sendErrorAlert()             — only if critical errors detected (success rate < 70%)
-//   2. sendCompletionNotification() — always sent at session end
-//
-// Recipients: ALL users with role = "ADMIN" in the User table.
-//
-// Email provider: nodemailer + SMTP (Gmail or any SMTP service).
-//
-// SETUP — add to your .env:
-//   SMTP_HOST=smtp.gmail.com
-//   SMTP_PORT=587
-//   SMTP_USER=your_gmail@gmail.com
-//   SMTP_PASS=your_app_password        ← Gmail: Account → Security → App Passwords
-//   SMTP_FROM=noreply@easyblogger.com
-//
-// For Gmail App Password:
-//   1. Enable 2FA on your Google account
-//   2. Google Account → Security → "App passwords"
-//   3. Generate password for "Mail" / "Other device"
-//   4. Use that 16-character password as SMTP_PASS
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 const nodemailer = require("nodemailer");
 const prisma     = require("../config/prisma");
@@ -68,10 +47,30 @@ async function getAdminEmails() {
 // Generates the full HTML report email body.
 
 function buildCompletionEmailHtml(report) {
-  const statusColor = report.criticalErrors ? "#e74c3c" : "#1abc9c";
-  const statusLabel = report.criticalErrors
-    ? "⚠️ Completed with Critical Errors"
-    : "✅ Completed Successfully";
+  const isInterrupted     = report.isInterrupted     || false;
+  const isManualEnrichment = report.isManualEnrichment || false;
+
+  const statusColor = (report.criticalErrors || isInterrupted) ? "#e74c3c" : "#1abc9c";
+
+  let statusLabel;
+  if (isInterrupted) {
+    statusLabel = "🛑 Session Interrupted — Partial Report";
+  } else if (report.criticalErrors) {
+    statusLabel = "⚠️ Completed with Critical Errors";
+  } else {
+    statusLabel = "✅ Completed Successfully";
+  }
+
+  const interruptedBanner = isInterrupted
+    ? `<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:16px;margin-bottom:20px;">
+        <strong style="color:#856404;">⚠️ This session was interrupted before completion.</strong><br>
+        <span style="color:#856404;font-size:13px;">
+          The backend process was killed (terminal closed, server restarted, or nodemon reload)
+          mid-scrape. Stats below reflect only the work completed before shutdown.
+          Run a manual scrape or wait until next Saturday to complete the remaining sources.
+        </span>
+       </div>`
+    : "";
 
   const duration = report.durationMinutes != null
     ? `${report.durationMinutes.toFixed(1)} minutes`
@@ -124,11 +123,17 @@ function buildCompletionEmailHtml(report) {
 <body style="font-family:Arial,sans-serif;color:#333;max-width:720px;margin:0 auto;padding:24px;">
 
   <div style="background:${statusColor};color:#fff;padding:20px 24px;border-radius:8px 8px 0 0;">
-    <h1 style="margin:0;font-size:20px;">🤖 Easy Blogger — Weekly Content Scraping Report</h1>
+    <h1 style="margin:0;font-size:20px;">🤖 Easy Blogger — ${
+      isManualEnrichment ? "Manual Enrichment Report" :
+      isInterrupted      ? "Scraping Interrupted — Partial Report" :
+                           "Weekly Content Scraping Report"
+    }</h1>
     <p style="margin:6px 0 0;opacity:0.9;">${statusLabel}</p>
   </div>
 
   <div style="background:#f9f9f9;padding:24px;border:1px solid #eee;border-top:none;border-radius:0 0 8px 8px;">
+
+    ${interruptedBanner}
 
     <h2 style="margin-top:0;">Session Overview</h2>
     <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #eee;border-radius:6px;">
@@ -248,9 +253,17 @@ async function sendCompletionNotification(report) {
   if (!adminEmails.length) return;
 
   const transporter = createTransporter();
-  const subject = report.criticalErrors
-    ? `⚠️ [Easy Blogger] Weekly Scraping — Issues (${report.successRate}% success)`
-    : `✅ [Easy Blogger] Weekly Scraping Done — ${report.successCount} articles saved`;
+
+  let subject;
+  if (report.isInterrupted) {
+    subject = `🛑 [Easy Blogger] Scraping Interrupted — ${report.successCount} articles saved before shutdown`;
+  } else if (report.isManualEnrichment) {
+    subject = `📝 [Easy Blogger] Manual Enrichment — ${report.enrichedCount} articles enriched`;
+  } else if (report.criticalErrors) {
+    subject = `⚠️ [Easy Blogger] Weekly Scraping — Issues (${report.successRate}% success)`;
+  } else {
+    subject = `✅ [Easy Blogger] Weekly Scraping Done — ${report.successCount} articles saved`;
+  }
 
   await transporter.sendMail({
     from:    `"Easy Blogger System" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,

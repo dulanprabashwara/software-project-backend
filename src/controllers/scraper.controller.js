@@ -63,7 +63,7 @@ const getSessionById = asyncHandler(async (req, res) => {
   const session = await prisma.scrapingSession.findUnique({
     where:   { id: req.params.sessionId },
     include: {
-      keywordStats: true,
+      keywordStats: { orderBy: { createdAt: "asc" } },
       logs: { orderBy: { loggedAt: "desc" }, take: 200 },
     },
   });

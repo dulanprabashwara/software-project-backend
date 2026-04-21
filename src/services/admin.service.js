@@ -41,9 +41,9 @@ const getDashboard = async () => {
   const thirtyDaysAgo = rawDates[0];
 
   // 3. Fetch all activity from the last 30 days
-  const [recentComments, recentLikes, recentReads] = await Promise.all([
+  const [recentComments, recentRatings, recentReads] = await Promise.all([
     prisma.comment.findMany({ where: { createdAt: { gte: thirtyDaysAgo } } }),
-    prisma.articleLike.findMany({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+    prisma.articleRating.findMany({ where: { createdAt: { gte: thirtyDaysAgo } } }),
     prisma.readHistory.findMany({ where: { lastReadAt: { gte: thirtyDaysAgo } } })
   ]);
 
@@ -69,7 +69,7 @@ const getDashboard = async () => {
   };
 
   sortIntoDays(recentComments, 'createdAt', chartDatasets.comments);
-  sortIntoDays(recentLikes, 'createdAt', chartDatasets.ratings);
+  sortIntoDays(recentRatings, 'createdAt', chartDatasets.ratings);
   sortIntoDays(recentReads, 'lastReadAt', chartDatasets.reads);
 
   // 6. Return the perfectly formatted payload for your React frontend
@@ -78,7 +78,7 @@ const getDashboard = async () => {
       pendingReports: await prisma.reportedArticle.count({ where: { status: 'PENDING' } }),
       activePremiumUsers: dashboard.premiumUsers,
       totalUsers: dashboard.totalUsers,
-      dailyEngagement: recentComments.length + recentLikes.length // Simple engagement metric
+      dailyEngagement: recentComments.length + recentRatings.length // Simple engagement metric
     },
     chartData: {
       labels: labels,
@@ -281,7 +281,7 @@ const getReports = async ({ page = 1, limit = 20, status }) => {
       where,
       include: {
         article: {
-          select: { id: true, title: true, slug: true },
+          select: { id: true, title: true, slug: true, authorId: true },
         },
         reporter: {
           select: { id: true, username: true },
@@ -327,6 +327,14 @@ const resolveReport = async (adminId, reportId, newStatus) => {
       resolvedAt: new Date(),
     },
   });
+  
+  // 2. IF the admin clicked Delete or Ban (RESOLVED), take the article offline!
+  if (newStatus === "RESOLVED" && report.articleId) {
+    await prisma.article.update({
+      where: { id: report.articleId },
+      data: { status: "DRAFT" }, // Reverts it to draft so nobody can see it
+    });
+  }
 
   await prisma.auditLog.create({
     data: {

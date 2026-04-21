@@ -8,6 +8,10 @@
 
 jest.mock("../../src/config/prisma", () => require("../mocks/prisma.mock.wp"));
 jest.mock("axios",                   () => require("../mocks/axios.mock"));
+jest.mock("../../src/jobs/wordpress.job", () => ({
+  registerJobTimeout: jest.fn(),
+  cancelJobTimeout:   jest.fn(),
+}));
 
 const prisma = require("../../src/config/prisma");
 const axios  = require("axios");
