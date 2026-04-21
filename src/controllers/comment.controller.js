@@ -41,7 +41,11 @@ const createComment = async (req, res) => {
     // 2. Create the comment
     const newComment = await prisma.comment.create({
       data: { content, articleId, authorId, parentId: parentId || null },
-      include: { author: { select: { id: true, displayName: true } } }
+      include: 
+      { author: 
+        { select:
+           { id: true, 
+            displayName: true } } }
     });
 
     // --- DEBUG LOGS ---
@@ -71,47 +75,52 @@ const createComment = async (req, res) => {
  */
 const rateArticle = async (req, res) => {
   try {
-    const { articleId } = req.params;
-    const { rating } = req.body;
+    const { articleId} =req.params;
+    const{ rating } = req.body;
     const userId = req.user.id;
 
-    // 1. Fetch the article to get data for the notification
+    // 1. Fetch the article to get the authorId
     const article = await prisma.article.findUnique({
       where: { id: articleId },
-      select: { authorId: true, slug: true }
+      select: { id: true, authorId: true } // We just need authorId for the notification
     });
 
     if (!article) {
       return res.status(404).json({ success: false, message: "Article not found" });
     }
 
-    // 2. Save the rating
-    const userRating = await prisma.articleRating.upsert({
+    // 2. Check if the user has ALREADY rated this article
+    const existingRating = await prisma.articleRating.findUnique({
       where: {
-        userId_articleId: { 
-          userId: userId, 
-          articleId: articleId 
-        }
-      },
-      // If record exists, only update the score
-      update: { 
-        score: rating 
-      },
-      // If record is new, set everything
-      create: { 
-        userId: userId, 
-        articleId: articleId, 
-        score: rating 
+        userId_articleId: { userId, articleId }
       }
     });
 
-    // 3. Trigger: New Rating Notification
-    const notifResult = await createNotification(req.app, {
-      type: "RATE",
-      destUserId: article.authorId, 
-      sourceUserId: req.user.id,    
-      sourceArticleId: article.id   
-    });
+    let userRating;
+
+    if (existingRating) {
+      // --- UPDATE SCENARIO ---
+      // Update the score, but DO NOT send a notification
+      userRating = await prisma.articleRating.update({
+        where: { userId_articleId: { userId, articleId } },
+        data: { score: rating }
+      });
+      
+    } else {
+      // --- NEW RATING SCENARIO ---
+      // Save the new rating
+      userRating = await prisma.articleRating.create({
+        data: { userId, articleId, score: rating }
+      });
+
+      // AND trigger the notification since it's their first time rating it
+      await createNotification(req.app, {
+        type: "RATE",
+        destUserId: article.authorId, 
+        sourceUserId: userId,    
+        sourceArticleId: articleId 
+      });
+    }
 
     res.status(200).json({ success: true, data: userRating });
   } catch (error) {

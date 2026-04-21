@@ -19,7 +19,7 @@ let prisma;
 
 if (process.env.NODE_ENV === "production") {
   prisma = new PrismaClient({
-    log: ["error"],
+    log: ['query', 'info', 'warn', 'error'],
     datasources: { db: { url: buildUrl() } },
   });
 } else {
