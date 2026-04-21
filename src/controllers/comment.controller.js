@@ -1,4 +1,5 @@
 const prisma = require("../config/prisma");
+const { createNotification } = require("../services/notification.service");
 
 /**
  * @description Fetch all comments for a specific article
@@ -27,26 +28,40 @@ const getComments = async (req, res) => {
 const createComment = async (req, res) => {
   try {
     const { articleId, content, parentId } = req.body;
-    
-    // req.user is populated by your auth middleware
     const authorId = req.user.id; 
 
-    const newComment = await prisma.comment.create({
-      data: {
-        content,
-        articleId,
-        authorId,
-        parentId: parentId || null,
-      },
-      include: {
-        author: {
-          select: { id: true, displayName: true }
-        }
-      }
+    // 1. Fetch the article
+    const article = await prisma.article.findUnique({
+      where: { id: articleId },
+      select: { authorId: true, slug: true, id: true }
     });
+
+    if (!article) return res.status(404).json({ success: false, message: "Article not found" });
+
+    // 2. Create the comment
+    const newComment = await prisma.comment.create({
+      data: { content, articleId, authorId, parentId: parentId || null },
+      include: { author: { select: { id: true, displayName: true } } }
+    });
+
+    // --- DEBUG LOGS ---
+    console.log("🔔 ATTEMPTING NOTIFICATION");
+    console.log("Dest (Author):", article.authorId);
+    console.log("Source (You):", req.user.id);
+
+    // 3. Trigger Notification
+    const notifResult = await createNotification(req.app, {
+      type: "COMMENT",
+      destUserId: article.authorId, 
+      sourceUserId: req.user.id,    
+      sourceArticleId: article.id   
+    });
+
+    console.log("✅ NOTIFICATION SERVICE FINISHED. Result:", notifResult ? "Saved" : "Ignored/Failed");
 
     res.status(201).json(newComment);
   } catch (error) {
+    console.error("CRASH IN CONTROLLER:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -60,6 +75,17 @@ const rateArticle = async (req, res) => {
     const { rating } = req.body;
     const userId = req.user.id;
 
+    // 1. Fetch the article to get data for the notification
+    const article = await prisma.article.findUnique({
+      where: { id: articleId },
+      select: { authorId: true, slug: true }
+    });
+
+    if (!article) {
+      return res.status(404).json({ success: false, message: "Article not found" });
+    }
+
+    // 2. Save the rating
     const userRating = await prisma.articleRating.upsert({
       where: {
         userId_articleId: { 
@@ -77,6 +103,16 @@ const rateArticle = async (req, res) => {
         articleId: articleId, 
         score: rating 
       }
+    });
+
+    // 3. Trigger: New Rating Notification
+    await createNotification(req.app, {
+      type: "LIKE", 
+      title: "New Rating",
+      message: `${req.user.displayName || req.user.username} rated your article ${rating} stars.`,
+      link: `/article/${article.slug}`,
+      userId: article.authorId, // Notify the article's author
+      actorId: req.user.id,     // The person who left the rating
     });
 
     res.status(200).json({ success: true, data: userRating });

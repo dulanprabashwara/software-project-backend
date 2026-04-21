@@ -1,84 +1,36 @@
 const prisma = require("../config/prisma");
 
-/**
- * Create a notification.
- */
-const createNotification = async ({
-  userId,
-  type,
-  title,
-  message,
-  link,
-  actorId,
-}) => {
-  const notification = await prisma.notification.create({
-    data: {
-      userId,
-      type,
-      title,
-      message,
-      link: link || null,
-      actorId: actorId || null,
-    },
-  });
+const createNotification = async (app, { type, destUserId, sourceUserId, sourceArticleId }) => {
+  try {
+    // Don't notify the user of their own actions
+    if (destUserId === sourceUserId) return null;
 
-  return notification;
-};
+    // 1. Save to Database using ONLY your schema's fields
+    const notification = await prisma.notification.create({
+      data: { 
+        type, 
+        destUserId,
+        sourceUserId,
+        sourceArticleId
+      },
+      include: {
+        // Fetch the related data so the frontend can build the message
+        sourceUser: { select: { username: true, displayName: true, avatarUrl: true } },
+        sourceArticle: { select: { title: true, slug: true } }
+      }
+    });
 
-/**
- * Get user's notifications with pagination.
- */
-const getUserNotifications = async (userId, page = 1, limit = 20) => {
-  const skip = (page - 1) * limit;
+    // 2. Emit instantly via Socket.io
+    const io = app.get("io");
+    if (io) {
+      io.to(`user:${destUserId}`).emit("notification:receive", notification);
+    }
 
-  const [notifications, total, unreadCount] = await Promise.all([
-    prisma.notification.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-      skip,
-      take: limit,
-    }),
-    prisma.notification.count({ where: { userId } }),
-    prisma.notification.count({ where: { userId, isRead: false } }),
-  ]);
-
-  return { notifications, total, unreadCount };
-};
-
-/**
- * Mark notification(s) as read.
- */
-const markAsRead = async (userId, notificationIds = null) => {
-  const where = { userId };
-  if (notificationIds) {
-    where.id = { in: notificationIds };
+    return notification;
+  } catch (error) {
+    console.error("❌ Failed to save notification:", error.message);
+    return null; 
   }
-
-  await prisma.notification.updateMany({
-    where,
-    data: { isRead: true },
-  });
 };
 
-/**
- * Delete old notifications (older than 30 days).
- */
-const cleanupOldNotifications = async () => {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-
-  const result = await prisma.notification.deleteMany({
-    where: {
-      createdAt: { lt: thirtyDaysAgo },
-      isRead: true,
-    },
-  });
-
-  return { deletedCount: result.count };
-};
-
-module.exports = {
-  createNotification,
-  getUserNotifications,
-  markAsRead,
-  cleanupOldNotifications,
-};
+module.exports = { createNotification };

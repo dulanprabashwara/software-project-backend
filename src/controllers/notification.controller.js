@@ -1,34 +1,43 @@
-const asyncHandler = require("../utils/asyncHandler");
-const { sendSuccess, sendPaginated } = require("../utils/response");
-const notificationService = require("../services/notification.service");
-const { parsePagination } = require("../utils/helpers");
+const prisma = require("../config/prisma");
 
-/**
- * GET /api/v1/notifications
- * Get current user's notifications.
- */
-const getNotifications = asyncHandler(async (req, res) => {
-  const { page, limit } = parsePagination(req.query);
-  const { notifications, total, unreadCount } =
-    await notificationService.getUserNotifications(req.user.id, page, limit);
+exports.getNotifications = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
 
-  sendPaginated(res, {
-    data: { notifications, unreadCount },
-    page,
-    limit,
-    total,
-  });
-});
+    const notifications = await prisma.notification.findMany({
+      where: { destUserId: userId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      include: {
+        // Fetch related data for dynamic frontend rendering
+        sourceUser: { select: { username: true, displayName: true, avatarUrl: true } },
+        sourceArticle: { select: { title: true, id: true } }
+      }
+    });
 
-/**
- * PUT /api/v1/notifications/read
- * Mark notifications as read.
- */
-const markAsRead = asyncHandler(async (req, res) => {
-  const { notificationIds } = req.body; // null = mark all
-  await notificationService.markAsRead(req.user.id, notificationIds);
+    res.status(200).json({ success: true, data: notifications });
+  } catch (error) {
+    next(error);
+  }
+};
 
-  sendSuccess(res, { message: "Notifications marked as read." });
-});
+// Function name matches what the router will call
+exports.markAsRead = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { notificationId } = req.body;
 
-module.exports = { getNotifications, markAsRead };
+    if (notificationId) {
+      await prisma.notification.deleteMany({
+        where: { id: notificationId, destUserId: userId },
+      });
+    } else {
+      await prisma.notification.deleteMany({
+        where: { destUserId: userId },
+      });
+    }
+    res.status(200).json({ success: true, message: "Deleted" });
+  } catch (error) {
+    next(error);
+  }
+};

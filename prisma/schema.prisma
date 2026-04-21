@@ -8,43 +8,44 @@ datasource db {
 }
 
 model User {
-  id                  String                @id @default(cuid())
-  firebaseUid         String                @unique
-  email               String                @unique
-  username            String                @unique
-  displayName         String?
-  bio                 String?
-  avatarUrl           String?
-  role                Role                  @default(USER)
-  isPremium           Boolean               @default(false)
-  linkedInAccountId   String?
-  wordpressAccountId  String?
-  isOnline            Boolean               @default(false)
-  lastSeen            DateTime              @default(now())
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
-  stripeCustomerId    String?               @unique
-  ai_article_logs     ai_article_logs[]
-  rating              ArticleRating[]
-  shares              ArticleShare[]
-  articles            Article[]
-  auditLogs           AuditLog[]
-  bansIssued          BannedUser[]          @relation("BannedBy")
-  bannedRecord        BannedUser?           @relation("BannedUser")
-  comments            Comment[]
-  following           Follow[]              @relation("Followers")
-  followers           Follow[]              @relation("Following")
-  receivedMessages    Message[]             @relation("ReceivedMessages")
-  sentMessages        Message[]             @relation("SentMessages")
-  notifications       Notification[]
-  readHistory         ReadHistory[]
-  reportedArticles    ReportedArticle[]     @relation("Reporter")
-  savedArticles       SavedArticle[]
-  stories             Story[]
-  subscriptions       Subscription[]
-  stats               UserStats?
-  wordpressConnection WordPressConnection?
-  wpPublishJobs       WordPressPublishJob[]
+  id                     String                @id @default(cuid())
+  firebaseUid            String                @unique
+  email                  String                @unique
+  username               String                @unique
+  displayName            String?
+  bio                    String?
+  avatarUrl              String?
+  role                   Role                  @default(USER)
+  isPremium              Boolean               @default(false)
+  linkedInAccountId      String?
+  wordpressAccountId     String?
+  isOnline               Boolean               @default(false)
+  lastSeen               DateTime              @default(now())
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  stripeCustomerId       String?               @unique
+  ai_article_logs        ai_article_logs[]
+  rating                 ArticleRating[]
+  shares                 ArticleShare[]
+  articles               Article[]
+  auditLogs              AuditLog[]
+  bansIssued             BannedUser[]          @relation("BannedBy")
+  bannedRecord           BannedUser?           @relation("BannedUser")
+  comments               Comment[]
+  following              Follow[]              @relation("Followers")
+  followers              Follow[]              @relation("Following")
+  receivedMessages       Message[]             @relation("ReceivedMessages")
+  sentMessages           Message[]             @relation("SentMessages")
+  notifications          Notification[]        @relation("NotificationDest")
+  notificationsTriggered Notification[]        @relation("NotificationSource")
+  readHistory            ReadHistory[]
+  reportedArticles       ReportedArticle[]     @relation("Reporter")
+  savedArticles          SavedArticle[]
+  stories                Story[]
+  subscriptions          Subscription[]
+  stats                  UserStats?
+  wordpressConnection    WordPressConnection?
+  wpPublishJobs          WordPressPublishJob[]
 
   @@map("users")
 }
@@ -62,7 +63,7 @@ model Article {
   publishedAt             DateTime?
   readCount               Int                   @default(0)
   averageRating           Float                 @default(0.0)
-  ratingCount             Int                   @default(0)  
+  ratingCount             Int                   @default(0)
   shareCount              Int                   @default(0)
   commentCount            Int                   @default(0)
   tags                    String[]
@@ -78,7 +79,7 @@ model Article {
   isEditAsNew             Boolean               @default(false)
   sourceArticleId         String?
   ai_article_logs         ai_article_logs?
-  ratings                 ArticleRating[]  
+  ratings                 ArticleRating[]
   shares                  ArticleShare[]
   author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
   comments                Comment[]
@@ -86,6 +87,7 @@ model Article {
   reports                 ReportedArticle[]
   savedBy                 SavedArticle[]
   wpPublishJobs           WordPressPublishJob[]
+  notifications           Notification[]
 
   @@index([authorId])
   @@index([status])
@@ -212,7 +214,7 @@ model Message {
 model UserStats {
   id             String   @id @default(cuid())
   totalReads     Int      @default(0)
-  averageRating  Float    @default(0.0)  
+  averageRating  Float    @default(0.0)
   totalFollowers Int      @default(0)
   totalFollowing Int      @default(0)
   articleCount   Int      @default(0)
@@ -224,18 +226,18 @@ model UserStats {
 }
 
 model Notification {
-  id        String           @id @default(cuid())
-  type      NotificationType
-  title     String
-  message   String
-  isRead    Boolean          @default(false)
-  link      String?
-  createdAt DateTime         @default(now())
-  userId    String
-  actorId   String?
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id              String           @id @default(cuid())
+  type            NotificationType
+  sourceUserId    String?
+  sourceUser      User?            @relation("NotificationSource", fields: [sourceUserId], references: [id], onDelete: Cascade)
+  sourceArticleId String?
+  sourceArticle   Article?         @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
+  destUserId      String?
+  destUser        User?            @relation("NotificationDest", fields: [destUserId], references: [id], onDelete: Cascade)
+  isRead          Boolean          @default(false)
+  createdAt       DateTime         @default(now())
 
-  @@index([userId])
+  @@index([destUserId])
   @@index([createdAt])
   @@map("notifications")
 }
@@ -361,17 +363,14 @@ model ai_article_logs {
   articleContent    String
   wordCount         Int
   linkedArticleId   String?   @unique @map("savedToDraftId")
- 
-  aiInputTokens     Int       @default(0)
-  aiOutputTokens    Int       @default(0)
- 
-   deletedAt         DateTime?
- 
   generatedAt       DateTime  @default(now())
   authorId          String
+  aiInputTokens     Int       @default(0)
+  aiOutputTokens    Int       @default(0)
+  deletedAt         DateTime?
   users             User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
   articles          Article?  @relation(fields: [linkedArticleId], references: [id])
- 
+
   @@index([authorId])
   @@index([generatedAt])
   @@index([deletedAt])
@@ -538,11 +537,9 @@ enum ReportStatus {
 }
 
 enum NotificationType {
+  RATE
   FOLLOW
-  LIKE
   COMMENT
-  MENTION
-  SYSTEM
   NEW_ARTICLE
 }
 
