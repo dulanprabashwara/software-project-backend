@@ -45,9 +45,9 @@ const createComment = async (req, res) => {
     });
 
     // --- DEBUG LOGS ---
-    console.log("🔔 ATTEMPTING NOTIFICATION");
-    console.log("Dest (Author):", article.authorId);
-    console.log("Source (You):", req.user.id);
+    console.log("ATTEMPTING NOTIFICATION");
+    console.log("Dest ID:", article.authorId);
+    console.log("Source ID:", req.user.id);
 
     // 3. Trigger Notification
     const notifResult = await createNotification(req.app, {
@@ -106,13 +106,11 @@ const rateArticle = async (req, res) => {
     });
 
     // 3. Trigger: New Rating Notification
-    await createNotification(req.app, {
-      type: "LIKE", 
-      title: "New Rating",
-      message: `${req.user.displayName || req.user.username} rated your article ${rating} stars.`,
-      link: `/article/${article.slug}`,
-      userId: article.authorId, // Notify the article's author
-      actorId: req.user.id,     // The person who left the rating
+    const notifResult = await createNotification(req.app, {
+      type: "RATE",
+      destUserId: article.authorId, 
+      sourceUserId: req.user.id,    
+      sourceArticleId: article.id   
     });
 
     res.status(200).json({ success: true, data: userRating });
