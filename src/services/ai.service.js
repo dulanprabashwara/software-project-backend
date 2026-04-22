@@ -121,19 +121,32 @@ async function fetchReferenceContent(selectedKeywords, authorId) {
       take:    20,
     });
 
-    if (articles.length === 0) continue;
+    if (articles.length === 0) {
+      console.log(`[AI][Reference] keyword="${keyword}" → 0 scraped summaries found (no enriched articles for this keyword)`);
+      continue;
+    }
 
     // Combine day, user hash, and keyword position for the final offset
     const keywordPos  = selectedKeywords.indexOf(keyword);
     const finalOffset = (dayOfYear + userOffset + keywordPos * 7) % articles.length;
 
+    let fetchedForKeyword = 0;
     for (let i = 0; i < REFERENCE_ARTICLES_PER_KEYWORD; i++) {
       const idx     = (finalOffset + i) % articles.length;
       const article = articles[idx];
       if (article?.summary) {
         referenceItems.push({ keyword, title: article.title, summary: article.summary });
+        fetchedForKeyword++;
       }
     }
+    console.log(`[AI][Reference] keyword="${keyword}" → ${fetchedForKeyword}/${REFERENCE_ARTICLES_PER_KEYWORD} scraped summaries fetched (pool size: ${articles.length})`);
+  }
+
+  // Summary line covering all keywords at once
+  if (selectedKeywords.length > 0) {
+    const totalFetched = referenceItems.length;
+    const maxPossible  = selectedKeywords.length * REFERENCE_ARTICLES_PER_KEYWORD;
+    console.log(`[AI][Reference] Total reference summaries: ${totalFetched}/${maxPossible} across ${selectedKeywords.length} keyword(s)`);
   }
 
   return referenceItems;
