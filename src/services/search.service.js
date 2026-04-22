@@ -1,19 +1,14 @@
-// src/services/search.service.js
-
-
 const prisma = require("../config/prisma");
 
-// ── Engagement weights ────────────────────────────────────────────────────────
-const LIKE_W    = 3;
-const READ_W    = 1;
-const COMMENT_W = 2;
+// Computes an engagement score for ranking article search results.
+// Uses averageRating × ratingCount as the primary signal (reflects both
+// quality and popularity), supplemented by read count and comment count.
+const computeEngagement = (article) =>
+  (article.averageRating || 0) * (article.ratingCount || 0) * 10 +
+  (article.readCount     || 0) +
+  (article.commentCount  || 0) * 2;
 
-const articleEngagement = (a) =>
-  (a.likeCount    || 0) * LIKE_W   +
-  (a.readCount    || 0) * READ_W   +
-  (a.commentCount || 0) * COMMENT_W;
-
-const ARTICLE_INCLUDE = {
+const ARTICLE_AUTHOR_SELECT = {
   author: {
     select: {
       id:          true,
@@ -26,256 +21,160 @@ const ARTICLE_INCLUDE = {
   _count: { select: { comments: true } },
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// searchArticles
-// ─────────────────────────────────────────────────────────────────────────────
+// Sorts an array of articles by engagement score descending.
+const sortByEngagement = (articles) =>
+  [...articles].sort((a, b) => computeEngagement(b) - computeEngagement(a));
+
+// Searches published articles by title then summary.
+// Title matches are always ranked above summary matches.
+// Within each group, results are ordered by engagement score.
+// When currentUserId is provided, stamps isSaved on each result.
 const searchArticles = async ({ query, page = 1, limit = 10, currentUserId = null }) => {
   const q = (query || "").trim();
   if (!q) return { articles: [], total: 0, page, limit, totalPages: 0 };
 
-  try {
-    // Step 1 — title matches (ordered by engagement in DB for speed)
-    const titleMatches = await prisma.article.findMany({
-      where: {
-        status: "PUBLISHED",
-        title:  { contains: q, mode: "insensitive" },
-      },
-      include: ARTICLE_INCLUDE,
-// ... inside prisma.article.findMany
-        orderBy: [
-          {
-            averageRating: "desc" // Use the  rating score
-          },
-          {
-            ratingCount: "desc"  // Use the number of ratings as a tie-breaker
-          },
-          {
-            readCount: "desc"    // use readCount  
-          }
-        ],
-// ... rest of the query      take: 50,
+  const publishedFilter = { status: "PUBLISHED" };
+  const caseInsensitive = (field) => ({ [field]: { contains: q, mode: "insensitive" } });
+
+  const titleMatches = await prisma.article.findMany({
+    where: { ...publishedFilter, ...caseInsensitive("title") },
+    include: ARTICLE_AUTHOR_SELECT,
+    orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }, { readCount: "desc" }],
+    take: 50,
+  });
+
+  const titleIds = titleMatches.map((a) => a.id);
+
+  const summaryMatches = await prisma.article.findMany({
+    where: {
+      ...publishedFilter,
+      ...(titleIds.length > 0 && { NOT: { id: { in: titleIds } } }),
+      ...caseInsensitive("summary"),
+    },
+    include: ARTICLE_AUTHOR_SELECT,
+    orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }, { readCount: "desc" }],
+    take: 50,
+  });
+
+  const total = await prisma.article.count({
+    where: {
+      ...publishedFilter,
+      OR: [
+        { title:   { contains: q, mode: "insensitive" } },
+        { summary: { contains: q, mode: "insensitive" } },
+      ],
+    },
+  });
+
+  const merged    = [...sortByEngagement(titleMatches), ...sortByEngagement(summaryMatches)];
+  const skip      = (page - 1) * limit;
+  const paginated = merged.slice(skip, skip + limit);
+
+  // Bulk-check which articles the current user has already saved (one query).
+  let savedSet = new Set();
+  if (currentUserId && paginated.length > 0) {
+    const saved = await prisma.savedArticle.findMany({
+      where: { userId: currentUserId, articleId: { in: paginated.map((a) => a.id) } },
+      select: { articleId: true },
     });
-
-    const titleIds = titleMatches.map((a) => a.id);
-
-    // Step 2 — summary matches NOT already in title results (avoids duplicates)
-    const summaryMatches = await prisma.article.findMany({
-      where: {
-        status: "PUBLISHED",
-        ...(titleIds.length > 0 && { NOT: { id: { in: titleIds } } }),
-        summary: { contains: q, mode: "insensitive" },
-      },
-      include: ARTICLE_INCLUDE,
-orderBy: [
-          {
-            averageRating: "desc" // Use the  rating score
-          },
-          {
-            ratingCount: "desc"  // Use the number of ratings as a tie-breaker
-          },
-          {
-            readCount: "desc"    // use readCount  
-          }
-        ],      take: 50,
-    });
-
-    // Step 3 — total count for pagination meta
-    const total = await prisma.article.count({
-      where: {
-        status: "PUBLISHED",
-        OR: [
-          { title:   { contains: q, mode: "insensitive" } },
-          { summary: { contains: q, mode: "insensitive" } },
-        ],
-      },
-    });
-
-    // Step 4 — sort each group by engagement, merge, paginate
-    const sortByEngagement = (arr) =>
-      [...arr].sort((a, b) => articleEngagement(b) - articleEngagement(a));
-
-    const merged    = [...sortByEngagement(titleMatches), ...sortByEngagement(summaryMatches)];
-    const skip      = (page - 1) * limit;
-    const paginated = merged.slice(skip, skip + limit);
-
-    // ── Bulk isSaved check ────────────────────────────────────────────────────
-    // ONE extra query — fetches all SavedArticle rows for this user + these
-    // article IDs. Builds a Set so the lookup below is O(1) per article.
-    // Schema: SavedArticle @@unique([userId, articleId])
-    let savedSet = new Set();
-
-    if (currentUserId && paginated.length > 0) {
-      const articleIds = paginated.map((a) => a.id);
-      const saved = await prisma.savedArticle.findMany({
-        where: {
-          userId:    currentUserId,
-          articleId: { in: articleIds },
-        },
-        select: { articleId: true },
-      });
-      savedSet = new Set(saved.map((s) => s.articleId));
-    }
-
-    // Stamp isSaved on each article
-    const articlesWithSavedState = paginated.map((a) => ({
-      ...a,
-      // Only include isSaved when we actually checked (logged-in user)
-      ...(currentUserId !== null && { isSaved: savedSet.has(a.id) }),
-    }));
-
-    return {
-      articles:   articlesWithSavedState,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
-
-  } catch (err) {
-    console.error("[search.service] searchArticles error:", err.message);
-    throw err;
+    savedSet = new Set(saved.map((s) => s.articleId));
   }
+
+  const articles = paginated.map((a) => ({
+    ...a,
+    ...(currentUserId !== null && { isSaved: savedSet.has(a.id) }),
+  }));
+
+  return { articles, total, page, limit, totalPages: Math.ceil(total / limit) };
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// searchUsers — unchanged from previous version
-// ─────────────────────────────────────────────────────────────────────────────
+// Searches users by username or displayName.
+// Results are ranked by follower_score = totalFollowers + (articleCount × 10).
+// When currentUserId is provided, stamps isFollowing on each result.
 const searchUsers = async ({ query, page = 1, limit = 10, currentUserId = null }) => {
   const q = (query || "").trim();
   if (!q) return { users: [], total: 0, page, limit, totalPages: 0 };
 
-  const where = {
+  const nameFilter = {
     OR: [
       { username:    { contains: q, mode: "insensitive" } },
       { displayName: { contains: q, mode: "insensitive" } },
     ],
   };
 
-  try {
-    const [rawUsers, total] = await Promise.all([
-      prisma.user.findMany({
-        where,
-        select: {
-          id:          true,
-          username:    true,
-          displayName: true,
-          avatarUrl:   true,
-          bio:         true,
-          isPremium:   true,
-          stats: {
-            select: { totalFollowers: true, articleCount: true },
-          },
-          _count: {
-            select: {
-              articles:  true,  // NO { where } — Prisma 4.x compatible
-              followers: true,
-            },
-          },
-        },
-        take: Math.max(limit * 5, 50),
-      }),
-      prisma.user.count({ where }),
-    ]);
+  const [rawUsers, total] = await Promise.all([
+    prisma.user.findMany({
+      where: nameFilter,
+      select: {
+        id:          true,
+        username:    true,
+        displayName: true,
+        avatarUrl:   true,
+        bio:         true,
+        isPremium:   true,
+        stats:  { select: { totalFollowers: true, articleCount: true } },
+        _count: { select: { articles: true, followers: true } },
+      },
+      take: Math.max(limit * 5, 50),
+    }),
+    prisma.user.count({ where: nameFilter }),
+  ]);
 
-    const sorted = [...rawUsers].sort((a, b) => {
-      const scoreA =
-        (a.stats?.totalFollowers ?? a._count?.followers ?? 0) +
-        (a.stats?.articleCount   ?? a._count?.articles  ?? 0) * 10;
-      const scoreB =
-        (b.stats?.totalFollowers ?? b._count?.followers ?? 0) +
-        (b.stats?.articleCount   ?? b._count?.articles  ?? 0) * 10;
-      return scoreB - scoreA;
-    });
+  const followerScore = (u) =>
+    (u.stats?.totalFollowers ?? u._count?.followers ?? 0) +
+    (u.stats?.articleCount   ?? u._count?.articles  ?? 0) * 10;
 
-    const skip      = (page - 1) * limit;
-    const paginated = sorted.slice(skip, skip + limit);
+  const sorted    = [...rawUsers].sort((a, b) => followerScore(b) - followerScore(a));
+  const skip      = (page - 1) * limit;
+  const paginated = sorted.slice(skip, skip + limit);
 
-    // Bulk isFollowing check
-    let followingSet = new Set();
-
-    if (currentUserId && paginated.length > 0) {
-      const userIds  = paginated.map((u) => u.id);
-      const checkIds = userIds.filter((id) => id !== currentUserId);
-
-      if (checkIds.length > 0) {
-        const follows = await prisma.follow.findMany({
-          where: {
-            followerId:  currentUserId,
-            followingId: { in: checkIds },
-          },
-          select: { followingId: true },
-        });
-        followingSet = new Set(follows.map((f) => f.followingId));
-      }
+  // Bulk-check which users the current user already follows (one query).
+  let followingSet = new Set();
+  if (currentUserId && paginated.length > 0) {
+    const checkIds = paginated.map((u) => u.id).filter((id) => id !== currentUserId);
+    if (checkIds.length > 0) {
+      const follows = await prisma.follow.findMany({
+        where: { followerId: currentUserId, followingId: { in: checkIds } },
+        select: { followingId: true },
+      });
+      followingSet = new Set(follows.map((f) => f.followingId));
     }
-
-    const usersWithFollowState = paginated.map((u) => ({
-      ...u,
-      ...(currentUserId !== null && { isFollowing: followingSet.has(u.id) }),
-    }));
-
-    return {
-      users:      usersWithFollowState,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
-
-  } catch (err) {
-    console.error("[search.service] searchUsers error:", err.message);
-    throw err;
   }
+
+  const users = paginated.map((u) => ({
+    ...u,
+    ...(currentUserId !== null && { isFollowing: followingSet.has(u.id) }),
+  }));
+
+  return { users, total, page, limit, totalPages: Math.ceil(total / limit) };
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// getSearchSuggestions — unchanged
-// ─────────────────────────────────────────────────────────────────────────────
+// Returns lightweight autocomplete data for a partial query.
+// Returns up to 5 article titles and 3 user names. Minimum query length: 2.
 const getSearchSuggestions = async (query) => {
   const q = (query || "").trim();
   if (q.length < 2) return { articles: [], users: [] };
 
-  try {
-    const [articles, users] = await Promise.all([
-      prisma.article.findMany({
-        where: {
-          status: "PUBLISHED",
-          title:  { contains: q, mode: "insensitive" },
-        },
-        select:  { id: true, title: true, slug: true },
-        // ... inside prisma.article.findMany
+  const [articles, users] = await Promise.all([
+    prisma.article.findMany({
+      where: { status: "PUBLISHED", title: { contains: q, mode: "insensitive" } },
+      select:  { id: true, title: true, slug: true },
+      orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }],
+      take: 5,
+    }),
+    prisma.user.findMany({
+      where: {
+        OR: [
+          { username:    { contains: q, mode: "insensitive" } },
+          { displayName: { contains: q, mode: "insensitive" } },
+        ],
+      },
+      select: { id: true, username: true, displayName: true, avatarUrl: true },
+      take: 3,
+    }),
+  ]);
 
-orderBy: [
-  {
-    averageRating: "desc" // Use the  rating score
-  },
-  {
-    ratingCount: "desc"  // Use the number of ratings as a tie-breaker
-  },
-  {
-    readCount: "desc"    // use readCount 
-  }
-],
-// ... rest of the query
-        take:    5,
-      }),
-      prisma.user.findMany({
-        where: {
-          OR: [
-            { username:    { contains: q, mode: "insensitive" } },
-            { displayName: { contains: q, mode: "insensitive" } },
-          ],
-        },
-        select: { id: true, username: true, displayName: true, avatarUrl: true },
-        take:   3,
-      }),
-    ]);
-
-    return { articles, users };
-  } catch (err) {
-    console.error("[search.service] getSearchSuggestions error:", err.message);
-    throw err;
-  }
+  return { articles, users };
 };
 
 module.exports = { searchArticles, searchUsers, getSearchSuggestions };

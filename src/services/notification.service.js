@@ -1,6 +1,7 @@
 const prisma = require("../config/prisma");
 
 const createNotification = async (app, { type, destUserId, sourceUserId, sourceArticleId }) => {
+ console.log(`🔔 Notif Triggered: Type=${type}, To=${destUserId}, From=${sourceUserId}, Article=${sourceArticleId}`);
   try {
     // Don't notify the user of their own actions
     if (destUserId === sourceUserId) return null;
@@ -28,7 +29,7 @@ const createNotification = async (app, { type, destUserId, sourceUserId, sourceA
 
     return notification;
   } catch (error) {
-    console.error("❌ Failed to save notification:", error.message);
+    console.error("Failed to save notification:", error.message);
     return null; 
   }
 };

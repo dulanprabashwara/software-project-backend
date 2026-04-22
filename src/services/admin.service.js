@@ -454,31 +454,19 @@ const getAllOffers = async () => {
 
 // Create a new offer
 const createOffer = async (data, adminId) => {
-  
-  // 1. Tell Stripe to create the Product (e.g., "Pro Creator")
-  const stripeProduct = await stripe.products.create({
-    name: data.name,
-  });
+  // 1. Grab the exact text the Admin typed in the UI
+  const { name, discount_percent, stripe_coupon_id, is_active } = data;
 
-  // 2. Tell Stripe to create the Price for that product
-  // Note: Stripe calculates money in cents! So $9.99 needs to be sent as 999.
-  // We use data.price if you added it to your frontend, otherwise we default to 999.
-  const stripePrice = await stripe.prices.create({
-    product: stripeProduct.id,
-    unit_amount: data.price ? Math.round(parseFloat(data.price) * 100) : 999, 
-    currency: 'usd',
-    recurring: { interval: 'month' }, 
-  });
-
-  // 3. Save the offer to database, using the newly generated Stripe ID!
+  // 2. Validate that we actually got the Stripe ID from the frontend
+  if (!stripe_coupon_id) {
+    throw new Error("Stripe Coupon ID is required to create an offer.");
+  }
   const offer = await prisma.offer.create({
     data: {
       name: data.name,
-      price: parseFloat(data.price) || 0,
-      discount_percent: parseInt(data.discount_percent) || 0,
-      stripe_coupon_id: stripePrice.id, //Automated ID saved.
-      is_active: true,
-      features: data.features || {}
+      discount_percent: discount_percent,
+      stripe_coupon_id: stripe_coupon_id,
+      is_active: is_active,
     }
   });
 
@@ -492,14 +480,15 @@ const createOffer = async (data, adminId) => {
 
 //updateOffer
 const updateOffer = async (id, data, adminId) => {
+  const { name, discount_percent, stripe_coupon_id, is_active } = data;
+
   const offer = await prisma.offer.update({
     where: { id: id },
     data: {
       name: data.name,
-      price: parseFloat(data.price) || 0,
-      discount_percent: parseInt(data.discount_percent)|| 0,
-      is_active: data.is_active,
-      features: data.features
+      discount_percent: data.discount_percent,
+      stripe_coupon_id: stripe_coupon_id,
+      is_active:is_active,
     }
   });
 

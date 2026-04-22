@@ -18,9 +18,6 @@
     "test:coverage": "jest --config=tests/jest.config.js --coverage",
     "test:verbose": "jest --config=tests/jest.config.js --verbose"
   },
-  "prisma": {
-    "seed": "node prisma/seed.js"
-  },
   "keywords": [
     "blog",
     "express",
