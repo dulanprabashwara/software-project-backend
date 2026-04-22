@@ -72,6 +72,7 @@ model Article {
   tags                    String[]
   readingTime             Int                   @default(0)
   createdAt               DateTime              @default(now())
+  trendingScore           Float                 @default(0.0)
   updatedAt               DateTime              @updatedAt
   authorId                String
   editingBackupContent    String?
@@ -414,7 +415,7 @@ model ScrapingSession {
   reportData            String?
   reportSentAt          DateTime?
   criticalErrors        Boolean                @default(false)
-  keywordStats          KeywordScrapingStats[]
+  categoryStats         CategoryScrapingStats[]
   scrapedArticles       ScrapedArticle[]
   logs                  ScrapingLog[]
 
@@ -464,7 +465,7 @@ model ScrapedArticle {
   @@map("scraped_articles")
 }
 
-model KeywordScrapingStats {
+model CategoryScrapingStats {
   id             String          @id @default(cuid())
   sessionId      String
   category       String
