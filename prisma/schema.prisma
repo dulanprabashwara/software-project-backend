@@ -69,6 +69,7 @@ model Article {
   tags                    String[]
   readingTime             Int                   @default(0)
   createdAt               DateTime              @default(now())
+  trendingScore           Float                 @default(0.0)
   updatedAt               DateTime              @updatedAt
   authorId                String
   editingBackupContent    String?

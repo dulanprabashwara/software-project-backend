@@ -19,6 +19,9 @@ const wordpressRoutes = require("./wordpress.routes");
 const searchRoutes       = require("./search.routes"); 
 const homefeedRoutes = require("./homefeed.routes");
 const articleReadRoutes = require("./articleRead.routes");
+const savedArticleRoutes = require("./savedArticle.routes");
+const trendingArticlesRoutes = require("./trendingArticles.routes");
+
 const router = Router();
 
 // ─── API Routes ─────────────────────────────
@@ -41,5 +44,8 @@ router.use("/wordpress",  wordpressRoutes);
 router.use("/search",     searchRoutes);  
 router.use("/homefeed", homefeedRoutes);
 router.use("/articleRead", articleReadRoutes);
+router.use("/saveArticle", savedArticleRoutes);
+router.use("/trendingArticles", trendingArticlesRoutes);
+
 
 module.exports = router;
