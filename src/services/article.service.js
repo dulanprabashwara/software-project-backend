@@ -14,6 +14,8 @@ const ARTICLE_STATUS = Object.freeze({
   SCHEDULED: "SCHEDULED",
 });
 
+const MAX_TAGS = 5;
+
 function normalizeArticleStatus(status) {
   if (!status) return ARTICLE_STATUS.EDITING;
 
@@ -41,6 +43,51 @@ function requireCompleteArticle({ title, content }, status) {
   }
 }
 
+function normalizeTags(tags) {
+  if (tags === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(tags)) {
+    throw ApiError.badRequest("tags must be an array.");
+  }
+
+  const normalized = tags
+    .map((tag) => String(tag || "").trim())
+    .filter(Boolean)
+    .filter((tag, index, array) => {
+      return array.findIndex((item) => item.toLowerCase() === tag.toLowerCase()) === index;
+    });
+
+  if (normalized.length === 0) {
+    throw ApiError.badRequest("At least one tag is required.");
+  }
+
+  if (normalized.length > MAX_TAGS) {
+    throw ApiError.badRequest(`You can add up to ${MAX_TAGS} tags only.`);
+  }
+
+  return normalized;
+}
+
+function parseScheduledAt(value) {
+  if (!value) {
+    throw ApiError.badRequest("scheduledAt is required when scheduling an article.");
+  }
+
+  const scheduledAt = new Date(value);
+
+  if (Number.isNaN(scheduledAt.getTime())) {
+    throw ApiError.badRequest("Invalid scheduledAt value.");
+  }
+
+  if (scheduledAt <= new Date()) {
+    throw ApiError.badRequest("Scheduled time must be in the future.");
+  }
+
+  return scheduledAt;
+}
+
 function buildEditExistingPayload(payload) {
   return {
     title: payload.title?.trim() || "Untitled",
@@ -56,6 +103,15 @@ function buildEditAsNewPayload(article, payload) {
     content: payload.content || "",
     coverImage: payload.coverImage || null,
     readingTime: calculateReadingTime(payload.content || ""),
+  };
+}
+
+function buildClearedEditingBackupData() {
+  return {
+    editingBackupTitle: null,
+    editingBackupContent: null,
+    editingBackupCoverImage: null,
+    editingStartedAt: null,
   };
 }
 
@@ -111,13 +167,7 @@ function buildArticleCreateData(authorId, payload, slug) {
   }
 
   if (normalizedStatus === ARTICLE_STATUS.SCHEDULED) {
-    if (!scheduledAt) {
-      throw ApiError.badRequest(
-        "scheduledAt is required when status is SCHEDULED.",
-      );
-    }
-
-    articleData.scheduledAt = new Date(scheduledAt);
+    articleData.scheduledAt = parseScheduledAt(scheduledAt);
   }
 
   return articleData;
@@ -171,11 +221,7 @@ function buildArticleUpdateData(existingArticle, payload) {
   }
 
   if (tags !== undefined) {
-    if (!Array.isArray(tags)) {
-      throw ApiError.badRequest("tags must be an array.");
-    }
-
-    updateData.tags = tags;
+    updateData.tags = normalizeTags(tags);
   }
 
   if (status !== undefined && normalizedStatus !== existingArticle.status) {
@@ -183,16 +229,19 @@ function buildArticleUpdateData(existingArticle, payload) {
 
     if (normalizedStatus === ARTICLE_STATUS.PUBLISHED) {
       updateData.publishedAt = new Date();
+      updateData.scheduledAt = null;
     }
 
     if (normalizedStatus === ARTICLE_STATUS.SCHEDULED) {
-      if (!scheduledAt) {
-        throw ApiError.badRequest(
-          "scheduledAt is required when status is SCHEDULED.",
-        );
-      }
+      updateData.scheduledAt = parseScheduledAt(scheduledAt);
+      updateData.publishedAt = null;
+    }
 
-      updateData.scheduledAt = new Date(scheduledAt);
+    if (
+      normalizedStatus === ARTICLE_STATUS.DRAFT ||
+      normalizedStatus === ARTICLE_STATUS.EDITING
+    ) {
+      updateData.scheduledAt = null;
     }
   }
 
@@ -461,8 +510,8 @@ async function getArticleBySlug(slug, currentUserId = null) {
       _count: {
         select: {
           comments: true,
-          likes: true,
           shares: true,
+          savedBy: true,
         },
       },
     },
@@ -472,34 +521,22 @@ async function getArticleBySlug(slug, currentUserId = null) {
     throw ApiError.notFound("Article not found.");
   }
 
-  let isLiked = false;
   let isSaved = false;
 
   if (currentUserId) {
-    const [like, saved] = await Promise.all([
-      prisma.articleLike.findUnique({
-        where: {
-          userId_articleId: {
-            userId: currentUserId,
-            articleId: article.id,
-          },
+    const saved = await prisma.savedArticle.findUnique({
+      where: {
+        userId_articleId: {
+          userId: currentUserId,
+          articleId: article.id,
         },
-      }),
-      prisma.savedArticle.findUnique({
-        where: {
-          userId_articleId: {
-            userId: currentUserId,
-            articleId: article.id,
-          },
-        },
-      }),
-    ]);
+      },
+    });
 
-    isLiked = Boolean(like);
     isSaved = Boolean(saved);
   }
 
-  return { ...article, isLiked, isSaved };
+  return { ...article, isSaved };
 }
 
 async function getArticleFeed({
@@ -533,7 +570,7 @@ async function getArticleFeed({
 
   const orderBy =
     sortBy === "popular"
-      ? [{ likeCount: "desc" }, { readCount: "desc" }]
+      ? [{ shareCount: "desc" }, { readCount: "desc" }, { publishedAt: "desc" }]
       : [{ publishedAt: "desc" }];
 
   const [articles, total] = await Promise.all([
@@ -551,7 +588,8 @@ async function getArticleFeed({
         _count: {
           select: {
             comments: true,
-            likes: true,
+            savedBy: true,
+            shares: true,
           },
         },
       },
@@ -563,6 +601,107 @@ async function getArticleFeed({
   ]);
 
   return { articles, total };
+}
+
+async function getUserPublishedArticles(userId, page = 1, limit = 10) {
+  const skip = (page - 1) * limit;
+
+  const where = {
+    authorId: userId,
+    status: ARTICLE_STATUS.PUBLISHED,
+  };
+
+  const [articles, total] = await Promise.all([
+    prisma.article.findMany({
+      where,
+      orderBy: [{ publishedAt: "desc" }, { updatedAt: "desc" }],
+      skip,
+      take: limit,
+      include: {
+        author: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+          },
+        },
+        _count: {
+          select: {
+            comments: true,
+            shares: true,
+            savedBy: true,
+          },
+        },
+      },
+    }),
+    prisma.article.count({ where }),
+  ]);
+
+  return { articles, total };
+}
+
+async function publishArticle(articleId, userId, payload) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  if (article.status === ARTICLE_STATUS.PUBLISHED) {
+    throw ApiError.badRequest("This article is already published.");
+  }
+
+  requireCompleteArticle(
+    {
+      title: article.title,
+      content: article.content,
+    },
+    ARTICLE_STATUS.PUBLISHED,
+  );
+
+  const tags = normalizeTags(payload.tags);
+  const timing = String(payload.timing || "now").trim().toLowerCase();
+
+  if (timing !== "now" && timing !== "schedule") {
+    throw ApiError.badRequest("timing must be either 'now' or 'schedule'.");
+  }
+
+  const updateData = {
+    tags,
+  };
+
+  if (timing === "schedule") {
+    updateData.status = ARTICLE_STATUS.SCHEDULED;
+    updateData.scheduledAt = parseScheduledAt(payload.scheduledAt);
+    updateData.publishedAt = null;
+  } else {
+    updateData.status = ARTICLE_STATUS.PUBLISHED;
+    updateData.publishedAt = new Date();
+    updateData.scheduledAt = null;
+
+    Object.assign(updateData, buildClearedEditingBackupData());
+  }
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: updateData,
+    include: {
+      author: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+        },
+      },
+    },
+  });
+
+  if (
+    article.status !== ARTICLE_STATUS.PUBLISHED &&
+    updatedArticle.status === ARTICLE_STATUS.PUBLISHED
+  ) {
+    await incrementPublishedArticleCount(userId);
+  }
+
+  return updatedArticle;
 }
 
 async function updateArticle(articleId, authorId, payload) {
@@ -692,10 +831,7 @@ async function discardExistingArticleEdits(articleId, userId) {
       readingTime: calculateReadingTime(restoredContent || ""),
       status: ARTICLE_STATUS.DRAFT,
       updatedAt: article.editingStartedAt || article.updatedAt,
-      editingBackupTitle: null,
-      editingBackupContent: null,
-      editingBackupCoverImage: null,
-      editingStartedAt: null,
+      ...buildClearedEditingBackupData(),
     },
     include: {
       author: {
@@ -744,10 +880,7 @@ async function saveExistingArticleAsDraft(articleId, userId, payload) {
     ...buildEditExistingPayload(payload),
     status: ARTICLE_STATUS.DRAFT,
     isEdited: true,
-    editingBackupTitle: null,
-    editingBackupContent: null,
-    editingBackupCoverImage: null,
-    editingStartedAt: null,
+    ...buildClearedEditingBackupData(),
   };
 
   if (nextTitle && nextTitle !== article.title) {
@@ -910,6 +1043,8 @@ module.exports = {
   getCurrentEditingArticle,
   getArticleBySlug,
   getArticleFeed,
+  getUserPublishedArticles,
+  publishArticle,
   updateArticle,
   startExistingArticleEditing,
   autosaveExistingArticle,
