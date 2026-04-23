@@ -1,33 +1,24 @@
 // src/services/email.service.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Email Service — Phase 3b
-
+// Phase 3b — Sends session completion and critical error emails to all admin users.
 
 const nodemailer = require("nodemailer");
 const prisma     = require("../config/prisma");
 
-// ── createTransporter ─────────────────────────────────────────────────────────
-// Builds the nodemailer SMTP transporter from .env config.
-
+// Creates the nodemailer SMTP transporter from environment config.
 function createTransporter() {
   return nodemailer.createTransport({
     host:   process.env.SMTP_HOST || "smtp.gmail.com",
     port:   parseInt(process.env.SMTP_PORT) || 587,
-    secure: false, // false = STARTTLS (port 587). Set true only for port 465.
+    secure: false,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
-    tls: {
-      rejectUnauthorized: false, // allow self-signed certs in development
-    },
+    tls: { rejectUnauthorized: false },
   });
 }
 
-// ── getAdminEmails ─────────────────────────────────────────────────────────────
-// Queries the User table for all users with role = "ADMIN".
-// Returns array of email strings: ["admin1@x.com", "admin2@x.com"].
-
+// Fetches all admin users from the database and returns their email addresses.
 async function getAdminEmails() {
   const admins = await prisma.user.findMany({
     where:  { role: "ADMIN" },
@@ -43,23 +34,17 @@ async function getAdminEmails() {
   return emails;
 }
 
-// ── buildCompletionEmailHtml ───────────────────────────────────────────────────
-// Generates the full HTML report email body.
-
+// Builds the full HTML body for the session completion report email.
 function buildCompletionEmailHtml(report) {
-  const isInterrupted     = report.isInterrupted     || false;
+  const isInterrupted      = report.isInterrupted      || false;
   const isManualEnrichment = report.isManualEnrichment || false;
 
   const statusColor = (report.criticalErrors || isInterrupted) ? "#e74c3c" : "#1abc9c";
 
   let statusLabel;
-  if (isInterrupted) {
-    statusLabel = "🛑 Session Interrupted — Partial Report";
-  } else if (report.criticalErrors) {
-    statusLabel = "⚠️ Completed with Critical Errors";
-  } else {
-    statusLabel = "✅ Completed Successfully";
-  }
+  if (isInterrupted)          statusLabel = "🛑 Session Interrupted — Partial Report";
+  else if (report.criticalErrors) statusLabel = "⚠️ Completed with Critical Errors";
+  else                        statusLabel = "✅ Completed Successfully";
 
   const interruptedBanner = isInterrupted
     ? `<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:16px;margin-bottom:20px;">
@@ -77,7 +62,7 @@ function buildCompletionEmailHtml(report) {
     : "N/A";
 
   // Per-category breakdown rows
-  const categoryRows = (report.keywordStats || []).map((s) => `
+  const categoryRows = (report.categoryStats || []).map((s) => `
     <tr style="border-bottom:1px solid #eee;">
       <td style="padding:8px 12px;">${s.category}</td>
       <td style="padding:8px 12px;text-align:center;">${s.urlsProcessed}</td>
@@ -87,8 +72,7 @@ function buildCompletionEmailHtml(report) {
     </tr>
   `).join("");
 
-  // Top 10 keywords with most articles
-  const topKeywords = (report.keywordsWithContent || []).slice(0, 10);
+  const topKeywords    = (report.keywordsWithContent || []).slice(0, 10);
   const topKeywordRows = topKeywords.map((k) => `
     <tr style="border-bottom:1px solid #eee;">
       <td style="padding:6px 12px;">${k.keyword}</td>
@@ -96,7 +80,6 @@ function buildCompletionEmailHtml(report) {
     </tr>
   `).join("");
 
-  // Keywords with no content this session (first 20)
   const emptyKeywords = (report.keywordsWithoutContent || []).slice(0, 20);
   const emptySection  = emptyKeywords.length > 0
     ? `<p style="margin-top:8px;font-size:13px;color:#999;">
@@ -105,7 +88,6 @@ function buildCompletionEmailHtml(report) {
        </p>`
     : "";
 
-  // Token usage
   const tokenSection = report.aiTokenUsage
     ? `<tr><td style="padding:10px 16px;font-weight:bold;">AI Tokens Used</td>
          <td style="padding:10px 16px;">
@@ -210,9 +192,7 @@ function buildCompletionEmailHtml(report) {
 </html>`;
 }
 
-// ── buildErrorAlertHtml ────────────────────────────────────────────────────────
-// Simpler urgent alert for critical error situations.
-
+// Builds the HTML body for the urgent critical-error alert email.
 function buildErrorAlertHtml(report, criticalIssues) {
   const issuesList = criticalIssues.map((i) => `<li style="margin-bottom:8px;">${i}</li>`).join("");
 
@@ -244,10 +224,7 @@ function buildErrorAlertHtml(report, criticalIssues) {
 </html>`;
 }
 
-// ── sendCompletionNotification ─────────────────────────────────────────────────
 // Sends the full session report to all admin email addresses.
-// Called at the end of every session regardless of outcome.
-
 async function sendCompletionNotification(report) {
   const adminEmails = await getAdminEmails();
   if (!adminEmails.length) return;
@@ -255,15 +232,10 @@ async function sendCompletionNotification(report) {
   const transporter = createTransporter();
 
   let subject;
-  if (report.isInterrupted) {
-    subject = `🛑 [Easy Blogger] Scraping Interrupted — ${report.successCount} articles saved before shutdown`;
-  } else if (report.isManualEnrichment) {
-    subject = `📝 [Easy Blogger] Manual Enrichment — ${report.enrichedCount} articles enriched`;
-  } else if (report.criticalErrors) {
-    subject = `⚠️ [Easy Blogger] Weekly Scraping — Issues (${report.successRate}% success)`;
-  } else {
-    subject = `✅ [Easy Blogger] Weekly Scraping Done — ${report.successCount} articles saved`;
-  }
+  if (report.isInterrupted)          subject = `🛑 [Easy Blogger] Scraping Interrupted — ${report.successCount} articles saved before shutdown`;
+  else if (report.isManualEnrichment) subject = `📝 [Easy Blogger] Manual Enrichment — ${report.enrichedCount} articles enriched`;
+  else if (report.criticalErrors)     subject = `⚠️ [Easy Blogger] Weekly Scraping — Issues (${report.successRate}% success)`;
+  else                                subject = `✅ [Easy Blogger] Weekly Scraping Done — ${report.successCount} articles saved`;
 
   await transporter.sendMail({
     from:    `"Easy Blogger System" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
@@ -275,10 +247,7 @@ async function sendCompletionNotification(report) {
   console.log(`[Email] Report sent to: ${adminEmails.join(", ")}`);
 }
 
-// ── sendErrorAlert ─────────────────────────────────────────────────────────────
-// Sends an urgent alert ONLY when critical errors are detected.
-// Sent BEFORE the full completion notification.
-
+// Sends a short urgent alert email when critical errors are detected (sent before the full report).
 async function sendErrorAlert(report, criticalIssues) {
   const adminEmails = await getAdminEmails();
   if (!adminEmails.length) return;
@@ -295,7 +264,4 @@ async function sendErrorAlert(report, criticalIssues) {
   console.log(`[Email] Critical alert sent to: ${adminEmails.join(", ")}`);
 }
 
-module.exports = {
-  sendCompletionNotification,
-  sendErrorAlert,
-};
+module.exports = { sendCompletionNotification, sendErrorAlert };

@@ -1,59 +1,35 @@
 // src/services/scraper.service.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Content Scraping Service — Phase 1 (Initialization) + Phase 2 (Scraping)
-//
-// Phase 1: Load config from DB → create session log → init counters
-// Phase 2: For each source URL → HTTP request → parse → clean → validate
-//          → duplicate check → save raw article → log every outcome
-//
-// Technologies: axios (HTTP), cheerio (HTML parsing), prisma (DB)
-// ─────────────────────────────────────────────────────────────────────────────
+// Phase 1 (Init) + Phase 2 (Scraping) of the weekly content pipeline.
+// Phase 1: Load sources from DB → create session → init counters.
+// Phase 2: Per source — fetch homepage → collect article links → scrape each → validate → save.
 
 const axios   = require("axios");
 const cheerio = require("cheerio");
 const prisma  = require("../config/prisma");
 
-// ── SECURITY: Import security utilities from scraperSecurity.js ──────────────
-// These functions provide SSRF protection, response safety checks,
-// redirect validation, and content sanitization before DB storage.
-// See src/utils/scraperSecurity.js for full documentation of each function.
 const {
-  validateScrapingUrl,    // SSRF protection — validates source URLs before any request
-  validateRedirectUrl,    // Validates redirect destinations (malicious redirect defence)
-  checkResponseSafety,    // Checks Content-Type and response size
-  sanitizeContent,        // Strips HTML/XSS from article body before DB save
-  sanitizeTitle,          // Strips HTML/XSS from title/author before DB save
-  buildSecureAxiosConfig, // Returns hardened axios config (size limits, no auto-redirect)
+  validateScrapingUrl,
+  validateRedirectUrl,
+  checkResponseSafety,
+  sanitizeContent,
+  sanitizeTitle,
+  buildSecureAxiosConfig,
 } = require("../utils/scraperSecurity");
-// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Constants ─────────────────────────────────────────────────────────────────
 
-// Maximum articles to SAVE per source URL per session.
-// We fetch more candidates than this and filter out already-scraped URLs
-// before reaching this cap. See collectArticleLinks() for details.
-const MAX_ARTICLES_PER_SOURCE = 7;
+// ── Constants ──────────────────────────────────────────────────────────────────
 
-// How many candidate links to fetch from a source homepage per session.
-// Must be larger than MAX_ARTICLES_PER_SOURCE so we have room to skip
-// duplicates and still fill the quota with fresh articles.
-// e.g. fetch 25 candidates → deduplicate → keep up to 7 fresh ones.
-const CANDIDATE_LINKS_PER_SOURCE = 25;
-
-// Delay range between HTTP requests (milliseconds) — polite scraping
-const RATE_LIMIT_MIN_MS = 1500;
-const RATE_LIMIT_MAX_MS = 2500;
+const MAX_ARTICLES_PER_SOURCE    = 7;   // max articles saved per source per session
+const CANDIDATE_LINKS_PER_SOURCE = 25;  // links collected before dedup filtering
+const RATE_LIMIT_MIN_MS          = 1500;
+const RATE_LIMIT_MAX_MS          = 2500;
 
 
 // ════════════════════════════════════════════════════════════════════════════
 // UTILITY HELPERS
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── parseScrapeWindowToDays ───────────────────────────────────────────────
-// Converts the admin-configured scrapeWindow string to a number of days.
-// Matches exactly the dropdown values in page.jsx.
-// Returns null if no limit should be applied.
-
+// Converts the admin scrapeWindow string (e.g. "Last 7 Days") to a day count.
 function parseScrapeWindowToDays(scrapeWindow) {
   if (!scrapeWindow) return null;
 
@@ -70,7 +46,6 @@ function parseScrapeWindowToDays(scrapeWindow) {
 
   if (exactMap[val] !== undefined) return exactMap[val];
 
-  // Flexible fallbacks for any future values the admin panel might add
   const dayMatch   = val.match(/^(?:last\s+)?(\d+)\s*days?$/);
   if (dayMatch) return parseInt(dayMatch[1]);
 
@@ -84,117 +59,73 @@ function parseScrapeWindowToDays(scrapeWindow) {
   return null;
 }
 
-// ── countWords ────────────────────────────────────────────────────────────
+// Counts words in a text string.
 function countWords(text) {
   return text.trim().split(/\s+/).filter((w) => w.length > 0).length;
 }
 
-// ── sleep ─────────────────────────────────────────────────────────────────
+// Pauses execution for the given number of milliseconds.
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ── wakeUpDatabase ────────────────────────────────────────────────────────────
-// NeonDB free tier suspends the connection pool after ~5 minutes of inactivity.
-// This function pings the database with a lightweight SELECT 1 query and retries
-// if it fails, giving NeonDB time to wake up before the scraping session starts.
-//
-// Retry behaviour:
-//   Attempt 1 — immediate
-//   Attempt 2 — wait 5 seconds
-//   Attempt 3 — wait 10 seconds
-//   Attempt 4 — wait 15 seconds
-//   Attempt 5 — wait 20 seconds
-//   Total max wait before giving up: ~50 seconds
-//
-// If all 5 attempts fail, throws an error so the cron job logs the failure
-// cleanly in the terminal (session never starts, next Saturday it tries again).
- 
+// Pings the database to ensure it's awake before the session starts (NeonDB free tier suspends after inactivity).
 async function wakeUpDatabase(maxAttempts = 5) {
-  const delays = [0, 5000, 10000, 15000, 20000]; // ms to wait before each attempt
- 
+  const delays = [0, 5000, 10000, 15000, 20000];
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const delay = delays[attempt - 1] || 20000;
- 
+
     if (delay > 0) {
       console.log(`[DB Wake-up] Waiting ${delay / 1000}s before retry ${attempt}/${maxAttempts}...`);
       await sleep(delay);
     }
- 
+
     try {
       await prisma.$queryRaw`SELECT 1`;
-      if (attempt > 1) {
-        console.log(`[DB Wake-up] ✅ Database woke up on attempt ${attempt}`);
-      } else {
-        console.log("[DB Wake-up] ✅ Database connection confirmed");
-      }
-      return; // success — proceed with session
+      console.log(attempt > 1
+        ? `[DB Wake-up] ✅ Database woke up on attempt ${attempt}`
+        : "[DB Wake-up] ✅ Database connection confirmed"
+      );
+      return;
     } catch (err) {
       console.warn(`[DB Wake-up] ⚠️  Attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
     }
   }
- 
-  // All attempts exhausted
+
   throw new Error(
     `Database unreachable after ${maxAttempts} attempts. ` +
-    `NeonDB may be down or DATABASE_URL is incorrect. ` +
-    `Session aborted — will retry next Saturday.`
+    `NeonDB may be down or DATABASE_URL is incorrect. Session aborted.`
   );
 }
 
-// ── normalizeDomainForComparison ──────────────────────────────────────────────
-// SECURITY HELPER: Strips the leading "www." from a hostname before comparison.
-//
-// Why needed: validateRedirectUrl() in scraperSecurity.js checks whether a
-// redirect destination is on the same domain as the source. However, it uses
-// a simple endsWith() check which fails when a site redirects from
-// www.example.com → example.com (dropping the www prefix). This is a very
-// common and harmless server-side redirect pattern. Without normalization,
-// these legitimate redirects would be incorrectly blocked.
-//
-// Examples of what this fixes:
-//   www.healthline.com → healthline.com   ✅ allowed (www dropped)
-//   healthline.com → www.healthline.com   ✅ allowed (www added)
-//   techcrunch.com → evil.com             ❌ still blocked (correct)
-//   techcrunch.com → cdn.techcrunch.com   ✅ allowed (subdomain of same domain)
-
+// Strips the leading "www." from a hostname for domain comparison purposes.
 function normalizeDomainForComparison(hostname) {
   return hostname.toLowerCase().replace(/^www\./, "");
 }
 
-// ── isRedirectAllowedDomain ───────────────────────────────────────────────────
-// Wraps validateRedirectUrl() with www-normalization to prevent false blocks.
-// First tries the strict check from scraperSecurity. If that blocks due to the
-// www-mismatch case, applies normalized comparison as a second chance.
-// All other security checks (private IP, scheme, port) are still enforced.
-
+// Validates a redirect URL against the original hostname, allowing legitimate www↔non-www redirects.
 function isRedirectAllowedDomain(redirectUrl, originalHostname) {
-  // First try the strict check from scraperSecurity.js
   const strictCheck = validateRedirectUrl(redirectUrl, originalHostname);
   if (strictCheck.safe) return { safe: true };
 
-  // If it failed specifically due to cross-domain, check with www normalization
   if (strictCheck.reason && strictCheck.reason.startsWith("Cross-domain redirect")) {
     try {
       const redirectHostname = new URL(redirectUrl).hostname.toLowerCase();
-      const normRedirect  = normalizeDomainForComparison(redirectHostname);
-      const normOriginal  = normalizeDomainForComparison(originalHostname);
+      const normRedirect     = normalizeDomainForComparison(redirectHostname);
+      const normOriginal     = normalizeDomainForComparison(originalHostname);
 
-      // Allow if normalized domains match, or one is a subdomain of the other
       const sameAfterNorm =
         normRedirect === normOriginal ||
         normRedirect.endsWith("." + normOriginal) ||
         normOriginal.endsWith("." + normRedirect);
 
-      if (sameAfterNorm) {
-        return { safe: true }; // legitimate www↔non-www redirect
-      }
+      if (sameAfterNorm) return { safe: true };
     } catch {
-      // If URL parsing fails, keep the original block
+      // URL parse failed — keep the original block
     }
   }
 
-  // All other failures (private IP, bad scheme, bad port) stay blocked
   return strictCheck;
 }
 
@@ -203,18 +134,8 @@ function isRedirectAllowedDomain(redirectUrl, originalHostname) {
 // PHASE 1 — INITIALIZATION
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── loadConfiguration ─────────────────────────────────────────────────────
-// Reads all active ScrapingSource records from the database.
-// Groups them by category for the scraping loop.
-// Field names match admin.service.js exactly: name, url, category,
-// scrapeWindow, minWordCount, excludedKeywords, status.
-//
-// SECURITY: After fetching, every source URL is validated with
-// validateScrapingUrl() before it enters the scraping loop. Sources that
-// fail the SSRF check are excluded from scraping, stored in blockedSources,
-// and logged to the session log once the session is created. This prevents
-// the scraper from ever making requests to internal network addresses.
-
+// Loads all active scraping sources from the database and validates each URL for security.
+// Returns sources grouped by category plus a list of any blocked sources.
 async function loadConfiguration() {
   console.log("[Phase 1] loadConfiguration() — fetching active sources from DB...");
 
@@ -225,7 +146,7 @@ async function loadConfiguration() {
       name:             true,
       url:              true,
       category:         true,
-      scrapeWindow:     true,   // article age limit e.g. "Last 7 Days"
+      scrapeWindow:     true,
       minWordCount:     true,
       excludedKeywords: true,
     },
@@ -236,11 +157,7 @@ async function loadConfiguration() {
     return { categories: [], sourcesByCategory: {}, totalSources: 0, blockedSources: [] };
   }
 
-  // ── SECURITY: SSRF validation — check every source URL before scraping ──
-  // This is done once here at session init using DNS resolution.
-  // Much cheaper to do once per source than once per article link.
-  // Sources that fail are excluded from this session and their admins are
-  // notified via the session report email.
+  // SSRF check — validates every source URL before allowing any HTTP requests
   const safeSources    = [];
   const blockedSources = [];
 
@@ -257,9 +174,8 @@ async function loadConfiguration() {
   if (blockedSources.length > 0) {
     console.warn(`[Phase 1] 🔒 ${blockedSources.length} source(s) blocked by SSRF security checks`);
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
-  // Group by category: { Technology: [...], Health: [...], ... }
+  // Group safe sources by category: { "Technology": [...], "Health": [...] }
   const sourcesByCategory = {};
   for (const src of safeSources) {
     const cat = src.category || "Uncategorized";
@@ -273,9 +189,7 @@ async function loadConfiguration() {
   return { categories, sourcesByCategory, totalSources: safeSources.length, blockedSources };
 }
 
-// ── getLastSuccessfulScrapeDate ────────────────────────────────────────────
 // Finds the completion date of the most recent successful session.
-
 async function getLastSuccessfulScrapeDate() {
   const last = await prisma.scrapingSession.findFirst({
     where:   { status: "completed" },
@@ -287,31 +201,21 @@ async function getLastSuccessfulScrapeDate() {
   return date;
 }
 
-// ── createScrapingSessionLog ───────────────────────────────────────────────
-// Creates the ScrapingSession row at the START of the job.
-// Returns sessionId — passed to all subsequent operations.
-
+// Creates the ScrapingSession row at the start of the job and returns its ID.
 async function createScrapingSessionLog(totalSources, lastScrapeDate) {
   console.log("[Phase 1] createScrapingSessionLog()...");
 
   const session = await prisma.scrapingSession.create({
-    data: {
-      status:        "running",
-      lastScrapeDate,
-      totalSources,
-    },
+    data: { status: "running", lastScrapeDate, totalSources },
   });
 
   console.log(`[Phase 1] Session created → id: ${session.id}`);
   return session.id;
 }
 
-// ── initializeKeywordCounters ──────────────────────────────────────────────
-// Creates in-memory counters per category.
-// { Technology: { success:0, failure:0, duplicate:0, urlsProcessed:0 }, ... }
-
-function initializeKeywordCounters(categories) {
-  console.log("[Phase 1] initializeKeywordCounters()...");
+// Creates in-memory success/failure counters for each category.
+function initializeCategoryCounters(categories) {
+  console.log("[Phase 1] initializeCategoryCounters()...");
   const counters = {};
   for (const cat of categories) {
     counters[cat] = { successCount: 0, failureCount: 0, duplicateCount: 0, urlsProcessed: 0 };
@@ -324,50 +228,21 @@ function initializeKeywordCounters(categories) {
 // PHASE 2 — ARTICLE SCRAPING & CONTENT VALIDATION
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── applyRateLimitDelay ────────────────────────────────────────────────────
-// Waits 1.5–2.5 seconds between HTTP requests.
-
+// Waits a random 1.5–2.5 second delay to avoid overwhelming target servers.
 async function applyRateLimitDelay() {
   const ms = RATE_LIMIT_MIN_MS + Math.random() * (RATE_LIMIT_MAX_MS - RATE_LIMIT_MIN_MS);
   await sleep(ms);
 }
 
-// ── sendHTTPRequest ────────────────────────────────────────────────────────
-// Downloads a web page using axios with hardened security settings.
-// Includes one automatic retry on network errors.
-// Throws on persistent failure — caller logs and continues.
-//
-// SECURITY ENHANCEMENTS vs original version:
-//   1. Uses buildSecureAxiosConfig() instead of inline axios options.
-//      This enforces: 5MB max response, 15s timeout, no auto-redirects.
-//   2. Handles HTTP redirects MANUALLY (axios maxRedirects: 0).
-//      Each redirect destination is validated with isRedirectAllowedDomain()
-//      before being followed. This prevents redirect-based SSRF attacks
-//      where a site accepts a request but redirects to an internal address.
-//      The www-normalization wrapper handles legitimate www↔non-www redirects.
-//   3. Checks the response Content-Type via checkResponseSafety().
-//      Rejects non-HTML responses (PDFs, binaries, JSON APIs, executables).
-//   4. Checks actual response size via checkResponseSafety().
-//      Rejects responses over 5MB even if Content-Length was wrong/missing.
-//
-// NOTE on scraperSecurity.js ALLOWED_PORTS bug:
-//   ALLOWED_PORTS Set contains [80, 443, 8080, 8443, ""] (mixed number/string).
-//   new URL().port always returns a string, so ports 80/443 explicitly in the
-//   URL would be incorrectly blocked by validateScrapingUrl. However, real
-//   news sites never include explicit port numbers in their URLs, so this
-//   does not affect any legitimate source in practice. Noted for future fix.
-
+// Downloads a web page using hardened axios settings (size limits, manual redirect validation, one retry).
 async function sendHTTPRequest(url, attempt = 1) {
   const originalHostname = new URL(url).hostname;
 
   try {
-    // ── SECURITY: Use hardened axios config (size limits, no auto-redirects) ─
     const config   = buildSecureAxiosConfig();
     const response = await axios.get(url, config);
 
-    // ── SECURITY: Handle redirects manually to validate each destination ─────
-    // buildSecureAxiosConfig() sets maxRedirects: 0, so axios stops here
-    // and gives us the redirect response. We validate before following.
+    // Manual redirect handling — each redirect destination is validated before following
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const locationHeader = response.headers["location"];
 
@@ -378,14 +253,10 @@ async function sendHTTPRequest(url, attempt = 1) {
         );
       }
 
-      // Resolve relative redirects to absolute (e.g. "/new-path" → "https://site.com/new-path")
       const absoluteRedirect = locationHeader.startsWith("http")
         ? locationHeader
         : new URL(locationHeader, url).href;
 
-      // ── Validate the redirect destination ──────────────────────────────────
-      // isRedirectAllowedDomain wraps validateRedirectUrl() with www-normalization
-      // to prevent false blocks on legitimate www↔non-www redirects.
       const redirectCheck = isRedirectAllowedDomain(absoluteRedirect, originalHostname);
       if (!redirectCheck.safe) {
         throw Object.assign(
@@ -394,10 +265,8 @@ async function sendHTTPRequest(url, attempt = 1) {
         );
       }
 
-      // Follow the validated redirect (one hop only — no chained redirects)
       const redirectResponse = await axios.get(absoluteRedirect, config);
 
-      // ── Check the redirected response for safety ───────────────────────────
       const safetyCheck = checkResponseSafety(redirectResponse);
       if (!safetyCheck.safe) {
         throw Object.assign(
@@ -408,10 +277,8 @@ async function sendHTTPRequest(url, attempt = 1) {
 
       return { htmlContent: redirectResponse.data, statusCode: redirectResponse.status };
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
-    // ── SECURITY: Check Content-Type and response size ────────────────────────
-    // Rejects non-HTML responses (PDFs, binaries, APIs) and oversized responses.
+    // Check Content-Type and size — rejects non-HTML and oversized responses
     const safetyCheck = checkResponseSafety(response);
     if (!safetyCheck.safe) {
       throw Object.assign(
@@ -419,7 +286,6 @@ async function sendHTTPRequest(url, attempt = 1) {
         { statusCode: 0, securityBlock: true }
       );
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
     if (response.status >= 400) {
       throw Object.assign(new Error(`HTTP ${response.status}`), { statusCode: response.status });
@@ -428,11 +294,9 @@ async function sendHTTPRequest(url, attempt = 1) {
     return { htmlContent: response.data, statusCode: response.status };
 
   } catch (err) {
-    // Security blocks are definitive — do not retry them, they will fail again
-    if (err.securityBlock) throw err;
+    if (err.securityBlock) throw err; // security blocks are definitive — no retry
 
     if (attempt < 2) {
-      // One retry after a short delay (same as original behaviour)
       await sleep(3000);
       return sendHTTPRequest(url, 2);
     }
@@ -440,35 +304,8 @@ async function sendHTTPRequest(url, attempt = 1) {
   }
 }
 
-// ── collectArticleLinks ────────────────────────────────────────────────────
-// Scans the homepage HTML for links that look like individual article pages.
-// Filters out navigation/category/tag/author pages.
-//
-// SMART DEDUPLICATION STRATEGY (why this was changed):
-//   The original version returned the top N scored links from the homepage
-//   regardless of whether those URLs already existed in our database.
-//   News homepages show the same top articles week after week (pinned,
-//   "most popular", "editor's picks"), so the scraper kept fetching the same
-//   7 URLs every Saturday and all 7 would be rejected as duplicates —
-//   wasting HTTP requests and enrichment AI quota.
-//
-//   New approach:
-//   1. Collect CANDIDATE_LINKS_PER_SOURCE candidates (25 > 7) from the page.
-//   2. Bulk-check all of them against the database in ONE query.
-//   3. Put already-scraped URLs at the bottom of the priority list.
-//   4. Return up to MAX_ARTICLES_PER_SOURCE (7) — filling the quota with
-//      fresh URLs first, only falling back to already-scraped ones if there
-//      are fewer than 7 fresh articles available.
-//
-//   This way each Saturday's session grabs up to 7 genuinely new articles
-//   per source while still completing the quota if the source hasn't
-//   published enough new content.
-//
-// SECURITY: Added port check — article links pointing to non-standard ports
-// (e.g. :8000, :3000, :22) are skipped. Standard ports (80, 443, 8080, 8443)
-// and no-explicit-port (default) are allowed. This prevents a malicious site
-// from embedding links to internal services in its homepage HTML.
-
+// Scans the homepage HTML for article links, deduplicates against the database,
+// and returns up to MAX_ARTICLES_PER_SOURCE URLs — fresh articles first.
 async function collectArticleLinks(html, sourceUrl) {
   const $ = cheerio.load(html);
   const origin = new URL(sourceUrl).origin;
@@ -477,7 +314,6 @@ async function collectArticleLinks(html, sourceUrl) {
   $("a[href]").each((_, el) => {
     let href = $(el).attr("href") || "";
 
-    // Resolve relative and protocol-relative URLs
     if (href.startsWith("//"))  href = "https:" + href;
     if (href.startsWith("/"))   href = origin + href;
     if (!href.startsWith("http")) return;
@@ -485,29 +321,22 @@ async function collectArticleLinks(html, sourceUrl) {
     let parsed;
     try { parsed = new URL(href); } catch { return; }
 
-    // Must be on the same domain
     if (parsed.origin !== origin) return;
 
-    // Strip fragment and query (we want clean article URLs)
     const cleanUrl = parsed.origin + parsed.pathname;
 
-    // ── SECURITY: Block article links to non-standard ports ───────────────
+    // Block article links to non-standard ports
     const allowedArticlePorts = new Set(["", "80", "443", "8080", "8443"]);
     if (!allowedArticlePorts.has(parsed.port)) return;
-    // ─────────────────────────────────────────────────────────────────────
 
-    // Skip non-article patterns
     const skipPattern = /\/(tag|tags|category|categories|author|authors|search|page\/\d|feed|rss|wp-json|cdn-cgi|sitemap|subscribe|newsletter|login|signup|about|contact|privacy|terms|advertise|careers)\/?$/i;
     if (skipPattern.test(parsed.pathname)) return;
 
-    // Skip root and very short paths
     const segments = parsed.pathname.split("/").filter(Boolean);
     if (segments.length < 1) return;
 
-    // Skip media files
     if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|mp4|mp3|css|js)$/i.test(parsed.pathname)) return;
 
-    // Score: more path segments + hyphens in slug = more article-like
     const lastSegment = segments[segments.length - 1] || "";
     const hyphenCount = (lastSegment.match(/-/g) || []).length;
     const score       = segments.length * 2 + hyphenCount;
@@ -515,7 +344,7 @@ async function collectArticleLinks(html, sourceUrl) {
     scored.push({ url: cleanUrl, score });
   });
 
-  // Step 1: Deduplicate within the page itself, take top CANDIDATE_LINKS_PER_SOURCE
+  // Deduplicate within the page and take top candidates
   const seen       = new Set();
   const candidates = [];
   for (const item of scored.sort((a, b) => b.score - a.score)) {
@@ -528,20 +357,17 @@ async function collectArticleLinks(html, sourceUrl) {
 
   if (!candidates.length) return [];
 
-  // Step 2: Bulk-check which candidates already exist in our database.
-  // Single query with an IN clause — far cheaper than N individual lookups.
+  // Bulk-check which candidates already exist in the database
   const existingRecords = await prisma.scrapedArticle.findMany({
     where:  { sourceUrl: { in: candidates } },
     select: { sourceUrl: true },
   });
   const alreadyScraped = new Set(existingRecords.map((r) => r.sourceUrl));
 
-  // Step 3: Partition into fresh (never scraped) and known (already in DB).
   const fresh = candidates.filter((url) => !alreadyScraped.has(url));
   const known = candidates.filter((url) =>  alreadyScraped.has(url));
 
-  // Step 4: Fill quota with fresh first, pad with known only if needed.
-  // This ensures new articles are always prioritised over revisiting old ones.
+  // Fresh articles fill the quota first; fall back to known ones only if needed
   const selected = [
     ...fresh.slice(0, MAX_ARTICLES_PER_SOURCE),
     ...known.slice(0, Math.max(0, MAX_ARTICLES_PER_SOURCE - fresh.length)),
@@ -555,17 +381,12 @@ async function collectArticleLinks(html, sourceUrl) {
   return selected;
 }
 
-// ── parseHTML ─────────────────────────────────────────────────────────────
-// Loads HTML into Cheerio. Returns the $ jQuery-like object.
-
+// Loads HTML into a Cheerio instance for DOM traversal.
 function parseHTML(html) {
   return cheerio.load(html);
 }
 
-// ── identifyArticleStructure ──────────────────────────────────────────────
-// Finds the main article container element using common CSS selectors.
-// Returns the Cheerio element (articleStructure).
-
+// Finds the main article content container using common CSS selectors.
 function identifyArticleStructure($) {
   const selectors = [
     "article",
@@ -589,15 +410,11 @@ function identifyArticleStructure($) {
     if ($(sel).length > 0) return $(sel).first();
   }
 
-  return $("body"); // fallback
+  return $("body");
 }
 
-// ── extractArticleContent ─────────────────────────────────────────────────
-// Extracts title, author, published date, and metadata from the page.
-// These are pulled from semantic HTML and Open Graph meta tags.
-
+// Extracts title, author, published date, and Open Graph metadata from the article page.
 function extractArticleContent($, articleContainer) {
-  // Title: article h1 → page h1 → og:title → <title>
   const title =
     articleContainer.find("h1").first().text().trim() ||
     $("h1").first().text().trim() ||
@@ -605,14 +422,12 @@ function extractArticleContent($, articleContainer) {
     $("title").text().split(/[|\-–—]/)[0].trim() ||
     "";
 
-  // Author
   const author =
     $('[rel="author"]').first().text().trim() ||
     $('[itemprop="author"]').first().text().trim() ||
     $(".author-name, .author, .byline").first().text().trim() ||
     null;
 
-  // Published date
   const dateStr =
     $('meta[property="article:published_time"]').attr("content") ||
     $("time[datetime]").first().attr("datetime") ||
@@ -621,7 +436,6 @@ function extractArticleContent($, articleContainer) {
 
   const publishedDate = dateStr ? new Date(dateStr) : null;
 
-  // Metadata for storage
   const metadata = {
     description: $('meta[name="description"]').attr("content") ||
                  $('meta[property="og:description"]').attr("content") || null,
@@ -633,102 +447,52 @@ function extractArticleContent($, articleContainer) {
   return { title, author, publishedDate, metadata };
 }
 
-// ── cleanExtractedContent ─────────────────────────────────────────────────
-// Strips all noise from the article container, then extracts only
-// headings and paragraphs — the meaningful content.
-//
-// REMOVED: scripts, styles, nav, header, footer, ads, social buttons,
-//          related posts, newsletters, comments, ALL media (img/video/audio/
-//          iframe/figure), popups, cookie banners, breadcrumbs, author bios,
-//          tag/category links, print buttons.
-//
-// KEPT: h1-h6 (formatted as [H1] etc.), p, blockquote, li
-//
-// DEDUPLICATION: Set-based, skips any text already extracted.
-//
-// SECURITY: sanitizeContent() is applied to each extracted text segment
-// after cheerio extraction. Even after removing noise elements, some sites
-// may have malformed tags or JavaScript event attributes that survive the
-// cheerio removal pass. sanitizeContent() strips any residual HTML before
-// the text is assembled into the final content string for DB storage.
-
+// Strips all noise from the article container (ads, nav, media, etc.) and returns
+// only headings and paragraphs as clean plain text, sanitized before storage.
 function cleanExtractedContent($, articleContainer) {
-  // ── Remove all noise elements ────────────────────────────────────────
   $(
     "script, style, noscript, " +
     "nav, header, footer, " +
     ".nav, .navigation, .navbar, .nav-bar, .site-nav, .main-nav, " +
     ".site-header, .page-header, .site-footer, .page-footer, " +
     "aside, .sidebar, .side-bar, .widget, .widget-area, [role='complementary'], " +
-
-    // Advertisements — many naming patterns
     ".ad, .ads, .ad-unit, .ad-container, .ad-wrapper, .ad-banner, " +
     ".advertisement, .advertisements, .advert, .google-ad, .sponsored, " +
     '[id*="ad-"], [class*="ad-"], [id*="-ad"], [class*="-ad"], ' +
     '[id*="advert"], [class*="advert"], [id*="sponsor"], [class*="sponsor"], ' +
-
-    // Social sharing
     ".social-share, .social-sharing, .share-buttons, .share-bar, " +
     ".social-links, .social-icons, .follow-us, .addthis, " +
-
-    // Related / recommended content
     ".related-posts, .related-articles, .more-articles, .more-stories, " +
     ".recommended, .you-may-also-like, .read-next, " +
-
-    // Newsletter / subscribe
     ".newsletter, .newsletter-signup, .subscribe, .subscription-box, " +
     ".email-signup, .cta-box, " +
-
-    // Comments
     ".comments, #comments, .comment-section, .disqus-container, #disqus_thread, " +
-
-    // Popups and overlays
     ".popup, .modal, .overlay, .lightbox, " +
     ".cookie-banner, .cookie-notice, .gdpr-banner, .consent-banner, " +
-
-    // Navigation helpers
     ".breadcrumb, .breadcrumbs, .pagination, .page-nav, .post-navigation, " +
     ".back-to-top, .scroll-to-top, " +
-
-    // ALL media — we store text only
     "img, video, audio, picture, source, track, figure, figcaption, " +
     "iframe, embed, object, canvas, svg, " +
-
-    // Author bio boxes
     ".author-bio, .author-box, .about-author, .author-profile, " +
-
-    // Tags and category labels
     ".tags, .tag-list, .categories, .post-tags, .post-categories, " +
     ".entry-meta, .post-meta, " +
-
-    // Utility elements
     '[data-print], .print-button, .toolbar, .utility-bar'
   ).remove();
 
-  // ── Extract headings and paragraphs ──────────────────────────────────
   const contentParts = [];
-  const seenText     = new Set(); // exact duplicate prevention
+  const seenText     = new Set();
 
   articleContainer.find("h1, h2, h3, h4, h5, h6, p, blockquote, li").each((_, el) => {
     const tag = $(el).prop("tagName").toLowerCase();
     let   text = $(el).text().replace(/\s+/g, " ").trim();
 
-    // Skip short snippets (labels, captions, button text, etc.)
     if (!text || text.length < 30) return;
-
-    // Skip if already seen
     if (seenText.has(text)) return;
     seenText.add(text);
 
-    // ── SECURITY: Sanitize each text segment before adding to content ────
-    // cheerio .text() normally returns plain text, but on malformed pages
-    // some HTML can bleed through. sanitizeContent() strips any residual
-    // HTML tags and decodes HTML entities to their text equivalents.
     text = sanitizeContent(text);
-    if (!text || text.length < 30) return; // re-check after sanitization
-    // ─────────────────────────────────────────────────────────────────────
+    if (!text || text.length < 30) return;
 
-    // Format with structural markers for AI readability
     if      (tag === "h1")         contentParts.push(`[H1] ${text}`);
     else if (tag === "h2")         contentParts.push(`[H2] ${text}`);
     else if (tag === "h3")         contentParts.push(`[H3] ${text}`);
@@ -736,7 +500,7 @@ function cleanExtractedContent($, articleContainer) {
     else if (tag === "h5")         contentParts.push(`[H5] ${text}`);
     else if (tag === "h6")         contentParts.push(`[H6] ${text}`);
     else if (tag === "blockquote") contentParts.push(`[QUOTE] ${text}`);
-    else                           contentParts.push(text); // p, li
+    else                           contentParts.push(text);
   });
 
   const content   = contentParts.join("\n\n");
@@ -745,24 +509,13 @@ function cleanExtractedContent($, articleContainer) {
   return { content, wordCount };
 }
 
-// ── validateArticleContent ────────────────────────────────────────────────
-// Three validation checks from the diagram:
-//   1. checkPublishDate  — article age vs admin-configured scrapeWindow
-//   2. checkWordCount    — content words vs admin-configured minWordCount
-//   3. checkContentQuality — structure, length, excluded keywords
-//
-// Returns: { valid: boolean, reason: string|null }
-
+// Checks whether an article passes the age, word count, content quality, and excluded keyword rules.
 function validateArticleContent(cleanedContent, title, publishedDate, source) {
   const { content, wordCount } = cleanedContent;
   const maxAgeDays   = parseScrapeWindowToDays(source.scrapeWindow);
   const minWordCount = source.minWordCount || 300;
   const excludedKws  = source.excludedKeywords || [];
 
-  // ── checkPublishDate ──────────────────────────────────────────────────
-  // Only checks if:
-  //   (a) the article has an extractable published date in its HTML
-  //   (b) the admin set a scrapeWindow value
   if (publishedDate && !isNaN(publishedDate) && maxAgeDays) {
     const ageDays = (Date.now() - publishedDate.getTime()) / (1000 * 60 * 60 * 24);
     if (ageDays > maxAgeDays) {
@@ -773,15 +526,10 @@ function validateArticleContent(cleanedContent, title, publishedDate, source) {
     }
   }
 
-  // ── checkWordCount ────────────────────────────────────────────────────
   if (wordCount < minWordCount) {
-    return {
-      valid:  false,
-      reason: `Word count ${wordCount} below minimum ${minWordCount}`,
-    };
+    return { valid: false, reason: `Word count ${wordCount} below minimum ${minWordCount}` };
   }
 
-  // ── checkContentQuality ───────────────────────────────────────────────
   if (content.length < 400) {
     return { valid: false, reason: "Content too thin after cleaning (< 400 chars)" };
   }
@@ -790,13 +538,11 @@ function validateArticleContent(cleanedContent, title, publishedDate, source) {
     return { valid: false, reason: "Title missing or too short" };
   }
 
-  // Must have at least some paragraph structure
   const paraCount = (content.match(/\n\n/g) || []).length;
   if (paraCount < 2) {
     return { valid: false, reason: "No paragraph structure — likely a listing or navigation page" };
   }
 
-  // Excluded keywords check (case-insensitive, checks title + content)
   const combined = (title + " " + content).toLowerCase();
   for (const kw of excludedKws) {
     if (kw && combined.includes(kw.toLowerCase())) {
@@ -807,11 +553,7 @@ function validateArticleContent(cleanedContent, title, publishedDate, source) {
   return { valid: true, reason: null };
 }
 
-// ── checkDuplicateArticle ─────────────────────────────────────────────────
-// Checks DB for existing article with same URL.
-// The @unique constraint on sourceUrl is the primary guard.
-// Returns true if duplicate.
-
+// Checks the database for an existing article with the same URL.
 async function checkDuplicateArticle(url) {
   const existing = await prisma.scrapedArticle.findUnique({
     where:  { sourceUrl: url },
@@ -820,24 +562,15 @@ async function checkDuplicateArticle(url) {
   return existing !== null;
 }
 
-// ── saveScrapedArticle ────────────────────────────────────────────────────
-// Saves cleaned article to scraped_articles.
-// summary and matchedKeywords are null at this point — populated in Phase 3.
-//
-// SECURITY: sanitizeTitle() and sanitizeContent() are applied as a final
-// pass immediately before writing to the database. This is the last line of
-// defence against any HTML or control characters that may have survived
-// cheerio extraction. Ensures only clean plain text is ever stored.
-
+// Saves a cleaned article to the database (summary and keywords are null until enrichment).
 async function saveScrapedArticle({
   url, title, content, author, publishedDate,
   wordCount, category, scrapingSourceId, metadata, sessionId,
 }) {
-  // ── SECURITY: Final sanitization pass before DB write ────────────────
+  // Final sanitization before writing to the database
   const cleanTitle   = sanitizeTitle(title);
   const cleanContent = sanitizeContent(content);
   const cleanAuthor  = author ? sanitizeTitle(author) : null;
-  // ─────────────────────────────────────────────────────────────────────
 
   return prisma.scrapedArticle.create({
     data: {
@@ -850,41 +583,32 @@ async function saveScrapedArticle({
       category,
       scrapingSourceId,
       metadata:         metadata || null,
-      summary:          null,   // populated by enrichment in Phase 3
-      matchedKeywords:  [],     // populated by enrichment in Phase 3
+      summary:          null,
+      matchedKeywords:  [],
       sessionId,
     },
   });
 }
 
-// ── logScrapingEvent ──────────────────────────────────────────────────────
-// Writes one row to ScrapingLog.
-// Called at every outcome point in the diagram.
-// Non-blocking — failures logged to console but don't crash the scraper.
-
+// Writes a single event (success, failure, duplicate, etc.) to the ScrapingLog table.
 async function logScrapingEvent(sessionId, { logType, url, category, statusCode, reason, details }) {
   await prisma.scrapingLog.create({
     data: {
       sessionId,
       logType,
-      url:        url     || "",
-      category:   category || null,
+      url:        url        || "",
+      category:   category   || null,
       statusCode: statusCode || null,
-      reason:     reason   || null,
-      details:    details  || null,
+      reason:     reason     || null,
+      details:    details    || null,
     },
-  }).catch((err) =>
-    console.error(`[ScrapingLog] Write failed: ${err.message}`)
-  );
+  }).catch((err) => console.error(`[ScrapingLog] Write failed: ${err.message}`));
 }
 
-// ── saveKeywordScrapingStats ──────────────────────────────────────────────
-// Saves per-category stats to KeywordScrapingStats after all URLs
-// for that category are processed.
-
-async function saveKeywordScrapingStats(sessionId, category, counters) {
+// Saves the scraping result counters for one category to the CategoryScrapingStats table.
+async function saveCategoryScrapingStats(sessionId, category, counters) {
   const c = counters[category];
-  await prisma.keywordScrapingStats.create({
+  await prisma.categoryScrapingStats.create({
     data: {
       sessionId,
       category,
@@ -900,19 +624,15 @@ async function saveKeywordScrapingStats(sessionId, category, counters) {
   );
 }
 
-// ── scrapeSource ──────────────────────────────────────────────────────────
-// Orchestrates scraping for ONE source URL.
-// Downloads homepage → collects article links → scrapes each article.
-// Updates counters and logs at every step.
-
+// Orchestrates the full scrape for one source: fetches homepage, collects links, scrapes each article.
 async function scrapeSource(source, sessionId, counters) {
   const { id: sourceId, url: sourceUrl, name, category } = source;
 
   console.log(`\n[Phase 2] ▶ "${name}" (${sourceUrl})`);
 
-  // ── Download source homepage ─────────────────────────────────────────
   await applyRateLimitDelay();
 
+  // Fetch source homepage
   let homepageHtml;
   try {
     ({ htmlContent: homepageHtml } = await sendHTTPRequest(sourceUrl));
@@ -929,7 +649,6 @@ async function scrapeSource(source, sessionId, counters) {
     return;
   }
 
-  // ── Collect article links from homepage ──────────────────────────────
   const articleLinks = await collectArticleLinks(homepageHtml, sourceUrl);
   console.log(`[Phase 2] Found ${articleLinks.length} article links on "${name}"`);
 
@@ -943,13 +662,12 @@ async function scrapeSource(source, sessionId, counters) {
     return;
   }
 
-  // ── Process each article link ────────────────────────────────────────
   for (const articleUrl of articleLinks) {
     counters[category].urlsProcessed++;
 
     await applyRateLimitDelay();
 
-    // sendHTTPRequest
+    // Fetch article page
     let htmlContent;
     try {
       ({ htmlContent } = await sendHTTPRequest(articleUrl));
@@ -966,16 +684,13 @@ async function scrapeSource(source, sessionId, counters) {
       continue;
     }
 
-    // parseHTML → identifyArticleStructure → extractArticleContent
     const $                = parseHTML(htmlContent);
     const articleContainer = identifyArticleStructure($);
     const { title, author, publishedDate, metadata } = extractArticleContent($, articleContainer);
+    const cleaned          = cleanExtractedContent($, articleContainer);
 
-    // cleanExtractedContent
-    const cleaned = cleanExtractedContent($, articleContainer);
     console.log(`[Phase 2] Cleaned: "${title}" (${cleaned.wordCount}w)`);
 
-    // validateArticleContent
     const { valid, reason } = validateArticleContent(cleaned, title, publishedDate, source);
     if (!valid) {
       console.log(`[Phase 2] ⚠️  Invalid: ${reason}`);
@@ -990,7 +705,6 @@ async function scrapeSource(source, sessionId, counters) {
       continue;
     }
 
-    // checkDuplicateArticle
     const isDuplicate = await checkDuplicateArticle(articleUrl);
     if (isDuplicate) {
       console.log(`[Phase 2] ♻️  Duplicate: "${title}"`);
@@ -1005,7 +719,6 @@ async function scrapeSource(source, sessionId, counters) {
       continue;
     }
 
-    // saveScrapedArticle
     try {
       const saved = await saveScrapedArticle({
         url:              articleUrl,
@@ -1046,47 +759,66 @@ async function scrapeSource(source, sessionId, counters) {
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// MAIN ORCHESTRATOR — exported and called by scraper.job.js
+// HELPERS FOR THE MAIN ORCHESTRATOR
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── buildPartialReport ────────────────────────────────────────────────────
-// Builds a partial report from in-progress counters.
-// Used when a session is interrupted (SIGTERM/SIGINT) mid-scrape so we
-// can still email admins what was completed before shutdown.
+// Checks session results for critical issues (very low success rate, multiple empty categories).
+function checkCriticalErrors(report, counters) {
+  const issues = [];
 
+  if (report.successRate < 70 && report.totalSources > 0) {
+    issues.push(`Success rate critically low: ${report.successRate}% (threshold: 70%)`);
+  }
+
+  const totalFailedCategories = Object.entries(counters)
+    .filter(([, c]) => c.successCount === 0 && c.failureCount > 0).length;
+  if (totalFailedCategories >= 2) {
+    issues.push(`${totalFailedCategories} categories produced zero articles`);
+  }
+
+  return issues;
+}
+
+// Builds a partial session report from current counters for use when a session is interrupted mid-run.
 function buildPartialReport(sessionId, startTime, config, counters) {
-  const totalSuccess   = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
-  const totalDuplicate = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
-  const totalFailure   = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
-  const totalUrlsFound = Object.values(counters).reduce((s, c) => s + c.urlsProcessed,  0);
+  const totalSuccess    = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
+  const totalDuplicate  = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
+  const totalFailure    = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
+  const totalUrlsFound  = Object.values(counters).reduce((s, c) => s + c.urlsProcessed,  0);
   const durationMinutes = (Date.now() - startTime) / 60000;
-  const attempted      = totalSuccess + totalFailure;
+  const attempted       = totalSuccess + totalFailure;
 
   return {
     sessionId,
-    startedAt:            new Date(startTime).toISOString(),
-    completedAt:          new Date().toISOString(),
-    durationMinutes:      parseFloat(durationMinutes.toFixed(2)),
-    totalSources:         config?.totalSources || 0,
+    startedAt:              new Date(startTime).toISOString(),
+    completedAt:            new Date().toISOString(),
+    durationMinutes:        parseFloat(durationMinutes.toFixed(2)),
+    totalSources:           config?.totalSources || 0,
     totalUrlsFound,
-    successCount:         totalSuccess,
-    duplicateCount:       totalDuplicate,
-    failureCount:         totalFailure,
-    successRate:          attempted > 0 ? parseFloat(((totalSuccess / attempted) * 100).toFixed(2)) : null,
-    enrichedCount:        0,
-    enrichmentFailed:     0,
-    keywordsWithContent:  [],
+    successCount:           totalSuccess,
+    duplicateCount:         totalDuplicate,
+    failureCount:           totalFailure,
+    successRate:            attempted > 0 ? parseFloat(((totalSuccess / attempted) * 100).toFixed(2)) : null,
+    enrichedCount:          0,
+    enrichmentFailed:       0,
+    keywordsWithContent:    [],
     keywordsWithoutContent: [],
-    totalKeywordsCovered: 0,
-    totalKeywordsEmpty:   0,
-    aiTokenUsage:         { inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0 },
-    criticalErrors:       true,
-    isInterrupted:        true,  // flag for email template
+    totalKeywordsCovered:   0,
+    totalKeywordsEmpty:     0,
+    aiTokenUsage:           { inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0 },
+    criticalErrors:         true,
+    isInterrupted:          true,
   };
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// MAIN ORCHESTRATOR — exported, called by scraper.job.js
+// ════════════════════════════════════════════════════════════════════════════
+
+// Runs the full scraping pipeline: Phase 1 (init) → Phase 2 (scrape) → Phase 3 (enrich + email).
 async function runScrapingSession() {
-  const { runEnrichmentStage } = require("./enrichment.service");
+  const { runEnrichmentStage }                    = require("./enrichment.service");
   const { sendCompletionNotification, sendErrorAlert } = require("./email.service");
 
   console.log(`\n${"═".repeat(60)}`);
@@ -1098,13 +830,7 @@ async function runScrapingSession() {
   let counters   = {};
   const startTime = Date.now();
 
-  // ── Graceful shutdown handler ──────────────────────────────────────────────
-  // Registers SIGTERM and SIGINT listeners so that killing the terminal
-  // (Ctrl+C, server restart, nodemon reload) triggers a "canceled" status
-  // and a partial email instead of leaving the session stuck as "running".
-  //
-  // cleanup() is idempotent — multiple signals don't send multiple emails.
-
+  // Graceful shutdown — marks the session as canceled and emails a partial report if the process is killed
   let cleanupCalled = false;
 
   const cleanup = async (signal) => {
@@ -1126,7 +852,6 @@ async function runScrapingSession() {
 
       const partialReport = buildPartialReport(sessionId, startTime, config, counters);
 
-      // Send partial completion email
       await sendCompletionNotification(partialReport).catch((e) =>
         console.error("[Scraper] Interruption email failed:", e.message)
       );
@@ -1136,19 +861,17 @@ async function runScrapingSession() {
       console.error("[Scraper] Cleanup failed:", e.message);
     }
 
-    // Give async operations time to finish before the process exits
     setTimeout(() => process.exit(0), 2000);
   };
 
-  // Attach once — will be removed when session completes normally
   process.once("SIGTERM", () => cleanup("SIGTERM"));
   process.once("SIGINT",  () => cleanup("SIGINT"));
 
   try {
-    // ── DB WAKE-UP ────────────────────────────────────────────────────────
+    // ── Phase 1: Initialization ────────────────────────────────────────────
+
     await wakeUpDatabase();
 
-    // ── PHASE 1: INITIALIZATION ───────────────────────────────────────────
     config = await loadConfiguration();
     if (!config.totalSources) {
       console.log("[Scraper] No active sources. Session skipped.");
@@ -1159,7 +882,7 @@ async function runScrapingSession() {
 
     const lastScrapeDate = await getLastSuccessfulScrapeDate();
     sessionId = await createScrapingSessionLog(config.totalSources, lastScrapeDate);
-    counters  = initializeKeywordCounters(config.categories);
+    counters  = initializeCategoryCounters(config.categories);
 
     await logScrapingEvent(sessionId, {
       logType: "info",
@@ -1167,8 +890,7 @@ async function runScrapingSession() {
       reason:  `Initialized: ${config.categories.length} categories, ${config.totalSources} sources`,
     });
 
-    // ── SECURITY: Log blocked sources ─────────────────────────────────────
-    if (config.blockedSources && config.blockedSources.length > 0) {
+    if (config.blockedSources?.length > 0) {
       for (const blocked of config.blockedSources) {
         await logScrapingEvent(sessionId, {
           logType:  "http_error",
@@ -1181,7 +903,7 @@ async function runScrapingSession() {
       console.warn(`[Phase 1] 🔒 ${config.blockedSources.length} source(s) blocked — see session logs`);
     }
 
-    // ── PHASE 2: SCRAPING ─────────────────────────────────────────────────
+    // ── Phase 2: Scraping ──────────────────────────────────────────────────
 
     for (const category of config.categories) {
       const sources = config.sourcesByCategory[category];
@@ -1191,7 +913,7 @@ async function runScrapingSession() {
         await scrapeSource(source, sessionId, counters);
       }
 
-      await saveKeywordScrapingStats(sessionId, category, counters);
+      await saveCategoryScrapingStats(sessionId, category, counters);
     }
 
     const totalSuccess   = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
@@ -1211,13 +933,14 @@ async function runScrapingSession() {
       },
     });
 
-    // ── PHASE 3: ENRICHMENT + REPORTING ──────────────────────────────────
+    // ── Phase 3: Enrichment + Reporting ───────────────────────────────────
 
     let enrichmentStats = {
       keywordsWithContent:    [],
       keywordsWithoutContent: [],
       tokenUsage: { inputTokens: 0, outputTokens: 0 },
     };
+
     try {
       enrichmentStats = await runEnrichmentStage(sessionId);
     } catch (err) {
@@ -1235,28 +958,28 @@ async function runScrapingSession() {
 
     const report = {
       sessionId,
-      startedAt:            new Date(startTime).toISOString(),
-      completedAt:          new Date().toISOString(),
-      durationMinutes:      parseFloat(durationMinutes.toFixed(2)),
-      totalSources:         config.totalSources,
+      startedAt:              new Date(startTime).toISOString(),
+      completedAt:            new Date().toISOString(),
+      durationMinutes:        parseFloat(durationMinutes.toFixed(2)),
+      totalSources:           config.totalSources,
       totalUrlsFound,
-      successCount:         totalSuccess,
-      duplicateCount:       totalDuplicate,
-      failureCount:         totalFailure,
-      successRate:          parseFloat(successRate.toFixed(2)),
-      enrichedCount:        enrichmentStats.enrichedCount       || 0,
-      enrichmentFailed:     enrichmentStats.enrichmentFailed    || 0,
-      keywordsWithContent:  enrichmentStats.keywordsWithContent  || [],
+      successCount:           totalSuccess,
+      duplicateCount:         totalDuplicate,
+      failureCount:           totalFailure,
+      successRate:            parseFloat(successRate.toFixed(2)),
+      enrichedCount:          enrichmentStats.enrichedCount       || 0,
+      enrichmentFailed:       enrichmentStats.enrichmentFailed    || 0,
+      keywordsWithContent:    enrichmentStats.keywordsWithContent  || [],
       keywordsWithoutContent: enrichmentStats.keywordsWithoutContent || [],
-      totalKeywordsCovered: (enrichmentStats.keywordsWithContent || []).length,
-      totalKeywordsEmpty:   (enrichmentStats.keywordsWithoutContent || []).length,
-      aiTokenUsage:         enrichmentStats.tokenUsage,
-      criticalErrors:       false,
-      isInterrupted:        false,
+      totalKeywordsCovered:   (enrichmentStats.keywordsWithContent || []).length,
+      totalKeywordsEmpty:     (enrichmentStats.keywordsWithoutContent || []).length,
+      aiTokenUsage:           enrichmentStats.tokenUsage,
+      criticalErrors:         false,
+      isInterrupted:          false,
       securityBlockedSources: (config.blockedSources || []).length,
     };
 
-    const criticalIssues = checkCriticalErrors(report, counters);
+    const criticalIssues  = checkCriticalErrors(report, counters);
     report.criticalErrors = criticalIssues.length > 0;
 
     await prisma.scrapingSession.update({
@@ -1293,7 +1016,6 @@ async function runScrapingSession() {
       data:  { reportSentAt: new Date() },
     }).catch(() => {});
 
-    // Clean up signal listeners — session finished normally
     process.removeListener("SIGTERM", cleanup);
     process.removeListener("SIGINT",  cleanup);
 
@@ -1323,24 +1045,5 @@ async function runScrapingSession() {
     throw err;
   }
 }
-
-// ── checkCriticalErrors ───────────────────────────────────────────────────
-
-function checkCriticalErrors(report, counters) {
-  const issues = [];
-
-  if (report.successRate < 70 && report.totalSources > 0) {
-    issues.push(`Success rate critically low: ${report.successRate}% (threshold: 70%)`);
-  }
-
-  const totalFailedCategories = Object.entries(counters)
-    .filter(([, c]) => c.successCount === 0 && c.failureCount > 0).length;
-  if (totalFailedCategories >= 2) {
-    issues.push(`${totalFailedCategories} categories produced zero articles`);
-  }
-
-  return issues;
-}
-
 
 module.exports = { runScrapingSession };
