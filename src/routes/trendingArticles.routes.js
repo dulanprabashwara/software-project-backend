@@ -5,7 +5,9 @@ const trendingArticlesController = require("../controllers/trendingArticles.cont
 
 
 
-router.get("/trending", trendingArticlesController.getTrending);
+router.get("/trendingTitles", trendingArticlesController.getTrendingTitles);
+router.get("/trendingArticles", trendingArticlesController.getTrendingArticles);
+
 
 module.exports = router;
 

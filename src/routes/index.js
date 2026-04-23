@@ -44,7 +44,7 @@ router.use("/wordpress",  wordpressRoutes);
 router.use("/search",     searchRoutes);  
 router.use("/homefeed", homefeedRoutes);
 router.use("/articleRead", articleReadRoutes);
-router.use("/saveArticle", savedArticleRoutes);
+router.use("/savedArticle", savedArticleRoutes);
 router.use("/trendingArticles", trendingArticlesRoutes);
 
 
