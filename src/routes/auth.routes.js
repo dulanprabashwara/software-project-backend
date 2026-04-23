@@ -7,9 +7,9 @@ const { authLimiter } = require("../middlewares/rateLimiter");
  * @fileoverview Authentication Routes Map
  * @description
  * Defines the public and protected endpoints for user authentication.
- * WHY: This provides the explicit API contract for the frontend to interact with our 
- * identity system. It correctly applies rate limiting (`authLimiter`) to public endpoints 
- * to prevent brute forcing, and applies token validation (`authenticate`) to protected endpoints.
+ *  This provides the API contract for the frontend to interact with our
+ * identity system. It correctly applies rate limiting to public endpoints
+ * to prevent brute forcing, and applies token validation  to protected endpoints.
  */
 const router = Router();
 
