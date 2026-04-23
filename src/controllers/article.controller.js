@@ -78,6 +78,40 @@ const updateArticle = asyncHandler(async (req, res) => {
   });
 });
 
+const publishArticle = asyncHandler(async (req, res) => {
+  const article = await articleService.publishArticle(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message:
+      article.status === "SCHEDULED"
+        ? "Article scheduled successfully."
+        : "Article published successfully.",
+    data: article,
+  });
+});
+
+const getPublishedByUser = asyncHandler(async (req, res) => {
+  const { page, limit } = parsePagination(req.query);
+
+  const { articles, total } = await articleService.getUserPublishedArticles(
+    req.user.id,
+    page,
+    limit,
+  );
+
+  sendPaginated(res, {
+    data: articles,
+    page,
+    limit,
+    total,
+    message: "Published articles retrieved.",
+  });
+});
+
 const startEditExisting = asyncHandler(async (req, res) => {
   const article = await articleService.startExistingArticleEditing(
     req.params.id,
@@ -223,6 +257,8 @@ module.exports = {
   getCurrentEditing,
   getFeed,
   updateArticle,
+  publishArticle,
+  getPublishedByUser,
   startEditExisting,
   autosaveEditExisting,
   discardEditExisting,
