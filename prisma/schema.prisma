@@ -7,6 +7,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// @description
+/// The `firebaseUid` field serves as the secure, immutable bridge between Firebase Auth 
+/// (which handles passwords/JWTs) and our Postgres database (which handles roles and data).
 model User {
   id                     String                @id @default(cuid())
   firebaseUid            String                @unique
@@ -412,7 +415,7 @@ model ScrapingSession {
   reportData            String?
   reportSentAt          DateTime?
   criticalErrors        Boolean                @default(false)
-  keywordStats          KeywordScrapingStats[]
+  categoryStats         CategoryScrapingStats[]
   scrapedArticles       ScrapedArticle[]
   logs                  ScrapingLog[]
 
@@ -462,7 +465,7 @@ model ScrapedArticle {
   @@map("scraped_articles")
 }
 
-model KeywordScrapingStats {
+model CategoryScrapingStats {
   id             String          @id @default(cuid())
   sessionId      String
   category       String
