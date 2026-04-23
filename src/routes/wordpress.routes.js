@@ -1,3 +1,5 @@
+//src\routes\wordpress.routes.js
+
 const { Router } = require("express");
 const { authenticate } = require("../middlewares/auth");
 const {
