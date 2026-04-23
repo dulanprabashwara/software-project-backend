@@ -37,7 +37,9 @@ const calculateAndSaveScores = async () => {
       // 3. Update the database
       await prisma.article.update({
         where: { id: article.id },
-        data: { trendingScore: newScore }
+        data: { trendingScore: newScore,
+                updatedAt: article.updatedAt
+         }
       });
     }
 
