@@ -46,26 +46,14 @@ const loadToEditor = asyncHandler(async (req, res) => {
   const { articleId } = await aiService.loadToEditor({ logId, authorId: req.user.id });
   res.status(200).json({ success: true, articleId });
 });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DELETE /api/ai/logs/:id
-// Soft-deletes an article log. Sets deletedAt = now().
-// The article disappears from the user's list immediately.
-// The user can restore it within 1 hour via POST /api/ai/logs/:id/restore.
-// After 1 hour, the permanent cleanup in getArticleLogs removes it forever.
-// ─────────────────────────────────────────────────────────────────────────────
+//DELETE /api/ai/logs/:id
 const deleteLog = asyncHandler(async (req, res) => {
   const { id } = req.params;
   if (!id) throw ApiError.badRequest("Article id is required.");
   await aiService.softDeleteLog({ logId: id, authorId: req.user.id });
   res.status(200).json({ success: true, message: "Article deleted. You can restore it within 1 hour." });
 });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/ai/logs/:id/restore
-// Restores a soft-deleted article log. Clears deletedAt.
-// Fails if the 1-hour restore window has expired.
-// ─────────────────────────────────────────────────────────────────────────────
+//POST /api/ai/logs/:id/restore
 const restoreLog = asyncHandler(async (req, res) => {
   const { id } = req.params;
   if (!id) throw ApiError.badRequest("Article id is required.");
@@ -85,9 +73,17 @@ const getArticleLogById = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, log });
 });
 
+// GET /api/ai/trending-topics
+
+const getTrendingTopics = asyncHandler(async (req, res) => {
+  const topics = await aiService.getTrendingTopics();
+  res.status(200).json({ success: true, topics });
+});
+
 module.exports = {
   analyzePrompt, generateArticle, regenerateArticle,
   saveDraft, loadToEditor,
   deleteLog, restoreLog,
   getArticleLogs, getArticleLogById,
+  getTrendingTopics,
 };
