@@ -69,7 +69,6 @@ model Article {
   tags                    String[]
   readingTime             Int                   @default(0)
   createdAt               DateTime              @default(now())
-  trendingScore           Float                 @default(0.0)
   updatedAt               DateTime              @updatedAt
   authorId                String
   editingBackupContent    String?
@@ -79,6 +78,7 @@ model Article {
   isEdited                Boolean               @default(false)
   isEditAsNew             Boolean               @default(false)
   sourceArticleId         String?
+  trendingScore           Float                 @default(0.0)
   ai_article_logs         ai_article_logs?
   ratings                 ArticleRating[]
   shares                  ArticleShare[]
