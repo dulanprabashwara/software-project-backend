@@ -129,17 +129,17 @@ async function fetchReferenceContent(selectedKeywords, authorId) {
     // Combine day, user hash, and keyword position for the final offset
     const keywordPos  = selectedKeywords.indexOf(keyword);
     const finalOffset = (dayOfYear + userOffset + keywordPos * 7) % articles.length;
-
+   
     let fetchedForKeyword = 0;
     for (let i = 0; i < REFERENCE_ARTICLES_PER_KEYWORD; i++) {
       const idx     = (finalOffset + i) % articles.length;
       const article = articles[idx];
       if (article?.summary) {
         referenceItems.push({ keyword, title: article.title, summary: article.summary });
-        fetchedForKeyword++;
+    fetchedForKeyword++;      
       }
-    }
-    console.log(`[AI][Reference] keyword="${keyword}" → ${fetchedForKeyword}/${REFERENCE_ARTICLES_PER_KEYWORD} scraped summaries fetched (pool size: ${articles.length})`);
+    } 
+     console.log(`[AI][Reference] keyword="${keyword}" → ${fetchedForKeyword}/${REFERENCE_ARTICLES_PER_KEYWORD} scraped summaries fetched (pool size: ${articles.length})`);
   }
 
   // Summary line covering all keywords at once
@@ -148,7 +148,7 @@ async function fetchReferenceContent(selectedKeywords, authorId) {
     const maxPossible  = selectedKeywords.length * REFERENCE_ARTICLES_PER_KEYWORD;
     console.log(`[AI][Reference] Total reference summaries: ${totalFetched}/${maxPossible} across ${selectedKeywords.length} keyword(s)`);
   }
-
+  
   return referenceItems;
 }
 
@@ -580,6 +580,98 @@ async function getArticleLogById(id, authorId) {
   return log;
 }
 
+
+// ─── GET TRENDING TOPICS ──────────────────────────────────────────────────────
+
+
+const TRENDING_INITIAL_BATCH  = 20;  // logs to check first
+const TRENDING_EXPANSION_STEP = 5;   // logs added per expansion round
+const TRENDING_SAFETY_CAP     = 200; // never scan more than this many logs
+const TRENDING_MIN_RETURN     = 5;
+const TRENDING_MAX_RETURN     = 10;
+
+async function getTrendingTopics() {
+  let poolSize = TRENDING_INITIAL_BATCH;
+  let pool     = [];            // ordered newest → oldest (index 0 = most recent)
+  let counts   = {};            // keyword → { frequency, earliestPosition }
+  let hasRepeat = false;
+
+  // ── Expand pool until we find at least one repeated keyword ───────────────
+  while (poolSize <= TRENDING_SAFETY_CAP) {
+    pool = await prisma.ai_article_logs.findMany({
+      where:   { deletedAt: null },         // exclude soft-deleted logs
+      orderBy: { generatedAt: "desc" },
+      take:    poolSize,
+      select:  { keywordsSelected: true },
+    });
+
+    // Build frequency + earliest-position map
+    counts    = {};
+    hasRepeat = false;
+
+    pool.forEach((log, position) => {
+      for (const keyword of (log.keywordsSelected || [])) {
+        if (!keyword) continue;
+        if (!counts[keyword]) {
+          counts[keyword] = { frequency: 0, earliestPosition: position };
+        }
+        counts[keyword].frequency += 1;
+        // earliestPosition = smallest index = most recent log this keyword appeared in
+        if (position < counts[keyword].earliestPosition) {
+          counts[keyword].earliestPosition = position;
+        }
+        if (counts[keyword].frequency > 1) hasRepeat = true;
+      }
+    });
+
+    // Stop expanding once we have repeated keywords, or if the pool
+    // returned fewer logs than requested (we have exhausted the table)
+    if (hasRepeat || pool.length < poolSize) break;
+
+    poolSize += TRENDING_EXPANSION_STEP;
+  }
+
+  // ── Rank all keywords ─────────────────────────────────────────────────────
+  // Primary  : frequency descending
+  // Tiebreak : earliestPosition ascending (lower index = more recent = better)
+  const ranked = Object.entries(counts)
+    .map(([keyword, stats]) => ({ keyword, ...stats }))
+    .sort((a, b) => {
+      if (b.frequency !== a.frequency) return b.frequency - a.frequency;
+      return a.earliestPosition - b.earliestPosition;
+    });
+
+  // ── Separate repeated from single-use keywords ────────────────────────────
+  const repeated  = ranked.filter(k => k.frequency > 1);
+  const singleUse = ranked.filter(k => k.frequency === 1);
+
+  // ── Build return list: min 5, max 10 ─────────────────────────────────────
+  let result = repeated.slice(0, TRENDING_MAX_RETURN);
+
+  // If fewer than TRENDING_MIN_RETURN repeated keywords, supplement with
+  // single-use keywords ordered by recency (smallest position first)
+  if (result.length < TRENDING_MIN_RETURN) {
+    const needed    = TRENDING_MIN_RETURN - result.length;
+    const supplement = singleUse
+      .sort((a, b) => a.earliestPosition - b.earliestPosition)
+      .slice(0, needed);
+    result = [...result, ...supplement];
+  }
+
+  console.log(
+    `[AI][Trending] Pool: ${pool.length} logs | ` +
+    `Unique keywords: ${ranked.length} | ` +
+    `With repeats: ${repeated.length} | ` +
+    `Returning: ${result.length}`
+  );
+
+  return result.map(k => ({
+    keyword:          k.keyword,
+    usageCount:       k.frequency,
+    mostRecentRank:   k.earliestPosition,
+  }));
+}
+
 module.exports = {
   analyzePrompt,
   generateArticle,
@@ -590,4 +682,5 @@ module.exports = {
   restoreLog,
   getArticleLogs,
   getArticleLogById,
+  getTrendingTopics,
 };
