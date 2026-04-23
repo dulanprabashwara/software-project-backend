@@ -19,10 +19,29 @@ const {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
+// Scraping limits
 const MAX_ARTICLES_PER_SOURCE    = 7;   // max articles saved per source per session
 const CANDIDATE_LINKS_PER_SOURCE = 25;  // links collected before dedup filtering
-const RATE_LIMIT_MIN_MS          = 1500;
-const RATE_LIMIT_MAX_MS          = 2500;
+const RATE_LIMIT_MIN_MS          = 1500; // minimum polite delay between HTTP requests
+const RATE_LIMIT_MAX_MS          = 2500; // maximum polite delay between HTTP requests
+const HTTP_RETRY_DELAY_MS        = 3000; // wait before retrying a failed HTTP request
+
+// DB wake-up retry delays (NeonDB free tier suspends after inactivity)
+const DB_WAKEUP_DELAYS_MS = [0, 5000, 10000, 15000, 20000];
+
+// Content validation thresholds
+const DEFAULT_MIN_WORD_COUNT       = 300; // fallback if source has no minWordCount configured
+const MIN_CONTENT_CHARS            = 400; // minimum characters after cleaning
+const MIN_TEXT_SEGMENT_CHARS       = 30;  // minimum characters for a heading/paragraph to be kept
+const MIN_TITLE_LENGTH             = 10;  // minimum characters for a valid title
+const MIN_PARAGRAPH_COUNT          = 2;   // minimum paragraph breaks required
+
+// Critical error thresholds for the session report
+const CRITICAL_SUCCESS_RATE_THRESHOLD      = 70; // % — below this triggers an error alert
+const CRITICAL_FAILED_CATEGORIES_THRESHOLD = 2;  // categories with zero success triggers alert
+
+// Grace period before the process exits after a SIGTERM/SIGINT cleanup
+const CLEANUP_EXIT_DELAY_MS = 2000;
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -71,7 +90,7 @@ function sleep(ms) {
 
 // Pings the database to ensure it's awake before the session starts (NeonDB free tier suspends after inactivity).
 async function wakeUpDatabase(maxAttempts = 5) {
-  const delays = [0, 5000, 10000, 15000, 20000];
+  const delays = DB_WAKEUP_DELAYS_MS;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const delay = delays[attempt - 1] || 20000;
@@ -297,7 +316,7 @@ async function sendHTTPRequest(url, attempt = 1) {
     if (err.securityBlock) throw err; // security blocks are definitive — no retry
 
     if (attempt < 2) {
-      await sleep(3000);
+      await sleep(HTTP_RETRY_DELAY_MS);
       return sendHTTPRequest(url, 2);
     }
     throw Object.assign(err, { statusCode: err.response?.status || 0 });
@@ -486,12 +505,12 @@ function cleanExtractedContent($, articleContainer) {
     const tag = $(el).prop("tagName").toLowerCase();
     let   text = $(el).text().replace(/\s+/g, " ").trim();
 
-    if (!text || text.length < 30) return;
+    if (!text || text.length < MIN_TEXT_SEGMENT_CHARS) return;
     if (seenText.has(text)) return;
     seenText.add(text);
 
     text = sanitizeContent(text);
-    if (!text || text.length < 30) return;
+    if (!text || text.length < MIN_TEXT_SEGMENT_CHARS) return;
 
     if      (tag === "h1")         contentParts.push(`[H1] ${text}`);
     else if (tag === "h2")         contentParts.push(`[H2] ${text}`);
@@ -513,7 +532,7 @@ function cleanExtractedContent($, articleContainer) {
 function validateArticleContent(cleanedContent, title, publishedDate, source) {
   const { content, wordCount } = cleanedContent;
   const maxAgeDays   = parseScrapeWindowToDays(source.scrapeWindow);
-  const minWordCount = source.minWordCount || 300;
+  const minWordCount = source.minWordCount || DEFAULT_MIN_WORD_COUNT;
   const excludedKws  = source.excludedKeywords || [];
 
   if (publishedDate && !isNaN(publishedDate) && maxAgeDays) {
@@ -530,16 +549,16 @@ function validateArticleContent(cleanedContent, title, publishedDate, source) {
     return { valid: false, reason: `Word count ${wordCount} below minimum ${minWordCount}` };
   }
 
-  if (content.length < 400) {
-    return { valid: false, reason: "Content too thin after cleaning (< 400 chars)" };
+  if (content.length < MIN_CONTENT_CHARS) {
+    return { valid: false, reason: `Content too thin after cleaning (< ${MIN_CONTENT_CHARS} chars)` };
   }
 
-  if (!title || title.length < 10) {
+  if (!title || title.length < MIN_TITLE_LENGTH) {
     return { valid: false, reason: "Title missing or too short" };
   }
 
   const paraCount = (content.match(/\n\n/g) || []).length;
-  if (paraCount < 2) {
+  if (paraCount < MIN_PARAGRAPH_COUNT) {
     return { valid: false, reason: "No paragraph structure — likely a listing or navigation page" };
   }
 
@@ -766,13 +785,13 @@ async function scrapeSource(source, sessionId, counters) {
 function checkCriticalErrors(report, counters) {
   const issues = [];
 
-  if (report.successRate < 70 && report.totalSources > 0) {
-    issues.push(`Success rate critically low: ${report.successRate}% (threshold: 70%)`);
+  if (report.successRate < CRITICAL_SUCCESS_RATE_THRESHOLD && report.totalSources > 0) {
+    issues.push(`Success rate critically low: ${report.successRate}% (threshold: ${CRITICAL_SUCCESS_RATE_THRESHOLD}%)`);
   }
 
   const totalFailedCategories = Object.entries(counters)
     .filter(([, c]) => c.successCount === 0 && c.failureCount > 0).length;
-  if (totalFailedCategories >= 2) {
+  if (totalFailedCategories >= CRITICAL_FAILED_CATEGORIES_THRESHOLD) {
     issues.push(`${totalFailedCategories} categories produced zero articles`);
   }
 
@@ -861,7 +880,7 @@ async function runScrapingSession() {
       console.error("[Scraper] Cleanup failed:", e.message);
     }
 
-    setTimeout(() => process.exit(0), 2000);
+    setTimeout(() => process.exit(0), CLEANUP_EXIT_DELAY_MS);
   };
 
   process.once("SIGTERM", () => cleanup("SIGTERM"));

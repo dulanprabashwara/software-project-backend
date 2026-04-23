@@ -36,8 +36,29 @@ const ENRICHMENT_MODELS = [
   "meta-llama/llama-3.3-70b-instruct:free",
 ];
 
-const BATCH_SIZE        = 3;    // articles per AI call
-const API_CALL_DELAY_MS = 1200; // delay between batches
+// Batch and delay settings
+const BATCH_SIZE             = 3;    // articles per AI call
+const API_CALL_DELAY_MS      = 1200; // delay between batches
+const KEY_SWITCH_PAUSE_MS    = 300;  // pause before switching to the next API key after a 429
+const ARTICLE_RETRY_DELAY_MS = 500;  // delay between individual article retries in fallback mode
+
+// AI call settings
+const MAX_TOKENS_BATCH      = 900;  // max output tokens for batch calls
+const MAX_TOKENS_INDIVIDUAL = 600;  // max output tokens for individual article fallback calls
+const AI_TEMPERATURE        = 0.1;  // low temperature for consistent, factual output
+const MAX_CONTENT_CHARS     = 10000; // max article content characters sent to the AI per article
+
+// Summary length constraints (reflected in the AI prompt)
+const SUMMARY_MIN_WORDS = 130;
+const SUMMARY_MAX_WORDS = 150;
+
+// Rate limit and backoff settings
+const RATE_LIMIT_RESET_MS  = 60000;                               // OpenRouter rate limit window
+const BACKOFF_DELAYS_MS    = [2000, 4000, 8000, 16000, 30000, 60000]; // exponential backoff sequence
+
+// Token cost rates (USD per token) — used for cost estimation in the email report
+const AI_TOKEN_COST_INPUT  = 0.00000015;
+const AI_TOKEN_COST_OUTPUT = 0.0000006;
 
 
 // ── RateLimitManager ──────────────────────────────────────────────────────────
@@ -54,7 +75,7 @@ class RateLimitManager {
   markLimited() {
     this.isAccountLimited = true;
     this.lastLimitTime    = Date.now();
-    this.limitResetTime   = Date.now() + 60000;
+    this.limitResetTime   = Date.now() + RATE_LIMIT_RESET_MS;
   }
 
   // Returns true if the rate limit window has passed and we can try again.
@@ -70,7 +91,7 @@ class RateLimitManager {
 
   // Returns the next exponential backoff wait time in milliseconds.
   getWaitTime() {
-    const delays = [2000, 4000, 8000, 16000, 30000, 60000];
+    const delays = BACKOFF_DELAYS_MS;
     return delays[Math.min(this.failedBatchCount, delays.length - 1)];
   }
 }
@@ -88,7 +109,7 @@ function is429(err) {
 
 // Sends a request to OpenRouter, trying every API key × every model in order.
 // Falls back to exponential backoff if all keys and models are exhausted.
-async function callOpenRouter(messages, maxTokens = 900, retryAttempt = 0) {
+async function callOpenRouter(messages, maxTokens = MAX_TOKENS_BATCH, retryAttempt = 0) {
   if (rateLimitMgr.isAccountLimited && !rateLimitMgr.isLimitExpired()) {
     const waitMs = rateLimitMgr.getWaitTime();
     console.warn(`[RateLimit] Limit active. Waiting ${waitMs}ms before retrying...`);
@@ -107,7 +128,7 @@ async function callOpenRouter(messages, maxTokens = 900, retryAttempt = 0) {
           model,
           messages,
           max_tokens:  maxTokens,
-          temperature: 0.1,
+          temperature: AI_TEMPERATURE,
         });
 
         const content = completion.choices[0]?.message?.content || "";
@@ -127,7 +148,7 @@ async function callOpenRouter(messages, maxTokens = 900, retryAttempt = 0) {
         if (is429(err)) {
           console.warn(`[RateLimit] 429 on ${keyLabel}/${model} — trying next key...`);
           rateLimitMgr.markLimited();
-          await new Promise((r) => setTimeout(r, 300));
+          await new Promise((r) => setTimeout(r, KEY_SWITCH_PAUSE_MS));
           continue;
         }
 
@@ -175,12 +196,12 @@ function parseEnrichmentResponse(raw) {
   }
 }
 
-// Builds the AI prompt asking for keyword matching and a 130–150 word summary for each article.
+// Builds the AI prompt asking for keyword matching and a summary (SUMMARY_MIN_WORDS–SUMMARY_MAX_WORDS words) for each article.
 function buildBatchPrompt(articles, categoryKeywords) {
   const articlesText = articles.map((a, i) =>
     `--- ARTICLE ${i + 1} (ID: ${a.id}) ---\n` +
     `Title: ${a.title}\n\n` +
-    `Content:\n${a.content.slice(0, 10000)}`
+    `Content:\n${a.content.slice(0, MAX_CONTENT_CHARS)}`
   ).join("\n\n");
 
   const keywordList = categoryKeywords.join(" | ");
@@ -203,7 +224,7 @@ function buildBatchPrompt(articles, categoryKeywords) {
         `   - An article about entrepreneurship that briefly mentions AI should NOT get "Artificial intelligence"\n` +
         `   - Only select keywords that cover a substantial part of the article\n` +
         `   - If no keywords match well, return an empty array []\n` +
-        `2. SUMMARY: Write exactly 130-150 words summarizing the article's CORE content.\n` +
+        `2. SUMMARY: Write exactly ${SUMMARY_MIN_WORDS}-${SUMMARY_MAX_WORDS} words summarizing the article's CORE content.\n` +
         `   Rules:\n` +
         `   - Use ONLY information explicitly stated in the article\n` +
         `   - Do not use only the introduction — cover the main arguments/findings\n` +
@@ -211,7 +232,7 @@ function buildBatchPrompt(articles, categoryKeywords) {
         `   - Write in third person, factual tone\n\n` +
         `Respond with ONLY a JSON array:\n` +
         `[\n` +
-        `  {"id":"<article ID>","matchedKeywords":["keyword1","keyword2"],"summary":"<130-150 word summary>"},\n` +
+        `  {"id":"<article ID>","matchedKeywords":["keyword1","keyword2"],"summary":"<${SUMMARY_MIN_WORDS}-${SUMMARY_MAX_WORDS} word summary>"},\n` +
         `  ...\n` +
         `]`,
     },
@@ -226,7 +247,7 @@ async function processBatch(articles, categoryKeywords, tokenTracker, sessionId,
   // Try batch processing first
   try {
     const messages           = buildBatchPrompt(articles, categoryKeywords);
-    const { content, usage } = await callOpenRouter(messages, 900);
+    const { content, usage } = await callOpenRouter(messages, MAX_TOKENS_BATCH);
 
     tokenTracker.inputTokens  += usage.prompt_tokens;
     tokenTracker.outputTokens += usage.completion_tokens;
@@ -270,7 +291,7 @@ async function processBatch(articles, categoryKeywords, tokenTracker, sessionId,
   for (const article of articles) {
     try {
       const messages           = buildBatchPrompt([article], categoryKeywords);
-      const { content, usage } = await callOpenRouter(messages, 600);
+      const { content, usage } = await callOpenRouter(messages, MAX_TOKENS_INDIVIDUAL);
 
       tokenTracker.inputTokens  += usage.prompt_tokens;
       tokenTracker.outputTokens += usage.completion_tokens;
@@ -295,7 +316,7 @@ async function processBatch(articles, categoryKeywords, tokenTracker, sessionId,
       logFn("enrichment_error", article.sourceUrl, article.category, err.message);
     }
 
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, ARTICLE_RETRY_DELAY_MS));
   }
 
   return { enriched, failed };
@@ -392,7 +413,7 @@ async function runEnrichmentStage(sessionId) {
       inputTokens:      tokenTracker.inputTokens,
       outputTokens:     tokenTracker.outputTokens,
       estimatedCostUSD: parseFloat(
-        ((tokenTracker.inputTokens * 0.00000015) + (tokenTracker.outputTokens * 0.0000006)).toFixed(4)
+        ((tokenTracker.inputTokens * AI_TOKEN_COST_INPUT) + (tokenTracker.outputTokens * AI_TOKEN_COST_OUTPUT)).toFixed(4)
       ),
     },
   };
@@ -619,7 +640,7 @@ async function runManualEnrichment({
       inputTokens:      tokenTracker.inputTokens,
       outputTokens:     tokenTracker.outputTokens,
       estimatedCostUSD: parseFloat(
-        ((tokenTracker.inputTokens * 0.00000015) + (tokenTracker.outputTokens * 0.0000006)).toFixed(4)
+        ((tokenTracker.inputTokens * AI_TOKEN_COST_INPUT) + (tokenTracker.outputTokens * AI_TOKEN_COST_OUTPUT)).toFixed(4)
       ),
     },
   };
