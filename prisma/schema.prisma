@@ -72,6 +72,7 @@ model Article {
   tags                    String[]
   readingTime             Int                   @default(0)
   createdAt               DateTime              @default(now())
+  trendingScore           Float                 @default(0.0)
   updatedAt               DateTime              @updatedAt
   authorId                String
   editingBackupContent    String?
@@ -81,7 +82,6 @@ model Article {
   isEdited                Boolean               @default(false)
   isEditAsNew             Boolean               @default(false)
   sourceArticleId         String?
-  trendingScore           Float                 @default(0.0)
   ai_article_logs         ai_article_logs?
   ratings                 ArticleRating[]
   shares                  ArticleShare[]
@@ -394,27 +394,27 @@ model ScrapingSource {
 }
 
 model ScrapingSession {
-  id                    String                 @id @default(cuid())
-  startedAt             DateTime               @default(now())
+  id                    String                  @id @default(cuid())
+  startedAt             DateTime                @default(now())
   completedAt           DateTime?
-  status                String                 @default("running")
+  status                String                  @default("running")
   lastScrapeDate        DateTime?
-  totalSources          Int                    @default(0)
-  totalUrlsFound        Int                    @default(0)
-  successCount          Int                    @default(0)
-  duplicateCount        Int                    @default(0)
-  failureCount          Int                    @default(0)
-  enrichedCount         Int                    @default(0)
-  enrichmentFailedCount Int                    @default(0)
-  keywordsCoveredCount  Int                    @default(0)
-  keywordsEmptyCount    Int                    @default(0)
-  aiInputTokens         Int                    @default(0)
-  aiOutputTokens        Int                    @default(0)
+  totalSources          Int                     @default(0)
+  totalUrlsFound        Int                     @default(0)
+  successCount          Int                     @default(0)
+  duplicateCount        Int                     @default(0)
+  failureCount          Int                     @default(0)
+  enrichedCount         Int                     @default(0)
+  enrichmentFailedCount Int                     @default(0)
+  keywordsCoveredCount  Int                     @default(0)
+  keywordsEmptyCount    Int                     @default(0)
+  aiInputTokens         Int                     @default(0)
+  aiOutputTokens        Int                     @default(0)
   successRate           Float?
   durationMinutes       Float?
   reportData            String?
   reportSentAt          DateTime?
-  criticalErrors        Boolean                @default(false)
+  criticalErrors        Boolean                 @default(false)
   categoryStats         CategoryScrapingStats[]
   scrapedArticles       ScrapedArticle[]
   logs                  ScrapingLog[]
