@@ -7,6 +7,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// @description
+/// The `firebaseUid` field serves as the secure, immutable bridge between Firebase Auth 
+/// (which handles passwords/JWTs) and our Postgres database (which handles roles and data).
 model User {
   id                     String                @id @default(cuid())
   firebaseUid            String                @unique
