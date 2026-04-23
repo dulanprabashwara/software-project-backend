@@ -3,7 +3,9 @@ const fs = require('fs');
 
 const prisma = new PrismaClient();
 
-// High-level wrapper to handle JSON stringify issues with BigInt
+/**
+ * Handles JSON stringify for BigInt and Date objects
+ */
 const stringify = (obj) =>
   JSON.stringify(
     obj,
@@ -18,8 +20,7 @@ async function backup() {
   };
 
   /**
-   * Verified table names from your specific schema @@map attributes.
-   * Total: 28 Tables.
+   * Tables extracted from your schema.
    */
   const tables = [
     "users",
@@ -42,7 +43,7 @@ async function backup() {
     "trending_topics",
     "offers",
     "subscriptions",
-    "ai_article_logs", // Model name used as table name
+    "ai_article_logs", 
     "scraping_sources",
     "scraping_sessions",
     "scraping_logs",
@@ -58,19 +59,24 @@ async function backup() {
     try {
       console.log(`Extracting: ${table}...`);
       
-      // SQL query wrapped in double quotes to handle Postgres naming conventions
+      // Querying with double quotes to ensure compatibility with case-sensitive names in Postgres
       const data = await prisma.$queryRawUnsafe(`SELECT * FROM "${table}"`);
       
       backupData.tables[table] = data;
       console.log(`✅ ${table}: ${data.length} records extracted.`);
     } catch (err) {
-      // Graceful skip if table is not yet migrated to the DB
-      console.warn(`⚠️  Skip: "${table}" (Table may not exist in DB yet).`);
+      console.warn(`⚠️  Skip: "${table}" (Table may not exist in DB or naming mismatch).`);
     }
   }
 
   try {
-    const fileName = 'full_database_backup.json';
+    // 1. Get the ISO string: "2026-04-23T06:56:31.963Z"
+    // 2. Replace 'T' with an underscore: "2026-04-23_06:56:31.963Z"
+    // 3. Replace all ':' with hyphens: "2026-04-23_06-56-31.963Z"
+    // 4. Split at the period and take the first part to remove milliseconds: "2026-04-23_06-56-31"
+    const timestamp = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').split('.');
+    const fileName = `backup_${timestamp}.json`;
+    
     fs.writeFileSync(fileName, stringify(backupData));
     
     console.log('\n' + '⭐'.repeat(20));
