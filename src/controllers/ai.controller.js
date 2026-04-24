@@ -73,27 +73,29 @@ const getArticleLogById = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, log });
 });
 
-// GET /api/ai/trending-topics
+// GET /api/ai/trending-keywords
 
-const getTrendingTopics = asyncHandler(async (req, res) => {
-  const topics = await aiService.getTrendingTopics();
-  res.status(200).json({ success: true, topics });
+const getTrendingKeywords = asyncHandler(async (req, res) => {
+  const keywords = await aiService.getTrendingKeywords();
+  res.status(200).json({ success: true, keywords });
 });
-
 // GET /api/ai/top-ai-articles
 const getTopAIArticles = asyncHandler(async (req, res) => {
   const articles = await aiService.getTopAIArticles();
   res.status(200).json({ success: true, articles });
 });
 
+
 module.exports = {
-  analyzePrompt,
-  generateArticle, 
+  analyzePrompt, 
+  generateArticle,
   regenerateArticle,
-  saveDraft, loadToEditor,
-  deleteLog, restoreLog,
-  getArticleLogs, 
+  saveDraft, 
+  loadToEditor,
+  deleteLog, 
+  restoreLog,
+  getArticleLogs,
   getArticleLogById,
-  getTrendingTopics,
-  getTopAIArticles,  
+  getTrendingKeywords,
+   getTopAIArticles,
 };

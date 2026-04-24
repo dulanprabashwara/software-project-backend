@@ -590,7 +590,7 @@ const TRENDING_SAFETY_CAP     = 200; // never scan more than this many logs
 const TRENDING_MIN_RETURN     = 5;
 const TRENDING_MAX_RETURN     = 10;
 
-async function getTrendingTopics() {
+async function getTrendingKeywords() {
   let poolSize = TRENDING_INITIAL_BATCH;
   let pool     = [];            // ordered newest → oldest (index 0 = most recent)
   let counts   = {};            // keyword → { frequency, earliestPosition }
@@ -700,6 +700,6 @@ module.exports = {
   restoreLog,
   getArticleLogs,
   getArticleLogById,
-  getTrendingTopics,
+  getTrendingKeywords,
   getTopAIArticles,
 };
