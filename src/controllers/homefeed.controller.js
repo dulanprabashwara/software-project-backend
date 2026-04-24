@@ -6,7 +6,7 @@ exports.getMainFeed = async (req, res) => {
   try {
     const articles = await prisma.article.findMany({
       where: { status: "PUBLISHED" }, 
-      orderBy: { createdAt: "desc" },
+      orderBy: { publishedAt: "desc" },
       include: {
         author: {
           select: {
