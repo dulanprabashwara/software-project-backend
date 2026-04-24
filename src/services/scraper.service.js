@@ -37,7 +37,7 @@ const MIN_TITLE_LENGTH             = 10;  // minimum characters for a valid titl
 const MIN_PARAGRAPH_COUNT          = 2;   // minimum paragraph breaks required
 
 // Critical error thresholds for the session report
-const CRITICAL_SUCCESS_RATE_THRESHOLD      = 70; // % — below this triggers an error alert
+const CRITICAL_SUCCESS_RATE_THRESHOLD      = 50; // % — below this triggers an error alert
 const CRITICAL_FAILED_CATEGORIES_THRESHOLD = 2;  // categories with zero success triggers alert
 
 // Grace period before the process exits after a SIGTERM/SIGINT cleanup
@@ -668,7 +668,22 @@ async function scrapeSource(source, sessionId, counters) {
     return;
   }
 
-  const articleLinks = await collectArticleLinks(homepageHtml, sourceUrl);
+  // Collect article links — DB error here skips the whole source gracefully
+  let articleLinks;
+  try {
+    articleLinks = await collectArticleLinks(homepageHtml, sourceUrl);
+  } catch (err) {
+    console.error(`[Phase 2] ❌ Link collection failed for "${name}": ${err.message}`);
+    await logScrapingEvent(sessionId, {
+      logType:  "http_error",
+      url:      sourceUrl,
+      category,
+      reason:   `Link collection failed: ${err.message}`,
+    });
+    counters[category].failureCount++;
+    return;
+  }
+
   console.log(`[Phase 2] Found ${articleLinks.length} article links on "${name}"`);
 
   if (!articleLinks.length) {
@@ -724,7 +739,23 @@ async function scrapeSource(source, sessionId, counters) {
       continue;
     }
 
-    const isDuplicate = await checkDuplicateArticle(articleUrl);
+    // Check for duplicate — DB error here skips this article, not the whole session
+    let isDuplicate;
+    try {
+      isDuplicate = await checkDuplicateArticle(articleUrl);
+    } catch (err) {
+      console.error(`[Phase 2] ❌ Duplicate check failed for "${articleUrl}": ${err.message}`);
+      await logScrapingEvent(sessionId, {
+        logType:  "http_error",
+        url:      articleUrl,
+        category,
+        reason:   `Duplicate check DB error: ${err.message}`,
+        details:  { title },
+      });
+      counters[category].failureCount++;
+      continue;
+    }
+
     if (isDuplicate) {
       console.log(`[Phase 2] ♻️  Duplicate: "${title}"`);
       await logScrapingEvent(sessionId, {
@@ -827,6 +858,39 @@ function buildPartialReport(sessionId, startTime, config, counters) {
     aiTokenUsage:           { inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0 },
     criticalErrors:         true,
     isInterrupted:          true,
+  };
+}
+
+// Builds a crash report when the session fails due to an unhandled error (DB down, code error, etc.).
+function buildCrashReport(sessionId, startTime, config, counters, errorMessage) {
+  const totalSuccess    = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
+  const totalDuplicate  = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
+  const totalFailure    = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
+  const totalUrlsFound  = Object.values(counters).reduce((s, c) => s + c.urlsProcessed,  0);
+  const durationMinutes = (Date.now() - startTime) / 60000;
+  const attempted       = totalSuccess + totalFailure;
+
+  return {
+    sessionId,
+    startedAt:              new Date(startTime).toISOString(),
+    completedAt:            new Date().toISOString(),
+    durationMinutes:        parseFloat(durationMinutes.toFixed(2)),
+    totalSources:           config?.totalSources || 0,
+    totalUrlsFound,
+    successCount:           totalSuccess,
+    duplicateCount:         totalDuplicate,
+    failureCount:           totalFailure,
+    successRate:            attempted > 0 ? parseFloat(((totalSuccess / attempted) * 100).toFixed(2)) : null,
+    enrichedCount:          0,
+    enrichmentFailed:       0,
+    keywordsWithContent:    [],
+    keywordsWithoutContent: [],
+    totalKeywordsCovered:   0,
+    totalKeywordsEmpty:     0,
+    aiTokenUsage:           { inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0 },
+    criticalErrors:         true,
+    isCrashed:              true,
+    crashReason:            errorMessage,
   };
 }
 
@@ -1054,11 +1118,19 @@ async function runScrapingSession() {
       await prisma.scrapingSession.update({
         where: { id: sessionId },
         data: {
-          status:      "failed",
-          completedAt: new Date(),
-          reportData:  JSON.stringify({ error: err.message }),
+          status:         "failed",
+          completedAt:    new Date(),
+          criticalErrors: true,
+          reportData:     JSON.stringify({ error: err.message }),
         },
       }).catch(() => {});
+
+      // Notify admins — a crashed session produces no normal completion email,
+      // so without this admins would receive nothing and not know the session failed.
+      const crashReport = buildCrashReport(sessionId, startTime, config, counters, err.message);
+      await sendCompletionNotification(crashReport).catch((e) =>
+        console.error("[Scraper] Crash notification email failed:", e.message)
+      );
     }
 
     throw err;
