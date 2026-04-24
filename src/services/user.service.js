@@ -35,7 +35,7 @@ const getUserProfile = async (identifier, currentUserId = null) => {
           receivedMessages: true,
         },
       },
-      // Eagerly check if current user follows this profile (saves 1 DB roundtrip)
+      //check if current user follows this profile
       ...(currentUserId && {
         followers: {
           where: { followerId: currentUserId },
@@ -52,7 +52,7 @@ const getUserProfile = async (identifier, currentUserId = null) => {
     // If the array has an item, the current user is following this profile
     isFollowing = user.followers && user.followers.length > 0;
   }
-  
+
   // Calculate unread message count for profile display
   const unreadMessageCount = await prisma.message.count({
     where: {
@@ -61,7 +61,7 @@ const getUserProfile = async (identifier, currentUserId = null) => {
     },
   });
 
-  // Remove the eager loaded array from the response object
+  // Remove loaded followers,sentMessages and receivedMessages arrays from the backend to ensures you don't leak internal database arrays to the frontend
   delete user.followers;
   delete user._count.sentMessages;
   delete user._count.receivedMessages;
@@ -82,7 +82,7 @@ const updateProfile = async (userId, data) => {
     username,
   } = data;
 
-  // If updating username, check if it's taken
+  // If updating username check if it's taken
   if (username) {
     const existing = await prisma.user.findFirst({
       where: { username, NOT: { id: userId } },
@@ -148,7 +148,7 @@ const searchUsers = async (query, page = 1, limit = 10) => {
 /**
  * Delete a user account and all associated data.
  * Most relations use onDelete: Cascade in the schema, but
- * Subscription and AuditLog do not, so we clean them up manually.
+ * Subscription and AuditLog do not have relationship with other tables so we clean them up manually
  */
 const deleteAccount = async (userId, firebaseUid) => {
   const admin = require("../config/firebase");
