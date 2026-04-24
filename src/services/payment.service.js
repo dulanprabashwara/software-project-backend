@@ -60,8 +60,8 @@ const createCheckoutSession = async (userId, offerId = null) => {
       },
     ],
     mode: "subscription",
-    success_url: `${process.env.CLIENT_URL}/home?checkout=success`,
-    cancel_url: `${process.env.CLIENT_URL}/subscription/upgrade-to-premium`,
+    success_url: `${process.env.CLIENT_URL}/subscription/success`,
+    cancel_url: `${process.env.CLIENT_URL}/subscription/cancel`,
     metadata: {
       userId: user.id,
     },

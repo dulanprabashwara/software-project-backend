@@ -25,21 +25,28 @@ const calculateAndSaveScores = async () => {
       const rateWeight = 3;
       const affect = 1.2;         // How fast old posts lose their score
 
-      // Calculate age in hours
-      const ageInMs = new Date() - new Date(article.createdAt);
-      const ageInHours = ageInMs / (1000 * 60 * 60);
+      // Calculate age in hours (minimum 1 hour to prevent divide-by-zero Infinity)
+      const ageInMs = Math.max(new Date().getTime() - new Date(article.createdAt).getTime(), 0);
+      const ageInHours = Math.max(ageInMs / (1000 * 60 * 60), 1);
 
       // The Gravity Formula
-      const interactions = (article.readCount * viewsWeight) + (article.commentCount * commentsWeight)+ (article.ratingCount*rateWeight);
+      // Ensure values are numbers (fallback to 0 if null)
+      const readCount = article.readCount || 0;
+      const commentCount = article.commentCount || 0;
+      const ratingCount = article.ratingCount || 0;
+
+      const interactions = (readCount * viewsWeight) + (commentCount * commentsWeight) + (ratingCount * rateWeight);
       const penalty = Math.pow(ageInHours, affect);
-      const newScore = interactions / penalty;
+      
+      let newScore = interactions / penalty;
+      if (!Number.isFinite(newScore) || Number.isNaN(newScore)) {
+        newScore = 0;
+      }
 
       // 3. Update the database
       await prisma.article.update({
         where: { id: article.id },
-        data: { trendingScore: newScore,
-                updatedAt: article.updatedAt
-         }
+        data: { trendingScore: newScore }
       });
     }
 
