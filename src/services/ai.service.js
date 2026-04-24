@@ -689,7 +689,23 @@ const getTopAIArticles = async () => {
   });
   return articles;
 };
+// ─── Set User Response ────────────────────────────────────────────────────────
 
+async function setUserResponse({ logId, authorId, response }) {
+  const log = await prisma.ai_article_logs.findUnique({ where: { id: logId } });
+  if (!log) throw new Error("Article log not found.");
+  if (log.authorId !== authorId) throw new Error("You can only react to your own articles.");
+ 
+  // Toggle: clicking the same reaction again clears it
+  const newValue = log.userResponse === response ? null : response;
+ 
+  await prisma.ai_article_logs.update({
+    where: { id: logId },
+    data:  { userResponse: newValue },
+  });
+ 
+  return newValue;
+}
 module.exports = {
   analyzePrompt,
   generateArticle,
@@ -702,4 +718,5 @@ module.exports = {
   getArticleLogById,
   getTrendingKeywords,
   getTopAIArticles,
+  setUserResponse,
 };

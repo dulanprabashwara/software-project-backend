@@ -26,7 +26,7 @@ const getTrendingTitles = async (req, res) => {
 const getTrendingArticles = async (req, res) => {
   try {
     const articles = await prisma.article.findMany({
-      where: { status: "DRAFT" }, 
+      where: { status: "PUBLISHED" }, 
       orderBy: { trendingScore: "desc" },
       include: {
         
