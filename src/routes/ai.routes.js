@@ -16,6 +16,7 @@ router.delete("/logs/:id",         authenticate, aiController.deleteLog);
 router.post("/logs/:id/restore",   authenticate, aiController.restoreLog);
 
 
-router.get("/trending-topics", authenticate, aiController.getTrendingTopics);
+router.get("/trending-keywords", authenticate, aiController.getTrendingKeywords);
+router.get("/top-ai-articles", authenticate, aiController.getTopAIArticles);
 
 module.exports = router;

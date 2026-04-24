@@ -1084,6 +1084,38 @@ async function getUserDrafts(userId, page = 1, limit = 10, filters = {}) {
   return { drafts, total };
 }
 
+// ─── GET TRENDING ARTICLES ────────────────────────────────────────────────────
+// Returns top 10 PUBLISHED articles by trendingScore for the AI generator slider.
+
+async function getTrendingArticles() {
+  const articles = await prisma.article.findMany({
+    where: { status: "PUBLISHED" },
+    orderBy: { trendingScore: "desc" },
+    take: 10,
+    select: {
+      id:            true,
+      title:         true,
+      summary:       true,
+      coverImage:    true,
+      publishedAt:   true,
+      createdAt:     true,
+      averageRating: true,
+      ratingCount:   true,
+      commentCount:  true,
+      readingTime:   true,
+      author: {
+        select: {
+          displayName: true,
+          username:    true,
+          avatarUrl:   true,
+          isPremium:   true,
+        },
+      },
+    },
+  });
+  return articles;
+}
+
 module.exports = {
   createArticle,
   getArticleById,
@@ -1104,4 +1136,5 @@ module.exports = {
   deleteArticle,
   recordRead,
   getUserDrafts,
+  getTrendingArticles,
 };
