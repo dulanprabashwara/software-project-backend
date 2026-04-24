@@ -590,7 +590,7 @@ const TRENDING_SAFETY_CAP     = 200; // never scan more than this many logs
 const TRENDING_MIN_RETURN     = 5;
 const TRENDING_MAX_RETURN     = 10;
 
-async function getTrendingTopics() {
+async function getTrendingKeywords() {
   let poolSize = TRENDING_INITIAL_BATCH;
   let pool     = [];            // ordered newest → oldest (index 0 = most recent)
   let counts   = {};            // keyword → { frequency, earliestPosition }
@@ -671,7 +671,41 @@ async function getTrendingTopics() {
     mostRecentRank:   k.earliestPosition,
   }));
 }
+const getTopAIArticles = async () => {
+  const articles = await prisma.article.findMany({
+    where: {
+      isAiGenerated: true,
+      status: "PUBLISHED",   // only show publicly visible articles
+    },
+    orderBy: { trendingScore: "desc" },
+    take: 5,
+    select: {
+      id:    true,
+      title: true,
+      author: {
+        select: { displayName: true },
+      },
+    },
+  });
+  return articles;
+};
+// ─── Set User Response ────────────────────────────────────────────────────────
 
+async function setUserResponse({ logId, authorId, response }) {
+  const log = await prisma.ai_article_logs.findUnique({ where: { id: logId } });
+  if (!log) throw new Error("Article log not found.");
+  if (log.authorId !== authorId) throw new Error("You can only react to your own articles.");
+ 
+  // Toggle: clicking the same reaction again clears it
+  const newValue = log.userResponse === response ? null : response;
+ 
+  await prisma.ai_article_logs.update({
+    where: { id: logId },
+    data:  { userResponse: newValue },
+  });
+ 
+  return newValue;
+}
 module.exports = {
   analyzePrompt,
   generateArticle,
@@ -682,5 +716,7 @@ module.exports = {
   restoreLog,
   getArticleLogs,
   getArticleLogById,
-  getTrendingTopics,
+  getTrendingKeywords,
+  getTopAIArticles,
+  setUserResponse,
 };

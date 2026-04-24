@@ -1,6 +1,6 @@
 const prisma = require("../config/prisma");
 
-const getTrending = async (req, res) => {
+const getTrendingTitles = async (req, res) => {
   try {
     const trending = await prisma.article.findMany({
       where: { status: "DRAFT" },
@@ -10,6 +10,7 @@ const getTrending = async (req, res) => {
         id: true,
         title: true,
         createdAt: true,
+
         author: {
           select: { displayName: true }
         }
@@ -22,8 +23,32 @@ const getTrending = async (req, res) => {
   }
 };
 
+const getTrendingArticles = async (req, res) => {
+  try {
+    const articles = await prisma.article.findMany({
+      where: { status: "PUBLISHED" }, 
+      orderBy: { trendingScore: "desc" },
+      include: {
+        
+        author: {
+          select: {
+            displayName: true,
+            username: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
+    res.status(200).json(articles); // Returning just the array
+  } catch (error) {
+    console.error("MAIN FEED ERROR:", error.message);
+    res.status(500).json({ error: "Failed to fetch main feed" });
+  }
+};
+
 // Explicitly export at the bottom. 
 // Make sure this is the ONLY export in the whole file!
 module.exports = {
-  getTrending
+  getTrendingTitles,
+  getTrendingArticles
 };

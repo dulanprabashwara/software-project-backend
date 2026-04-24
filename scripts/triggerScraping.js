@@ -1,27 +1,11 @@
 // scripts/triggerScraping.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Manual scraping trigger — runs the full scraping session right now,
-// without waiting for Saturday and without needing the HTTP server running.
+// Manually runs a full scraping session right now (same as the Saturday cron job).
+// Useful for testing new sources, re-running a failed session, or development.
 //
 // HOW TO RUN (from project root):
 //   node scripts/triggerScraping.js
 //
-// WHAT IT DOES:
-//   Runs the exact same runScrapingSession() that the Saturday cron job calls.
-//   Full Phase 1 (init) → Phase 2 (scrape) → Phase 3 (enrich + email report).
-//   Results are saved to the database exactly as they would be on Saturday.
-//
-// WHEN TO USE THIS:
-//   - You just added new URLs in the admin panel and want to test scraping now
-//   - You want to verify the scraping mechanism works before Saturday
-//   - A Saturday session failed and you want to re-run it manually
-//   - Development and debugging
-//
-// REQUIREMENTS:
-//   - Your .env file must be present and have DATABASE_URL and OPENROUTER_API_KEY
-//   - Your database must be reachable (NeonDB connection)
-//   - Run from the project root directory (where package.json is)
-// ─────────────────────────────────────────────────────────────────────────────
+// REQUIREMENTS: .env with DATABASE_URL and OPENROUTER_API_KEY, reachable NeonDB.
 
 require("dotenv").config();
 

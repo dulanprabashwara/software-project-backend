@@ -28,6 +28,7 @@ model User {
   updatedAt              DateTime              @updatedAt
   stripeCustomerId       String?               @unique
   ai_article_logs        ai_article_logs[]
+  interactedArticles     ArticleInteractions[]
   rating                 ArticleRating[]
   shares                 ArticleShare[]
   articles               Article[]
@@ -73,7 +74,7 @@ model Article {
   readingTime             Int                   @default(0)
   createdAt               DateTime              @default(now())
   trendingScore           Float                 @default(0.0)
-  updatedAt               DateTime              @updatedAt
+  updatedAt               DateTime              @default(now())
   authorId                String
   editingBackupContent    String?
   editingBackupCoverImage String?
@@ -83,6 +84,7 @@ model Article {
   isEditAsNew             Boolean               @default(false)
   sourceArticleId         String?
   ai_article_logs         ai_article_logs?
+  interactions            ArticleInteractions[]
   ratings                 ArticleRating[]
   shares                  ArticleShare[]
   author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
@@ -370,6 +372,7 @@ model ai_article_logs {
   aiInputTokens     Int       @default(0)
   aiOutputTokens    Int       @default(0)
   deletedAt         DateTime?
+  userResponse      String?
   users             User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
   articles          Article?  @relation(fields: [linkedArticleId], references: [id])
 
@@ -394,27 +397,27 @@ model ScrapingSource {
 }
 
 model ScrapingSession {
-  id                    String                 @id @default(cuid())
-  startedAt             DateTime               @default(now())
+  id                    String                  @id @default(cuid())
+  startedAt             DateTime                @default(now())
   completedAt           DateTime?
-  status                String                 @default("running")
+  status                String                  @default("running")
   lastScrapeDate        DateTime?
-  totalSources          Int                    @default(0)
-  totalUrlsFound        Int                    @default(0)
-  successCount          Int                    @default(0)
-  duplicateCount        Int                    @default(0)
-  failureCount          Int                    @default(0)
-  enrichedCount         Int                    @default(0)
-  enrichmentFailedCount Int                    @default(0)
-  keywordsCoveredCount  Int                    @default(0)
-  keywordsEmptyCount    Int                    @default(0)
-  aiInputTokens         Int                    @default(0)
-  aiOutputTokens        Int                    @default(0)
+  totalSources          Int                     @default(0)
+  totalUrlsFound        Int                     @default(0)
+  successCount          Int                     @default(0)
+  duplicateCount        Int                     @default(0)
+  failureCount          Int                     @default(0)
+  enrichedCount         Int                     @default(0)
+  enrichmentFailedCount Int                     @default(0)
+  keywordsCoveredCount  Int                     @default(0)
+  keywordsEmptyCount    Int                     @default(0)
+  aiInputTokens         Int                     @default(0)
+  aiOutputTokens        Int                     @default(0)
   successRate           Float?
   durationMinutes       Float?
   reportData            String?
   reportSentAt          DateTime?
-  criticalErrors        Boolean                @default(false)
+  criticalErrors        Boolean                 @default(false)
   categoryStats         CategoryScrapingStats[]
   scrapedArticles       ScrapedArticle[]
   logs                  ScrapingLog[]
@@ -517,6 +520,22 @@ model WordPressPublishJob {
   @@index([status])
   @@index([scheduledAt])
   @@map("wordpress_publish_jobs")
+}
+
+model ArticleInteractions {
+  id            String   @id @default(cuid())
+  userId        String
+  articleId     String
+  commentStatus Boolean  @default(false)
+  rateStatus    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  dateUpdated   DateTime @updatedAt
+  article       Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId])
+  @@index([dateUpdated])
+  @@map("article_interactions")
 }
 
 enum Role {

@@ -1,5 +1,6 @@
 const prisma = require("../config/prisma");
 const { createNotification } = require("../services/notification.service");
+const { updateCommentCount, updateRatingStats } = require("../services/articleStats.service");
 
 /**
  * @description Fetch all comments for a specific article
@@ -62,7 +63,7 @@ const createComment = async (req, res) => {
     });
 
     console.log("✅ NOTIFICATION SERVICE FINISHED. Result:", notifResult ? "Saved" : "Ignored/Failed");
-
+    await updateCommentCount(articleId);
     res.status(201).json(newComment);
   } catch (error) {
     console.error("CRASH IN CONTROLLER:", error);
@@ -106,14 +107,13 @@ const rateArticle = async (req, res) => {
         data: { score: rating }
       });
       
-    } else {
-      // --- NEW RATING SCENARIO ---
+    } else { 
       // Save the new rating
       userRating = await prisma.articleRating.create({
         data: { userId, articleId, score: rating }
       });
 
-      // AND trigger the notification since it's their first time rating it
+      // trigger the notification since it's their first time rating it
       await createNotification(req.app, {
         type: "RATE",
         destUserId: article.authorId, 
@@ -121,6 +121,7 @@ const rateArticle = async (req, res) => {
         sourceArticleId: articleId 
       });
     }
+    await updateRatingStats(articleId);
 
     res.status(200).json({ success: true, data: userRating });
   } catch (error) {

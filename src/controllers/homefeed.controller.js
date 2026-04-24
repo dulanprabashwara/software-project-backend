@@ -5,8 +5,8 @@ const prisma = require("../config/prisma");
 exports.getMainFeed = async (req, res) => {
   try {
     const articles = await prisma.article.findMany({
-      where: { status: "DRAFT" }, 
-      orderBy: { createdAt: "desc" },
+      where: { status: "PUBLISHED" }, 
+      orderBy: { publishedAt: "desc" },
       include: {
         author: {
           select: {

@@ -1,3 +1,4 @@
+//src\index.js
 require("dotenv").config();
 
 const express = require("express");
@@ -12,6 +13,7 @@ const errorHandler = require("./middlewares/errorHandler");
 const { apiLimiter } = require("./middlewares/rateLimiter");
 const initializeSocket = require("./sockets");
 const prisma = require("./config/prisma");
+const { processScheduledArticles } = require("./jobs/scheduledArticles.job");
 const { startScrapingJobs } = require("./jobs/scraper.job");
 const { startWordPressJobs } = require("./jobs/wordpress.job");
 const { calculateAndSaveScores } = require("./jobs/trendingScore.job");
@@ -52,7 +54,9 @@ if (process.env.NODE_ENV !== "test") {
 }
 
 // Rate limiting
-app.use("/api/", apiLimiter);
+if (process.env.NODE_ENV === "production") {
+  app.use("/api/", apiLimiter);
+}
 
 // ─── Health Check ───────────────────────────
 
@@ -124,6 +128,7 @@ server.listen(PORT, () => {
     startScrapingJobs();
     startWordPressJobs();
     calculateAndSaveScores();
+    processScheduledArticles();
   }
 });
 

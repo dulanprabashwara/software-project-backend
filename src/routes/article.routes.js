@@ -9,12 +9,20 @@ const { authenticate } = require("../middlewares/auth");
 
 const router = Router();
 
+
+//Trending articles
+router.get("/trending", articleController.getTrendingArticles);
+
 // Article CRUD
 router.get("/", articleController.getFeed);
 router.get("/user/drafts", authenticate, articleController.getDrafts);
 router.get("/user/editing", authenticate, articleController.getCurrentEditing);
+router.get("/user/published", authenticate, articleController.getPublishedByUser);
+router.get("/user/scheduled", authenticate, articleController.getScheduledByUser);
 router.get("/id/:id", authenticate, articleController.getArticleById);
 router.post("/", authenticate, articleController.createArticle);
+router.post("/:id/publish", authenticate, articleController.publishArticle);
+
 
 // Edit existing
 router.post("/:id/edit-existing/start",authenticate,articleController.startEditExisting,);
@@ -29,6 +37,7 @@ router.put("/:id/edit-as-new/save-draft",authenticate,articleController.saveEdit
 router.post("/:id/edit-as-new/discard",authenticate,articleController.discardEditAsNew,
 );
 
+// Public article read
 router.get("/:slug", articleController.getArticle);
 router.put("/:id", authenticate, articleController.updateArticle);
 router.delete("/:id", authenticate, articleController.deleteArticle);
@@ -42,5 +51,8 @@ router.post("/:articleId/save", authenticate, engagementController.toggleSave);
  
 // Report
 router.post("/:articleId/report", authenticate, adminController.reportArticle);
+
+//Trending articles
+router.get("/trending", articleController.getTrendingArticles);
 
 module.exports = router;
