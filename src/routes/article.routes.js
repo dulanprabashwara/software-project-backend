@@ -18,6 +18,7 @@ router.get("/", articleController.getFeed);
 router.get("/user/drafts", authenticate, articleController.getDrafts);
 router.get("/user/editing", authenticate, articleController.getCurrentEditing);
 router.get("/user/published", authenticate, articleController.getPublishedByUser);
+router.get("/user/scheduled", authenticate, articleController.getScheduledByUser);
 router.get("/id/:id", authenticate, articleController.getArticleById);
 router.post("/", authenticate, articleController.createArticle);
 router.post("/:id/publish", authenticate, articleController.publishArticle);

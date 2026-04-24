@@ -652,6 +652,44 @@ async function getUserPublishedArticles(userId, page = 1, limit = 10) {
   return { articles, total };
 }
 
+async function getUserScheduledArticles(userId, page = 1, limit = 10) {
+  const skip = (page - 1) * limit;
+
+  const where = {
+    authorId: userId,
+    status: ARTICLE_STATUS.SCHEDULED,
+  };
+
+  const [articles, total] = await Promise.all([
+    prisma.article.findMany({
+      where,
+      orderBy: [{ scheduledAt: "asc" }, { updatedAt: "desc" }],
+      skip,
+      take: limit,
+      include: {
+        author: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+          },
+        },
+        _count: {
+          select: {
+            comments: true,
+            shares: true,
+            savedBy: true,
+          },
+        },
+      },
+    }),
+    prisma.article.count({ where }),
+  ]);
+
+  return { articles, total };
+}
+
 async function publishArticle(articleId, userId, payload) {
   const article = await getOwnedArticleOrThrow(articleId, userId);
 
@@ -1123,6 +1161,7 @@ module.exports = {
   getArticleBySlug,
   getArticleFeed,
   getUserPublishedArticles,
+  getUserScheduledArticles,
   publishArticle,
   updateArticle,
   startExistingArticleEditing,
