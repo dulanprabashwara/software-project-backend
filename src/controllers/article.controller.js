@@ -5,7 +5,6 @@ const { sendSuccess, sendPaginated } = require("../utils/response");
 const articleService = require("../services/article.service");
 const { parsePagination } = require("../utils/helpers");
 
-
 const createArticle = asyncHandler(async (req, res) => {
   const article = await articleService.createArticle(req.user.id, req.body);
 
@@ -110,6 +109,24 @@ const getPublishedByUser = asyncHandler(async (req, res) => {
     limit,
     total,
     message: "Published articles retrieved.",
+  });
+});
+
+const getScheduledByUser = asyncHandler(async (req, res) => {
+  const { page, limit } = parsePagination(req.query);
+
+  const { articles, total } = await articleService.getUserScheduledArticles(
+    req.user.id,
+    page,
+    limit,
+  );
+
+  sendPaginated(res, {
+    data: articles,
+    page,
+    limit,
+    total,
+    message: "Scheduled articles retrieved.",
   });
 });
 
@@ -265,6 +282,7 @@ module.exports = {
   updateArticle,
   publishArticle,
   getPublishedByUser,
+  getScheduledByUser,
   startEditExisting,
   autosaveEditExisting,
   discardEditExisting,
