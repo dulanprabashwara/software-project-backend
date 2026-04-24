@@ -11,38 +11,39 @@ datasource db {
 /// The `firebaseUid` field serves as the secure, immutable bridge between Firebase Auth 
 /// (which handles passwords/JWTs) and our Postgres database (which handles roles and data).
 model User {
-  id                     String                @id @default(cuid())
-  firebaseUid            String                @unique
-  email                  String                @unique
-  username               String                @unique
+  id                     String                 @id @default(cuid())
+  firebaseUid            String                 @unique
+  email                  String                 @unique
+  username               String                 @unique
   displayName            String?
   bio                    String?
   avatarUrl              String?
-  role                   Role                  @default(USER)
-  isPremium              Boolean               @default(false)
+  role                   Role                   @default(USER)
+  isPremium              Boolean                @default(false)
   linkedInAccountId      String?
   wordpressAccountId     String?
-  isOnline               Boolean               @default(false)
-  lastSeen               DateTime              @default(now())
-  createdAt              DateTime              @default(now())
-  updatedAt              DateTime              @updatedAt
-  stripeCustomerId       String?               @unique
+  isOnline               Boolean                @default(false)
+  lastSeen               DateTime               @default(now())
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  stripeCustomerId       String?                @unique
   ai_article_logs        ai_article_logs[]
+  article_interactions   article_interactions[]
   rating                 ArticleRating[]
   shares                 ArticleShare[]
   articles               Article[]
   auditLogs              AuditLog[]
-  bansIssued             BannedUser[]          @relation("BannedBy")
-  bannedRecord           BannedUser?           @relation("BannedUser")
+  bansIssued             BannedUser[]           @relation("BannedBy")
+  bannedRecord           BannedUser?            @relation("BannedUser")
   comments               Comment[]
-  following              Follow[]              @relation("Followers")
-  followers              Follow[]              @relation("Following")
-  receivedMessages       Message[]             @relation("ReceivedMessages")
-  sentMessages           Message[]             @relation("SentMessages")
-  notifications          Notification[]        @relation("NotificationDest")
-  notificationsTriggered Notification[]        @relation("NotificationSource")
+  following              Follow[]               @relation("Followers")
+  followers              Follow[]               @relation("Following")
+  receivedMessages       Message[]              @relation("ReceivedMessages")
+  sentMessages           Message[]              @relation("SentMessages")
+  notifications          Notification[]         @relation("NotificationDest")
+  notificationsTriggered Notification[]         @relation("NotificationSource")
   readHistory            ReadHistory[]
-  reportedArticles       ReportedArticle[]     @relation("Reporter")
+  reportedArticles       ReportedArticle[]      @relation("Reporter")
   savedArticles          SavedArticle[]
   stories                Story[]
   subscriptions          Subscription[]
@@ -54,38 +55,39 @@ model User {
 }
 
 model Article {
-  id                      String                @id @default(cuid())
+  id                      String                 @id @default(cuid())
   title                   String
-  slug                    String                @unique
+  slug                    String                 @unique
   content                 String
   summary                 String?
   coverImage              String?
-  status                  ArticleStatus         @default(DRAFT)
-  isAiGenerated           Boolean               @default(false)
+  status                  ArticleStatus          @default(DRAFT)
+  isAiGenerated           Boolean                @default(false)
   scheduledAt             DateTime?
   publishedAt             DateTime?
-  readCount               Int                   @default(0)
-  averageRating           Float                 @default(0.0)
-  ratingCount             Int                   @default(0)
-  shareCount              Int                   @default(0)
-  commentCount            Int                   @default(0)
+  readCount               Int                    @default(0)
+  averageRating           Float                  @default(0.0)
+  ratingCount             Int                    @default(0)
+  shareCount              Int                    @default(0)
+  commentCount            Int                    @default(0)
   tags                    String[]
-  readingTime             Int                   @default(0)
-  createdAt               DateTime              @default(now())
-  trendingScore           Float                 @default(0.0)
-  updatedAt               DateTime              @default(now())
+  readingTime             Int                    @default(0)
+  createdAt               DateTime               @default(now())
+  trendingScore           Float                  @default(0.0)
+  updatedAt               DateTime               @default(now())
   authorId                String
   editingBackupContent    String?
   editingBackupCoverImage String?
   editingBackupTitle      String?
   editingStartedAt        DateTime?
-  isEdited                Boolean               @default(false)
-  isEditAsNew             Boolean               @default(false)
+  isEdited                Boolean                @default(false)
+  isEditAsNew             Boolean                @default(false)
   sourceArticleId         String?
   ai_article_logs         ai_article_logs?
+  article_interactions    article_interactions[]
   ratings                 ArticleRating[]
   shares                  ArticleShare[]
-  author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  author                  User                   @relation(fields: [authorId], references: [id], onDelete: Cascade)
   comments                Comment[]
   notifications           Notification[]
   readHistory             ReadHistory[]
@@ -370,6 +372,7 @@ model ai_article_logs {
   aiInputTokens     Int       @default(0)
   aiOutputTokens    Int       @default(0)
   deletedAt         DateTime?
+  userResponse      String?
   users             User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
   articles          Article?  @relation(fields: [linkedArticleId], references: [id])
 
@@ -517,6 +520,21 @@ model WordPressPublishJob {
   @@index([status])
   @@index([scheduledAt])
   @@map("wordpress_publish_jobs")
+}
+
+model article_interactions {
+  id            String   @id
+  userId        String
+  articleId     String
+  commentStatus Boolean  @default(false)
+  rateStatus    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  dateUpdated   DateTime
+  articles      Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  users         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId])
+  @@index([dateUpdated])
 }
 
 enum Role {
