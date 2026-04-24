@@ -454,13 +454,19 @@ const getAllOffers = async () => {
 
 // Create a new offer
 const createOffer = async (data, adminId) => {
-  // 1. Grab the exact text the Admin typed in the UI
   const { name, discount_percent, stripe_coupon_id, is_active } = data;
 
-  // 2. Validate that we actually got the Stripe ID from the frontend
   if (!stripe_coupon_id) {
     throw new Error("Stripe Coupon ID is required to create an offer.");
   }
+  // Ask Stripe if the coupon actually exists
+  try {
+    await stripe.coupons.retrieve(stripe_coupon_id);
+  } catch (error) {
+    // If Stripe throws an error (e.g., 404 Not Found), stop the whole process!
+    throw new Error(`Invalid Stripe Coupon: '${stripe_coupon_id}' does not exist in your Stripe account.`);
+  }
+
   const offer = await prisma.offer.create({
     data: {
       name: data.name,
