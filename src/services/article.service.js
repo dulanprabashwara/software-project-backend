@@ -115,6 +115,17 @@ function buildClearedEditingBackupData() {
   };
 }
 
+function shouldUpdateArticleTimestamp(existingArticle, updateData) {
+  return (
+    (updateData.title !== undefined && updateData.title !== existingArticle.title) ||
+    (updateData.content !== undefined && updateData.content !== existingArticle.content) ||
+    (updateData.summary !== undefined && updateData.summary !== existingArticle.summary) ||
+    (updateData.coverImage !== undefined && updateData.coverImage !== existingArticle.coverImage) ||
+    (updateData.tags !== undefined &&
+      JSON.stringify(updateData.tags) !== JSON.stringify(existingArticle.tags))
+  );
+}
+
 async function getOwnedArticleOrThrow(articleId, userId) {
   const article = await prisma.article.findUnique({
     where: { id: articleId },
@@ -719,6 +730,10 @@ async function updateArticle(articleId, authorId, payload) {
 
   const updateData = buildArticleUpdateData(existingArticle, payload);
 
+  if (shouldUpdateArticleTimestamp(existingArticle, updateData)) {
+    updateData.updatedAt = new Date();
+  }
+
   if (
     payload.title !== undefined &&
     payload.title.trim() !== existingArticle.title
@@ -769,6 +784,10 @@ async function autosaveExistingArticle(articleId, userId, payload) {
     updateData.slug = await generateUniqueSlug(payload.title.trim());
   }
 
+  if (shouldUpdateArticleTimestamp(article, updateData)) {
+    updateData.updatedAt = new Date();
+  }
+
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
@@ -794,12 +813,18 @@ async function autosaveEditAsNewArticle(articleId, userId, payload) {
     throw ApiError.badRequest("This article is not an edit-as-new article.");
   }
 
+  const updateData = {
+    ...buildEditAsNewPayload(article, payload),
+    status: ARTICLE_STATUS.EDITING,
+  };
+
+  if (shouldUpdateArticleTimestamp(article, updateData)) {
+    updateData.updatedAt = new Date();
+  }
+
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
-    data: {
-      ...buildEditAsNewPayload(article, payload),
-      status: ARTICLE_STATUS.EDITING,
-    },
+    data: updateData,
     include: {
       author: {
         select: {
@@ -887,6 +912,22 @@ async function saveExistingArticleAsDraft(articleId, userId, payload) {
     updateData.slug = await generateUniqueSlug(nextTitle);
   }
 
+  // Compare with ORIGINAL article before editing started
+  const originalTitle = article.editingBackupTitle ?? article.title;
+  const originalContent = article.editingBackupContent ?? article.content;
+  const originalCoverImage = article.editingBackupCoverImage ?? article.coverImage;
+
+  const hasMeaningfulChanges =
+    updateData.title !== originalTitle ||
+    updateData.content !== originalContent ||
+    updateData.coverImage !== originalCoverImage;
+
+  if (hasMeaningfulChanges) 
+    updateData.updatedAt = new Date(); // Real article changes happened
+   else 
+    updateData.updatedAt = article.editingStartedAt || article.updatedAt; // User removed all changes → restore old timestamp
+  
+
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
@@ -922,13 +963,19 @@ async function saveEditAsNewArticleAsDraft(articleId, userId, payload) {
     ARTICLE_STATUS.DRAFT,
   );
 
+  const updateData = {
+    ...buildEditAsNewPayload(article, payload),
+    status: ARTICLE_STATUS.DRAFT,
+    isEditAsNew: true,
+  };
+
+  if (shouldUpdateArticleTimestamp(article, updateData)) {
+    updateData.updatedAt = new Date();
+  }
+
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
-    data: {
-      ...buildEditAsNewPayload(article, payload),
-      status: ARTICLE_STATUS.DRAFT,
-      isEditAsNew: true,
-    },
+    data: updateData,
     include: {
       author: {
         select: {

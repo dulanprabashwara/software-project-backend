@@ -73,7 +73,7 @@ model Article {
   readingTime             Int                   @default(0)
   createdAt               DateTime              @default(now())
   trendingScore           Float                 @default(0.0)
-  updatedAt               DateTime              @updatedAt
+  updatedAt               DateTime              @default(now())
   authorId                String
   editingBackupContent    String?
   editingBackupCoverImage String?
