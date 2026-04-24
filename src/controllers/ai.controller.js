@@ -80,10 +80,20 @@ const getTrendingTopics = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, topics });
 });
 
+// GET /api/ai/top-ai-articles
+const getTopAIArticles = asyncHandler(async (req, res) => {
+  const articles = await aiService.getTopAIArticles();
+  res.status(200).json({ success: true, articles });
+});
+
 module.exports = {
-  analyzePrompt, generateArticle, regenerateArticle,
+  analyzePrompt,
+  generateArticle, 
+  regenerateArticle,
   saveDraft, loadToEditor,
   deleteLog, restoreLog,
-  getArticleLogs, getArticleLogById,
+  getArticleLogs, 
+  getArticleLogById,
   getTrendingTopics,
+  getTopAIArticles,  
 };

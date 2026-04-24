@@ -671,6 +671,24 @@ async function getTrendingTopics() {
     mostRecentRank:   k.earliestPosition,
   }));
 }
+const getTopAIArticles = async () => {
+  const articles = await prisma.article.findMany({
+    where: {
+      isAiGenerated: true,
+      status: "PUBLISHED",   // only show publicly visible articles
+    },
+    orderBy: { trendingScore: "desc" },
+    take: 5,
+    select: {
+      id:    true,
+      title: true,
+      author: {
+        select: { displayName: true },
+      },
+    },
+  });
+  return articles;
+};
 
 module.exports = {
   analyzePrompt,
@@ -683,4 +701,5 @@ module.exports = {
   getArticleLogs,
   getArticleLogById,
   getTrendingTopics,
+  getTopAIArticles,
 };

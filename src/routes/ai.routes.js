@@ -17,5 +17,6 @@ router.post("/logs/:id/restore",   authenticate, aiController.restoreLog);
 
 
 router.get("/trending-topics", authenticate, aiController.getTrendingTopics);
+router.get("/top-ai-articles", authenticate, aiController.getTopAIArticles);
 
 module.exports = router;
