@@ -38,13 +38,15 @@ async function getAdminEmails() {
 function buildCompletionEmailHtml(report) {
   const isInterrupted      = report.isInterrupted      || false;
   const isManualEnrichment = report.isManualEnrichment || false;
+  const isCrashed          = report.isCrashed          || false;
 
-  const statusColor = (report.criticalErrors || isInterrupted) ? "#e74c3c" : "#1abc9c";
+  const statusColor = (report.criticalErrors || isInterrupted || isCrashed) ? "#e74c3c" : "#1abc9c";
 
   let statusLabel;
-  if (isInterrupted)          statusLabel = "🛑 Session Interrupted — Partial Report";
-  else if (report.criticalErrors) statusLabel = "⚠️ Completed with Critical Errors";
-  else                        statusLabel = "✅ Completed Successfully";
+  if (isCrashed)                   statusLabel = "💥 Session Crashed — Needs Attention";
+  else if (isInterrupted)          statusLabel = "🛑 Session Interrupted — Partial Report";
+  else if (report.criticalErrors)  statusLabel = "⚠️ Completed with Critical Errors";
+  else                             statusLabel = "✅ Completed Successfully";
 
   const interruptedBanner = isInterrupted
     ? `<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:16px;margin-bottom:20px;">
@@ -53,6 +55,18 @@ function buildCompletionEmailHtml(report) {
           The backend process was killed (terminal closed, server restarted, or nodemon reload)
           mid-scrape. Stats below reflect only the work completed before shutdown.
           Run a manual scrape or wait until next Saturday to complete the remaining sources.
+        </span>
+       </div>`
+    : "";
+
+  const crashedBanner = isCrashed
+    ? `<div style="background:#fde8e8;border:1px solid #e74c3c;border-radius:6px;padding:16px;margin-bottom:20px;">
+        <strong style="color:#c0392b;">💥 The scraping session crashed due to an unhandled error.</strong><br>
+        <span style="color:#c0392b;font-size:13px;">
+          Error: <code>${report.crashReason || "Unknown error"}</code><br>
+          Stats below reflect only what was completed before the crash.
+          Check the server logs for the full stack trace.
+          Run a manual scrape or wait until next Saturday to re-run.
         </span>
        </div>`
     : "";
@@ -105,8 +119,9 @@ function buildCompletionEmailHtml(report) {
 <body style="font-family:Arial,sans-serif;color:#333;max-width:720px;margin:0 auto;padding:24px;">
 
   <div style="background:${statusColor};color:#fff;padding:20px 24px;border-radius:8px 8px 0 0;">
-    <h1 style="margin:0;font-size:20px;">🤖 Easy Blogger — ${
+    <h1 style="margin:0;font-size:20px;">Easy Blogger — ${
       isManualEnrichment ? "Manual Enrichment Report" :
+      isCrashed          ? "Scraping Session Crashed" :
       isInterrupted      ? "Scraping Interrupted — Partial Report" :
                            "Weekly Content Scraping Report"
     }</h1>
@@ -116,6 +131,7 @@ function buildCompletionEmailHtml(report) {
   <div style="background:#f9f9f9;padding:24px;border:1px solid #eee;border-top:none;border-radius:0 0 8px 8px;">
 
     ${interruptedBanner}
+    ${crashedBanner}
 
     <h2 style="margin-top:0;">Session Overview</h2>
     <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #eee;border-radius:6px;">
@@ -232,10 +248,11 @@ async function sendCompletionNotification(report) {
   const transporter = createTransporter();
 
   let subject;
-  if (report.isInterrupted)          subject = `🛑 [Easy Blogger] Scraping Interrupted — ${report.successCount} articles saved before shutdown`;
+  if (report.isCrashed)            subject = `💥 [Easy Blogger] Scraping Session Crashed — Action Required`;
+  else if (report.isInterrupted)   subject = `🛑 [Easy Blogger] Scraping Interrupted — ${report.successCount} articles saved before shutdown`;
   else if (report.isManualEnrichment) subject = `📝 [Easy Blogger] Manual Enrichment — ${report.enrichedCount} articles enriched`;
-  else if (report.criticalErrors)     subject = `⚠️ [Easy Blogger] Weekly Scraping — Issues (${report.successRate}% success)`;
-  else                                subject = `✅ [Easy Blogger] Weekly Scraping Done — ${report.successCount} articles saved`;
+  else if (report.criticalErrors)  subject = `⚠️ [Easy Blogger] Weekly Scraping — Issues (${report.successRate}% success)`;
+  else                             subject = `✅ [Easy Blogger] Weekly Scraping Done — ${report.successCount} articles saved`;
 
   await transporter.sendMail({
     from:    `"Easy Blogger System" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
