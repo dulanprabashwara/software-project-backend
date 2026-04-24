@@ -4,7 +4,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendPaginated } = require("../utils/response");
 const articleService = require("../services/article.service");
 const { parsePagination } = require("../utils/helpers");
-const prisma = require("../config/prisma");
+
 
 const createArticle = asyncHandler(async (req, res) => {
   const article = await articleService.createArticle(req.user.id, req.body);
@@ -250,32 +250,9 @@ const getDrafts = asyncHandler(async (req, res) => {
     message: "Drafts retrieved.",
   });
 });
+// GET /api/articles/trending
 const getTrendingArticles = asyncHandler(async (req, res) => {
-  const articles = await prisma.article.findMany({
-    where: { status: "PUBLISHED" },
-    orderBy: { trendingScore: "desc" },
-    take: 10,
-    select: {
-      id:            true,
-      title:         true,
-      summary:       true,
-      coverImage:    true,
-      publishedAt:   true,
-      createdAt:     true,
-      averageRating: true,
-      ratingCount:   true,
-      commentCount:  true,
-      readingTime:   true,
-      author: {
-        select: {
-          displayName: true,
-          username:    true,
-          avatarUrl:   true,
-          isPremium:   true,
-        },
-      },
-    },
-  });
+  const articles = await articleService.getTrendingArticles();
   res.status(200).json({ success: true, articles });
 });
 
