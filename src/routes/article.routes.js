@@ -9,6 +9,10 @@ const { authenticate } = require("../middlewares/auth");
 
 const router = Router();
 
+
+//Trending articles
+router.get("/trending", articleController.getTrendingArticles);
+
 // Article CRUD
 router.get("/", articleController.getFeed);
 router.get("/user/drafts", authenticate, articleController.getDrafts);
@@ -46,5 +50,8 @@ router.post("/:articleId/save", authenticate, engagementController.toggleSave);
  
 // Report
 router.post("/:articleId/report", authenticate, adminController.reportArticle);
+
+//Trending articles
+router.get("/trending", articleController.getTrendingArticles);
 
 module.exports = router;
