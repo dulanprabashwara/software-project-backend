@@ -56,9 +56,18 @@ const SUMMARY_MAX_WORDS = 150;
 const RATE_LIMIT_RESET_MS  = 60000;                               // OpenRouter rate limit window
 const BACKOFF_DELAYS_MS    = [2000, 4000, 8000, 16000, 30000, 60000]; // exponential backoff sequence
 
-// Token cost rates (USD per token) — used for cost estimation in the email report
+// Token cost rates (USD per token) — only applied when a paid (non-free) model was used
 const AI_TOKEN_COST_INPUT  = 0.00000015;
 const AI_TOKEN_COST_OUTPUT = 0.0000006;
+
+// Returns the estimated cost for a session's token usage.
+// Cost is only calculated if a paid model was used — free models always return 0.
+function calculateEstimatedCost(tokenTracker) {
+  if (!tokenTracker.usedPaidModel) return 0;
+  return parseFloat(
+    ((tokenTracker.inputTokens * AI_TOKEN_COST_INPUT) + (tokenTracker.outputTokens * AI_TOKEN_COST_OUTPUT)).toFixed(4)
+  );
+}
 
 
 // ── RateLimitManager ──────────────────────────────────────────────────────────
@@ -246,11 +255,12 @@ async function processBatch(articles, categoryKeywords, tokenTracker, sessionId,
 
   // Try batch processing first
   try {
-    const messages           = buildBatchPrompt(articles, categoryKeywords);
-    const { content, usage } = await callOpenRouter(messages, MAX_TOKENS_BATCH);
+    const messages                    = buildBatchPrompt(articles, categoryKeywords);
+    const { content, usage, model }   = await callOpenRouter(messages, MAX_TOKENS_BATCH);
 
     tokenTracker.inputTokens  += usage.prompt_tokens;
     tokenTracker.outputTokens += usage.completion_tokens;
+    if (!model.endsWith(":free")) tokenTracker.usedPaidModel = true;
 
     try {
       const results = parseEnrichmentResponse(content);
@@ -290,11 +300,12 @@ async function processBatch(articles, categoryKeywords, tokenTracker, sessionId,
 
   for (const article of articles) {
     try {
-      const messages           = buildBatchPrompt([article], categoryKeywords);
-      const { content, usage } = await callOpenRouter(messages, MAX_TOKENS_INDIVIDUAL);
+      const messages                    = buildBatchPrompt([article], categoryKeywords);
+      const { content, usage, model }   = await callOpenRouter(messages, MAX_TOKENS_INDIVIDUAL);
 
       tokenTracker.inputTokens  += usage.prompt_tokens;
       tokenTracker.outputTokens += usage.completion_tokens;
+      if (!model.endsWith(":free")) tokenTracker.usedPaidModel = true;
 
       const results = parseEnrichmentResponse(content);
       const result  = results[0];
@@ -364,7 +375,7 @@ async function runEnrichmentStage(sessionId) {
 
   const logFn        = (logType, url, cat, reason, details) =>
     writeLog(sessionId, logType, url, cat, reason, details);
-  const tokenTracker = { inputTokens: 0, outputTokens: 0 };
+  const tokenTracker = { inputTokens: 0, outputTokens: 0, usedPaidModel: false };
   let totalEnriched  = 0;
   let totalFailed    = 0;
 
@@ -412,9 +423,7 @@ async function runEnrichmentStage(sessionId) {
     tokenUsage: {
       inputTokens:      tokenTracker.inputTokens,
       outputTokens:     tokenTracker.outputTokens,
-      estimatedCostUSD: parseFloat(
-        ((tokenTracker.inputTokens * AI_TOKEN_COST_INPUT) + (tokenTracker.outputTokens * AI_TOKEN_COST_OUTPUT)).toFixed(4)
-      ),
+      estimatedCostUSD: calculateEstimatedCost(tokenTracker),
     },
   };
 }
@@ -444,7 +453,7 @@ async function runManualEnrichment({
     }
   }
 
-  const tokenTracker = { inputTokens: 0, outputTokens: 0 };
+  const tokenTracker = { inputTokens: 0, outputTokens: 0, usedPaidModel: false };
   let totalEnriched  = 0;
   let totalFailed    = 0;
   let totalFound     = 0;
@@ -536,10 +545,9 @@ async function runManualEnrichment({
       const existing = await prisma.scrapingSession.findUnique({
         where:  { id: sid },
         select: {
-          enrichedCount:         true,
-          enrichmentFailedCount: true,
-          aiInputTokens:         true,
-          aiOutputTokens:        true,
+          enrichedCount:  true,
+          aiInputTokens:  true,
+          aiOutputTokens: true,
         },
       });
 
@@ -548,13 +556,19 @@ async function runManualEnrichment({
       const { keywordsWithContent, keywordsWithoutContent } =
         await buildKeywordCoverageReport(sid);
 
+      // Count articles still missing a summary to get the true current failed count.
+      // This replaces the old additive approach which never decremented previously failed articles.
+      const currentFailedCount = await prisma.scrapedArticle.count({
+        where: { sessionId: sid, summary: null },
+      });
+
       await prisma.scrapingSession.update({
         where: { id: sid },
         data: {
-          enrichedCount:         (existing.enrichedCount         || 0) + totals.enriched,
-          enrichmentFailedCount: (existing.enrichmentFailedCount || 0) + totals.failed,
-          aiInputTokens:         (existing.aiInputTokens         || 0) + totals.inputTokens,
-          aiOutputTokens:        (existing.aiOutputTokens        || 0) + totals.outputTokens,
+          enrichedCount:         (existing.enrichedCount  || 0) + totals.enriched,
+          enrichmentFailedCount: currentFailedCount,
+          aiInputTokens:         (existing.aiInputTokens  || 0) + totals.inputTokens,
+          aiOutputTokens:        (existing.aiOutputTokens || 0) + totals.outputTokens,
           keywordsCoveredCount:  keywordsWithContent.length,
           keywordsEmptyCount:    keywordsWithoutContent.length,
         },
@@ -612,7 +626,7 @@ async function runManualEnrichment({
           aiTokenUsage: {
             inputTokens:      tokenTracker.inputTokens,
             outputTokens:     tokenTracker.outputTokens,
-            estimatedCostUSD: 0,
+            estimatedCostUSD: calculateEstimatedCost(tokenTracker),
           },
           criticalErrors:     false,
           isManualEnrichment: true,
@@ -639,9 +653,7 @@ async function runManualEnrichment({
     tokenUsage: {
       inputTokens:      tokenTracker.inputTokens,
       outputTokens:     tokenTracker.outputTokens,
-      estimatedCostUSD: parseFloat(
-        ((tokenTracker.inputTokens * AI_TOKEN_COST_INPUT) + (tokenTracker.outputTokens * AI_TOKEN_COST_OUTPUT)).toFixed(4)
-      ),
+      estimatedCostUSD: calculateEstimatedCost(tokenTracker),
     },
   };
 }
