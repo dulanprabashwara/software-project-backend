@@ -14,7 +14,7 @@ const initializeSocket = require("./sockets");
 const prisma = require("./config/prisma");
 const { startScrapingJobs } = require("./jobs/scraper.job");
 const { startWordPressJobs } = require("./jobs/wordpress.job");
-const {calculateAndSaveScores} = require('./jobs/trendingScore.job');
+const { calculateAndSaveScores } = require("./jobs/trendingScore.job");
 
 // ─── App Setup ──────────────────────────────
 
@@ -120,10 +120,10 @@ server.listen(PORT, () => {
   │                                         │
   └─────────────────────────────────────────┘
   `);
-    if (process.env.NODE_ENV !== "test") {
+  if (process.env.NODE_ENV !== "test") {
     startScrapingJobs();
-     startWordPressJobs(); 
-     calculateAndSaveScores();
+    startWordPressJobs();
+    calculateAndSaveScores();
   }
 });
 
