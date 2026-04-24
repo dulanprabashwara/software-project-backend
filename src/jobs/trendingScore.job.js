@@ -8,7 +8,7 @@ const calculateAndSaveScores = async () => {
   try {
     // 1. Fetch articles (Optional: You can add a date filter here so you don't calculate 10-year-old articles)
     const articles = await prisma.article.findMany({
-      where: { status: "DRAFT" },
+      where: { status: "PUBLISHED" },
       select: { 
         id: true, 
         createdAt: true, 
@@ -37,7 +37,9 @@ const calculateAndSaveScores = async () => {
       // 3. Update the database
       await prisma.article.update({
         where: { id: article.id },
-        data: { trendingScore: newScore }
+        data: { trendingScore: newScore,
+                updatedAt: article.updatedAt
+         }
       });
     }
 

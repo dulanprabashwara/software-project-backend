@@ -6,17 +6,6 @@ const ApiError = require("../utils/ApiError");
  * @function registerUser
  * @description
  * Creates a new user record in Postgres mapped to their newly generated Firebase identity.
- * WHY: This ensures data integrity by preventing duplicate emails or usernames at the database 
- * level before the full onboarding process completes. It also initializes their empty stats row.
- * 
- * @param {Object} payload - The user registration payload.
- * @param {string} payload.firebaseUid - The verified Firebase UID.
- * @param {string} payload.email - The user's email address.
- * @param {string} payload.username - The requested unique username.
- * @param {string} [payload.displayName] - Optional display name.
- * @param {string} [payload.avatarUrl] - Optional avatar image URL.
- * @returns {Promise<Object>} The newly created Prisma User object with attached stats.
- * @throws {ApiError} 409 Conflict if firebaseUid, email, or username are already natively registered.
  */
 const registerUser = async ({
   firebaseUid,
@@ -65,10 +54,10 @@ const registerUser = async ({
  * @function syncUser
  * @description
  * Synchronizes a Firebase login event with the local Postgres database.
- * WHY: If a user logs in via a social provider (Google, GitHub) for the very first time, 
- * they won't exist in Postgres. This function cleanly handles the "Upsert" logic by fetching 
+ * WHY: If a user logs in via a social provider (Google, GitHub) for the very first time,
+ * they won't exist in Postgres. This function cleanly handles the "Upsert" logic by fetching
  * their fresh Firebase profile and cleanly auto-generating a Postgres record for them dynamically.
- * 
+ *
  * @param {string} firebaseUid - The cryptographically verified Firebase UID.
  * @returns {Promise<Object>} The deeply nested Prisma User object including stats, counts, and ban data.
  */
