@@ -5,9 +5,6 @@ const ApiError = require("../utils/ApiError");
 const WP_OAUTH_BASE = "https://public-api.wordpress.com/oauth2";
 const WP_API_BASE   = "https://public-api.wordpress.com/rest/v1.1";
 
-// Env vars are read inside functions, not at module level.
-// Jest caches modules on load, so module-level consts would freeze to
-// undefined before tests set their process.env values.
 
 const stripProtocol = (url = "") =>
   url.replace(/^https?:\/\//, "").replace(/\/$/, "");
@@ -21,16 +18,67 @@ const buildCanonicalSnippet = (article) => {
   return `<!-- Originally published on Easy Blogger: ${canonicalUrl} -->\n<link rel="canonical" href="${canonicalUrl}" />\n\n`;
 };
 
+// Uploads the article cover image to the WordPress media library and returns the media ID.
+
+const uploadCoverImageToWordPress = async (coverImage, connection) => {
+  if (!coverImage) return null;
+
+  const mediaEndpoint = `${WP_API_BASE}/sites/${connection.siteId}/media/new`;
+
+  try {
+    // Base64 data URL — extract binary and upload directly
+    if (coverImage.startsWith("data:")) {
+      const match = coverImage.match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) return null;
+
+      const mimeType = match[1];
+      const buffer   = Buffer.from(match[2], "base64");
+      const ext      = mimeType.split("/")[1] || "jpg";
+
+      const res = await axios.post(mediaEndpoint, buffer, {
+        headers: {
+          Authorization:       `Bearer ${connection.accessToken}`,
+          "Content-Type":      mimeType,
+          "Content-Disposition": `attachment; filename="cover.${ext}"`,
+        },
+        timeout: 30000,
+      });
+      return res.data?.ID || null;
+    }
+
+    // Absolute public URL — ask WordPress to sideload it
+    if (coverImage.startsWith("http://") || coverImage.startsWith("https://")) {
+      const res = await axios.post(
+        mediaEndpoint,
+        { url: coverImage },
+        {
+          headers: {
+            Authorization:  `Bearer ${connection.accessToken}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 30000,
+        }
+      );
+      return res.data?.ID || null;
+    }
+
+    return null; // relative or unrecognised format — skip
+  } catch {
+    return null; // image upload failed — post without featured image
+  }
+};
+
 // Builds the post body sent to the WordPress REST API.
+// Accepts an optional featuredMediaId from uploadCoverImageToWordPress.
 // Used by both pushArticleToWordPress and attemptDraftSave.
-const buildWpPostBody = (article, status) => {
+const buildWpPostBody = (article, status, featuredMediaId = null) => {
   const canonical = buildCanonicalSnippet(article);
   return {
     title:   article.title,
     content: canonical + (article.content || ""),
     status,
-    ...(article.tags?.length && { tags: article.tags.join(",") }),
-    ...(article.coverImage   && { featured_image: article.coverImage }),
+    ...(article.tags?.length  && { tags: article.tags.join(",") }),
+    ...(featuredMediaId       && { featured_media: featuredMediaId }),
   };
 };
 
@@ -144,13 +192,16 @@ const disconnectWordPress = async (userId) => {
 };
 
 // Sends the article to the WordPress REST API as a published post.
+// Uploads the cover image to WordPress media first so it appears as the featured image.
 // Throws a plain Error on failure so the caller can attempt a draft fallback.
 const pushArticleToWordPress = async (article, connection) => {
+  const featuredMediaId = await uploadCoverImageToWordPress(article.coverImage, connection);
+
   let wpRes;
   try {
     const res = await axios.post(
       `${WP_API_BASE}/sites/${connection.siteId}/posts/new`,
-      buildWpPostBody(article, "publish"),
+      buildWpPostBody(article, "publish", featuredMediaId),
       {
         headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
         timeout: 15000,
@@ -167,13 +218,15 @@ const pushArticleToWordPress = async (article, connection) => {
 };
 
 // Saves the article as a draft on WordPress when a publish attempt fails.
-// Returns the URL of the WordPress drafts dashboard so the user can publish manually,
-// or null if the draft save also fails.
+// Also uploads the cover image so the draft has the featured image ready.
+// Returns the WordPress drafts dashboard URL on success, or null if the draft save fails.
 const attemptDraftSave = async (article, connection) => {
   try {
+    const featuredMediaId = await uploadCoverImageToWordPress(article.coverImage, connection);
+
     await axios.post(
       `${WP_API_BASE}/sites/${connection.siteId}/posts/new`,
-      buildWpPostBody(article, "draft"),
+      buildWpPostBody(article, "draft", featuredMediaId),
       {
         headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
         timeout: 15000,
