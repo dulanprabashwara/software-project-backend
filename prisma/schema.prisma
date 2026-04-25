@@ -28,6 +28,7 @@ model User {
   updatedAt              DateTime              @updatedAt
   stripeCustomerId       String?               @unique
   ai_article_logs        ai_article_logs[]
+  interactedArticles     ArticleInteractions[]
   rating                 ArticleRating[]
   shares                 ArticleShare[]
   articles               Article[]
@@ -44,7 +45,6 @@ model User {
   readHistory            ReadHistory[]
   reportedArticles       ReportedArticle[]     @relation("Reporter")
   savedArticles          SavedArticle[]
-  interactedArticles     ArticleInteractions[]
   stories                Story[]
   subscriptions          Subscription[]
   stats                  UserStats?
@@ -84,13 +84,12 @@ model Article {
   isEditAsNew             Boolean               @default(false)
   sourceArticleId         String?
   ai_article_logs         ai_article_logs?
+  interactions            ArticleInteractions[]
   ratings                 ArticleRating[]
   shares                  ArticleShare[]
   author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
   comments                Comment[]
   notifications           Notification[]
-  // Add this near your other relations like comments or notifications:
-  interactions            ArticleInteractions[]
   readHistory             ReadHistory[]
   reports                 ReportedArticle[]
   savedBy                 SavedArticle[]
@@ -530,8 +529,8 @@ model ArticleInteractions {
   rateStatus    Boolean  @default(false)
   createdAt     DateTime @default(now())
   dateUpdated   DateTime @updatedAt
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   article       Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, articleId])
   @@index([dateUpdated])
