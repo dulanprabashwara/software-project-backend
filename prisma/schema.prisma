@@ -7,18 +7,358 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model admin_dashboard {
+/// @description
+/// The `firebaseUid` field serves as the secure, immutable bridge between Firebase Auth 
+/// (which handles passwords/JWTs) and our Postgres database (which handles roles and data).
+model User {
+  id                     String                @id @default(cuid())
+  firebaseUid            String                @unique
+  email                  String                @unique
+  username               String                @unique
+  displayName            String?
+  bio                    String?
+  avatarUrl              String?
+  role                   Role                  @default(USER)
+  isPremium              Boolean               @default(false)
+  linkedInAccountId      String?
+  wordpressAccountId     String?
+  isOnline               Boolean               @default(false)
+  lastSeen               DateTime              @default(now())
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  stripeCustomerId       String?               @unique
+  ai_article_logs        ai_article_logs[]
+  rating                 ArticleRating[]
+  shares                 ArticleShare[]
+  articles               Article[]
+  auditLogs              AuditLog[]
+  bansIssued             BannedUser[]          @relation("BannedBy")
+  bannedRecord           BannedUser?           @relation("BannedUser")
+  comments               Comment[]
+  following              Follow[]              @relation("Followers")
+  followers              Follow[]              @relation("Following")
+  receivedMessages       Message[]             @relation("ReceivedMessages")
+  sentMessages           Message[]             @relation("SentMessages")
+  notifications          Notification[]        @relation("NotificationDest")
+  notificationsTriggered Notification[]        @relation("NotificationSource")
+  readHistory            ReadHistory[]
+  reportedArticles       ReportedArticle[]     @relation("Reporter")
+  savedArticles          SavedArticle[]
+  interactedArticles     ArticleInteractions[]
+  stories                Story[]
+  subscriptions          Subscription[]
+  stats                  UserStats?
+  wordpressConnection    WordPressConnection?
+  wpPublishJobs          WordPressPublishJob[]
+
+  @@map("users")
+}
+
+model Article {
+  id                      String                @id @default(cuid())
+  title                   String
+  slug                    String                @unique
+  content                 String
+  summary                 String?
+  coverImage              String?
+  status                  ArticleStatus         @default(DRAFT)
+  isAiGenerated           Boolean               @default(false)
+  scheduledAt             DateTime?
+  publishedAt             DateTime?
+  readCount               Int                   @default(0)
+  averageRating           Float                 @default(0.0)
+  ratingCount             Int                   @default(0)
+  shareCount              Int                   @default(0)
+  commentCount            Int                   @default(0)
+  tags                    String[]
+  readingTime             Int                   @default(0)
+  createdAt               DateTime              @default(now())
+  trendingScore           Float                 @default(0.0)
+  updatedAt               DateTime              @default(now())
+  authorId                String
+  editingBackupContent    String?
+  editingBackupCoverImage String?
+  editingBackupTitle      String?
+  editingStartedAt        DateTime?
+  isEdited                Boolean               @default(false)
+  isEditAsNew             Boolean               @default(false)
+  sourceArticleId         String?
+  ai_article_logs         ai_article_logs?
+  ratings                 ArticleRating[]
+  shares                  ArticleShare[]
+  author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments                Comment[]
+  notifications           Notification[]
+  // Add this near your other relations like comments or notifications:
+  interactions            ArticleInteractions[]
+  readHistory             ReadHistory[]
+  reports                 ReportedArticle[]
+  savedBy                 SavedArticle[]
+  wpPublishJobs           WordPressPublishJob[]
+
+  @@index([authorId])
+  @@index([status])
+  @@index([publishedAt])
+  @@index([slug])
+  @@index([sourceArticleId])
+  @@map("articles")
+}
+
+model Comment {
+  id        String    @id @default(cuid())
+  content   String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  parentId  String?
+  authorId  String
+  articleId String
+  article   Article   @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent    Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   Comment[] @relation("CommentReplies")
+
+  @@index([articleId])
+  @@index([authorId])
+  @@map("comments")
+}
+
+model ArticleRating {
+  id        String   @id @default(cuid())
+  score     Int      @default(0)
+  createdAt DateTime @default(now())
+  userId    String
+  articleId String
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId])
+  @@index([articleId])
+  @@map("article_ratings")
+}
+
+model ArticleShare {
+  id        String   @id @default(cuid())
+  platform  String?
+  createdAt DateTime @default(now())
+  userId    String
+  articleId String
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([articleId])
+  @@map("article_shares")
+}
+
+model SavedArticle {
+  id        String   @id @default(cuid())
+  savedAt   DateTime @default(now())
+  userId    String
+  articleId String
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId])
+  @@map("saved_articles")
+}
+
+model ReadHistory {
+  id         String   @id @default(cuid())
+  lastReadAt DateTime @default(now())
+  readCount  Int      @default(1)
+  userId     String
+  articleId  String
+  article    Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId])
+  @@map("read_history")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  followerId  String
+  followingId String
+  follower    User     @relation("Followers", fields: [followerId], references: [id], onDelete: Cascade)
+  following   User     @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+  @@map("follows")
+}
+
+model Story {
+  id        String   @id @default(cuid())
+  mediaUrl  String
+  caption   String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([authorId])
+  @@index([expiresAt])
+  @@map("stories")
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  content    String
+  isRead     Boolean  @default(false)
+  sentAt     DateTime @default(now())
+  senderId   String
+  receiverId String
+  receiver   User     @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  sender     User     @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([sentAt])
+  @@map("messages")
+}
+
+model UserStats {
+  id             String   @id @default(cuid())
+  totalReads     Int      @default(0)
+  averageRating  Float    @default(0.0)
+  totalFollowers Int      @default(0)
+  totalFollowing Int      @default(0)
+  articleCount   Int      @default(0)
+  updatedAt      DateTime @updatedAt
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_stats")
+}
+
+model Notification {
+  id              String           @id @default(cuid())
+  type            NotificationType
+  sourceUserId    String?
+  sourceArticleId String?
+  destUserId      String
+  isRead          Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  destUser        User             @relation("NotificationDest", fields: [destUserId], references: [id], onDelete: Cascade)
+  sourceArticle   Article?         @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
+  sourceUser      User?            @relation("NotificationSource", fields: [sourceUserId], references: [id], onDelete: Cascade)
+
+  @@index([destUserId])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model ReportedArticle {
+  id         String       @id @default(cuid())
+  reason     String
+  status     ReportStatus @default(PENDING)
+  details    String?
+  createdAt  DateTime     @default(now())
+  resolvedAt DateTime?
+  articleId  String
+  reporterId String
+  article    Article      @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  reporter   User         @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("reported_articles")
+}
+
+model BannedUser {
+  id          String    @id @default(cuid())
+  reason      String
+  bannedAt    DateTime  @default(now())
+  bannedUntil DateTime?
+  userId      String    @unique
+  bannedById  String
+  bannedBy    User      @relation("BannedBy", fields: [bannedById], references: [id])
+  user        User      @relation("BannedUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("banned_users")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String
+  targetId   String?
+  targetType String?
+  details    String?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+  adminId    String
+  admin      User     @relation(fields: [adminId], references: [id])
+
+  @@index([adminId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model AdminDashboard {
   id             String   @id @default("singleton")
   totalUsers     Int      @default(0)
   totalArticles  Int      @default(0)
   totalRevenue   Float    @default(0)
   activeSessions Int      @default(0)
   premiumUsers   Int      @default(0)
-  updatedAt      DateTime
+  updatedAt      DateTime @updatedAt
+
+  @@map("admin_dashboard")
+}
+
+model AiConfig {
+  id            String   @id @default("singleton")
+  modelName     String   @default("gpt-4")
+  apiUsageLimit Int      @default(1000)
+  currentUsage  Int      @default(0)
+  isEnabled     Boolean  @default(true)
+  updatedAt     DateTime @updatedAt
+
+  @@map("ai_config")
+}
+
+model TrendingTopic {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  hitCount  Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@index([hitCount])
+  @@map("trending_topics")
+}
+
+model Offer {
+  id               String         @id @default(cuid())
+  name             String
+  discount_percent Int
+  stripe_coupon_id String?
+  is_active        Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  subscriptions    Subscription[]
+
+  @@map("offers")
+}
+
+model Subscription {
+  id                     String    @id @default(cuid())
+  userId                 String
+  offerId                String?
+  stripeSubscriptionId   String    @unique
+  stripeCurrentPeriodEnd DateTime?
+  status                 String    @default("active")
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  offer                  Offer?    @relation(fields: [offerId], references: [id])
+  user                   User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@map("subscriptions")
 }
 
 model ai_article_logs {
-  id                String    @id
+  id                String    @id @default(cuid())
   userPrompt        String
   keywordsPresented String[]
   keywordsSelected  String[]
@@ -27,339 +367,22 @@ model ai_article_logs {
   articleTitle      String
   articleContent    String
   wordCount         Int
-  savedToDraftId    String?   @unique
+  linkedArticleId   String?   @unique @map("savedToDraftId")
   generatedAt       DateTime  @default(now())
   authorId          String
   aiInputTokens     Int       @default(0)
   aiOutputTokens    Int       @default(0)
   deletedAt         DateTime?
-  users             users     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  articles          articles? @relation(fields: [savedToDraftId], references: [id])
+  users             User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  articles          Article?  @relation(fields: [linkedArticleId], references: [id])
 
   @@index([authorId])
-  @@index([deletedAt])
   @@index([generatedAt])
+  @@index([deletedAt])
 }
 
-model ai_config {
-  id            String   @id @default("singleton")
-  modelName     String   @default("gpt-4")
-  apiUsageLimit Int      @default(1000)
-  currentUsage  Int      @default(0)
-  isEnabled     Boolean  @default(true)
-  updatedAt     DateTime
-}
-
-model article_interactions {
-  id            String   @id
-  userId        String
-  articleId     String
-  commentStatus Boolean  @default(false)
-  rateStatus    Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  dateUpdated   DateTime
-  articles      articles @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  users         users    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, articleId])
-  @@index([dateUpdated])
-}
-
-model article_ratings {
-  id        String   @id
-  score     Int      @default(0)
-  createdAt DateTime @default(now())
-  userId    String
-  articleId String
-  articles  articles @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  users     users    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, articleId])
-  @@index([articleId])
-}
-
-model article_shares {
-  id        String   @id
-  platform  String?
-  createdAt DateTime @default(now())
-  userId    String
-  articleId String
-  articles  articles @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  users     users    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([articleId])
-}
-
-model articles {
-  id                      String                   @id
-  title                   String
-  slug                    String                   @unique
-  content                 String
-  summary                 String?
-  coverImage              String?
-  status                  ArticleStatus            @default(DRAFT)
-  isAiGenerated           Boolean                  @default(false)
-  scheduledAt             DateTime?
-  publishedAt             DateTime?
-  readCount               Int                      @default(0)
-  averageRating           Float                    @default(0.0)
-  ratingCount             Int                      @default(0)
-  shareCount              Int                      @default(0)
-  commentCount            Int                      @default(0)
-  tags                    String[]
-  readingTime             Int                      @default(0)
-  createdAt               DateTime                 @default(now())
-  trendingScore           Float                    @default(0.0)
-  updatedAt               DateTime                 @default(now())
-  authorId                String
-  editingBackupContent    String?
-  editingBackupCoverImage String?
-  editingBackupTitle      String?
-  editingStartedAt        DateTime?
-  isEdited                Boolean                  @default(false)
-  isEditAsNew             Boolean                  @default(false)
-  sourceArticleId         String?
-  ai_article_logs         ai_article_logs?
-  article_interactions    article_interactions[]
-  article_ratings         article_ratings[]
-  article_shares          article_shares[]
-  users                   users                    @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  comments                comments[]
-  notifications           notifications[]
-  read_history            read_history[]
-  reported_articles       reported_articles[]
-  saved_articles          saved_articles[]
-  wordpress_publish_jobs  wordpress_publish_jobs[]
-
-  @@index([authorId])
-  @@index([publishedAt])
-  @@index([slug])
-  @@index([sourceArticleId])
-  @@index([status])
-}
-
-model audit_logs {
-  id         String   @id
-  action     String
-  targetId   String?
-  targetType String?
-  details    String?
-  ipAddress  String?
-  createdAt  DateTime @default(now())
-  adminId    String
-  users      users    @relation(fields: [adminId], references: [id])
-
-  @@index([adminId])
-  @@index([createdAt])
-}
-
-model banned_users {
-  id                                   String    @id
-  reason                               String
-  bannedAt                             DateTime  @default(now())
-  bannedUntil                          DateTime?
-  userId                               String    @unique
-  bannedById                           String
-  users_banned_users_bannedByIdTousers users     @relation("banned_users_bannedByIdTousers", fields: [bannedById], references: [id])
-  users_banned_users_userIdTousers     users     @relation("banned_users_userIdTousers", fields: [userId], references: [id], onDelete: Cascade)
-}
-
-model comments {
-  id             String     @id
-  content        String
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime
-  parentId       String?
-  authorId       String
-  articleId      String
-  articles       articles   @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  users          users      @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  comments       comments?  @relation("commentsTocomments", fields: [parentId], references: [id], onDelete: Cascade)
-  other_comments comments[] @relation("commentsTocomments")
-
-  @@index([articleId])
-  @@index([authorId])
-}
-
-model follows {
-  id                               String   @id
-  createdAt                        DateTime @default(now())
-  followerId                       String
-  followingId                      String
-  users_follows_followerIdTousers  users    @relation("follows_followerIdTousers", fields: [followerId], references: [id], onDelete: Cascade)
-  users_follows_followingIdTousers users    @relation("follows_followingIdTousers", fields: [followingId], references: [id], onDelete: Cascade)
-
-  @@unique([followerId, followingId])
-  @@index([followerId])
-  @@index([followingId])
-}
-
-model keyword_scraping_stats {
-  id                String            @id
-  sessionId         String
-  category          String
-  urlsProcessed     Int               @default(0)
-  successCount      Int               @default(0)
-  duplicateCount    Int               @default(0)
-  failureCount      Int               @default(0)
-  createdAt         DateTime          @default(now())
-  scraping_sessions scraping_sessions @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  @@index([sessionId, category])
-  @@index([sessionId])
-}
-
-model messages {
-  id                               String   @id
-  content                          String
-  isRead                           Boolean  @default(false)
-  sentAt                           DateTime @default(now())
-  senderId                         String
-  receiverId                       String
-  users_messages_receiverIdTousers users    @relation("messages_receiverIdTousers", fields: [receiverId], references: [id], onDelete: Cascade)
-  users_messages_senderIdTousers   users    @relation("messages_senderIdTousers", fields: [senderId], references: [id], onDelete: Cascade)
-
-  @@index([receiverId])
-  @@index([senderId])
-  @@index([sentAt])
-}
-
-model notifications {
-  id                                      String           @id
-  type                                    NotificationType
-  sourceUserId                            String?
-  sourceArticleId                         String?
-  destUserId                              String
-  isRead                                  Boolean          @default(false)
-  createdAt                               DateTime         @default(now())
-  users_notifications_destUserIdTousers   users            @relation("notifications_destUserIdTousers", fields: [destUserId], references: [id], onDelete: Cascade)
-  articles                                articles?        @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
-  users_notifications_sourceUserIdTousers users?           @relation("notifications_sourceUserIdTousers", fields: [sourceUserId], references: [id], onDelete: Cascade)
-
-  @@index([createdAt])
-  @@index([destUserId])
-}
-
-model offers {
-  id               String          @id
-  name             String
-  discount_percent Int
-  stripe_coupon_id String?
-  is_active        Boolean         @default(true)
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime
-  subscriptions    subscriptions[]
-}
-
-model read_history {
-  id         String   @id
-  lastReadAt DateTime @default(now())
-  readCount  Int      @default(1)
-  userId     String
-  articleId  String
-  articles   articles @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  users      users    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, articleId])
-}
-
-model reported_articles {
-  id         String       @id
-  reason     String
-  status     ReportStatus @default(PENDING)
-  details    String?
-  createdAt  DateTime     @default(now())
-  resolvedAt DateTime?
-  articleId  String
-  reporterId String
-  articles   articles     @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  users      users        @relation(fields: [reporterId], references: [id], onDelete: Cascade)
-
-  @@index([status])
-}
-
-model saved_articles {
-  id        String   @id
-  savedAt   DateTime @default(now())
-  userId    String
-  articleId String
-  articles  articles @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  users     users    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, articleId])
-}
-
-model scraped_articles {
-  id                String            @id
-  sourceUrl         String            @unique
-  title             String
-  content           String
-  author            String?
-  publishedDate     DateTime?
-  wordCount         Int
-  category          String
-  scrapingSourceId  String
-  metadata          Json?
-  summary           String?
-  matchedKeywords   String[]
-  scrapedAt         DateTime          @default(now())
-  sessionId         String
-  scraping_sessions scraping_sessions @relation(fields: [sessionId], references: [id])
-
-  @@index([category])
-  @@index([scrapedAt])
-  @@index([scrapingSourceId])
-  @@index([sessionId])
-}
-
-model scraping_logs {
-  id                String            @id
-  sessionId         String
-  logType           String
-  url               String
-  category          String?
-  statusCode        Int?
-  reason            String?
-  details           Json?
-  loggedAt          DateTime          @default(now())
-  scraping_sessions scraping_sessions @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  @@index([logType])
-  @@index([sessionId])
-}
-
-model scraping_sessions {
-  id                     String                   @id
-  startedAt              DateTime                 @default(now())
-  completedAt            DateTime?
-  status                 String                   @default("running")
-  lastScrapeDate         DateTime?
-  totalSources           Int                      @default(0)
-  totalUrlsFound         Int                      @default(0)
-  successCount           Int                      @default(0)
-  duplicateCount         Int                      @default(0)
-  failureCount           Int                      @default(0)
-  enrichedCount          Int                      @default(0)
-  enrichmentFailedCount  Int                      @default(0)
-  keywordsCoveredCount   Int                      @default(0)
-  keywordsEmptyCount     Int                      @default(0)
-  aiInputTokens          Int                      @default(0)
-  aiOutputTokens         Int                      @default(0)
-  successRate            Float?
-  durationMinutes        Float?
-  reportData             String?
-  reportSentAt           DateTime?
-  criticalErrors         Boolean                  @default(false)
-  keyword_scraping_stats keyword_scraping_stats[]
-  scraped_articles       scraped_articles[]
-  scraping_logs          scraping_logs[]
-
-  @@index([startedAt])
-  @@index([status])
-}
-
-model scraping_sources {
-  id               String   @id
+model ScrapingSource {
+  id               String   @id @default(cuid())
   name             String
   url              String   @unique
   category         String
@@ -368,134 +391,156 @@ model scraping_sources {
   excludedKeywords String[]
   status           String   @default("active")
   createdAt        DateTime @default(now())
-  updatedAt        DateTime
+  updatedAt        DateTime @updatedAt
+
+  @@map("scraping_sources")
 }
 
-model stories {
-  id        String   @id
-  mediaUrl  String
-  caption   String?
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  authorId  String
-  users     users    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+model ScrapingSession {
+  id                    String                  @id @default(cuid())
+  startedAt             DateTime                @default(now())
+  completedAt           DateTime?
+  status                String                  @default("running")
+  lastScrapeDate        DateTime?
+  totalSources          Int                     @default(0)
+  totalUrlsFound        Int                     @default(0)
+  successCount          Int                     @default(0)
+  duplicateCount        Int                     @default(0)
+  failureCount          Int                     @default(0)
+  enrichedCount         Int                     @default(0)
+  enrichmentFailedCount Int                     @default(0)
+  keywordsCoveredCount  Int                     @default(0)
+  keywordsEmptyCount    Int                     @default(0)
+  aiInputTokens         Int                     @default(0)
+  aiOutputTokens        Int                     @default(0)
+  successRate           Float?
+  durationMinutes       Float?
+  reportData            String?
+  reportSentAt          DateTime?
+  criticalErrors        Boolean                 @default(false)
+  categoryStats         CategoryScrapingStats[]
+  scrapedArticles       ScrapedArticle[]
+  logs                  ScrapingLog[]
 
-  @@index([authorId])
-  @@index([expiresAt])
+  @@index([startedAt])
+  @@index([status])
+  @@map("scraping_sessions")
 }
 
-model subscriptions {
-  id                     String    @id
-  userId                 String
-  offerId                String?
-  stripeSubscriptionId   String    @unique
-  stripeCurrentPeriodEnd DateTime?
-  status                 String    @default("active")
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime
-  offers                 offers?   @relation(fields: [offerId], references: [id])
-  users                  users     @relation(fields: [userId], references: [id])
+model ScrapingLog {
+  id         String          @id @default(cuid())
+  sessionId  String
+  logType    String
+  url        String
+  category   String?
+  statusCode Int?
+  reason     String?
+  details    Json?
+  loggedAt   DateTime        @default(now())
+  session    ScrapingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([logType])
+  @@map("scraping_logs")
+}
+
+model ScrapedArticle {
+  id               String          @id @default(cuid())
+  sourceUrl        String          @unique
+  title            String
+  content          String
+  author           String?
+  publishedDate    DateTime?
+  wordCount        Int
+  category         String
+  scrapingSourceId String
+  metadata         Json?
+  summary          String?
+  matchedKeywords  String[]
+  scrapedAt        DateTime        @default(now())
+  sessionId        String
+  session          ScrapingSession @relation(fields: [sessionId], references: [id])
+
+  @@index([category])
+  @@index([scrapedAt])
+  @@index([sessionId])
+  @@index([scrapingSourceId])
+  @@map("scraped_articles")
+}
+
+model CategoryScrapingStats {
+  id             String          @id @default(cuid())
+  sessionId      String
+  category       String
+  urlsProcessed  Int             @default(0)
+  successCount   Int             @default(0)
+  duplicateCount Int             @default(0)
+  failureCount   Int             @default(0)
+  createdAt      DateTime        @default(now())
+  session        ScrapingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([sessionId, category])
+  @@map("keyword_scraping_stats")
+}
+
+model WordPressConnection {
+  id          String                @id @default(cuid())
+  userId      String                @unique
+  siteUrl     String
+  siteId      String
+  accessToken String
+  wpUsername  String?
+  wpEmail     String?
+  connectedAt DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publishJobs WordPressPublishJob[]
+
+  @@map("wordpress_connections")
+}
+
+model WordPressPublishJob {
+  id           String              @id @default(cuid())
+  articleId    String
+  userId       String
+  wpConnId     String
+  scheduledAt  DateTime
+  status       WpJobStatus         @default(PENDING)
+  wpPostId     String?
+  wpPostUrl    String?
+  draftUrl     String?
+  errorMsg     String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  article      Article             @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wpConnection WordPressConnection @relation(fields: [wpConnId], references: [id], onDelete: Cascade)
 
   @@index([status])
-  @@index([userId])
-}
-
-model trending_topics {
-  id        String   @id
-  name      String   @unique
-  hitCount  Int      @default(0)
-  updatedAt DateTime
-
-  @@index([hitCount])
-}
-
-model user_stats {
-  id             String   @id
-  totalReads     Int      @default(0)
-  averageRating  Float    @default(0.0)
-  totalFollowers Int      @default(0)
-  totalFollowing Int      @default(0)
-  articleCount   Int      @default(0)
-  updatedAt      DateTime
-  userId         String   @unique
-  users          users    @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-model users {
-  id                                              String                   @id
-  firebaseUid                                     String                   @unique
-  email                                           String                   @unique
-  username                                        String                   @unique
-  displayName                                     String?
-  bio                                             String?
-  avatarUrl                                       String?
-  role                                            Role                     @default(USER)
-  isPremium                                       Boolean                  @default(false)
-  linkedInAccountId                               String?
-  wordpressAccountId                              String?
-  isOnline                                        Boolean                  @default(false)
-  lastSeen                                        DateTime                 @default(now())
-  createdAt                                       DateTime                 @default(now())
-  updatedAt                                       DateTime
-  stripeCustomerId                                String?                  @unique
-  ai_article_logs                                 ai_article_logs[]
-  article_interactions                            article_interactions[]
-  article_ratings                                 article_ratings[]
-  article_shares                                  article_shares[]
-  articles                                        articles[]
-  audit_logs                                      audit_logs[]
-  banned_users_banned_users_bannedByIdTousers     banned_users[]           @relation("banned_users_bannedByIdTousers")
-  banned_users_banned_users_userIdTousers         banned_users?            @relation("banned_users_userIdTousers")
-  comments                                        comments[]
-  follows_follows_followerIdTousers               follows[]                @relation("follows_followerIdTousers")
-  follows_follows_followingIdTousers              follows[]                @relation("follows_followingIdTousers")
-  messages_messages_receiverIdTousers             messages[]               @relation("messages_receiverIdTousers")
-  messages_messages_senderIdTousers               messages[]               @relation("messages_senderIdTousers")
-  notifications_notifications_destUserIdTousers   notifications[]          @relation("notifications_destUserIdTousers")
-  notifications_notifications_sourceUserIdTousers notifications[]          @relation("notifications_sourceUserIdTousers")
-  read_history                                    read_history[]
-  reported_articles                               reported_articles[]
-  saved_articles                                  saved_articles[]
-  stories                                         stories[]
-  subscriptions                                   subscriptions[]
-  user_stats                                      user_stats?
-  wordpress_connections                           wordpress_connections?
-  wordpress_publish_jobs                          wordpress_publish_jobs[]
-}
-
-model wordpress_connections {
-  id                     String                   @id
-  userId                 String                   @unique
-  siteUrl                String
-  siteId                 String
-  accessToken            String
-  wpUsername             String?
-  wpEmail                String?
-  connectedAt            DateTime                 @default(now())
-  updatedAt              DateTime
-  users                  users                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wordpress_publish_jobs wordpress_publish_jobs[]
-}
-
-model wordpress_publish_jobs {
-  id                    String                @id
-  articleId             String
-  userId                String
-  wpConnId              String
-  scheduledAt           DateTime
-  status                WpJobStatus           @default(PENDING)
-  wpPostId              String?
-  wpPostUrl             String?
-  draftUrl              String?
-  errorMsg              String?
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime
-  articles              articles              @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  users                 users                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wordpress_connections wordpress_connections @relation(fields: [wpConnId], references: [id], onDelete: Cascade)
-
   @@index([scheduledAt])
-  @@index([status])
+  @@map("wordpress_publish_jobs")
+}
+
+model ArticleInteractions {
+  id            String   @id @default(cuid())
+  userId        String
+  articleId     String
+  commentStatus Boolean  @default(false)
+  rateStatus    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  dateUpdated   DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  article       Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId])
+  @@index([dateUpdated])
+  @@map("article_interactions")
+}
+
+enum Role {
+  USER
+  ADMIN
 }
 
 enum ArticleStatus {
@@ -505,13 +550,6 @@ enum ArticleStatus {
   EDITING
 }
 
-enum NotificationType {
-  RATE
-  FOLLOW
-  COMMENT
-  NEW_ARTICLE
-}
-
 enum ReportStatus {
   PENDING
   REVIEWED
@@ -519,9 +557,11 @@ enum ReportStatus {
   DISMISSED
 }
 
-enum Role {
-  USER
-  ADMIN
+enum NotificationType {
+  RATE
+  FOLLOW
+  COMMENT
+  NEW_ARTICLE
 }
 
 enum WpJobStatus {
