@@ -2,7 +2,8 @@ const Stripe = require("stripe");
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+// @ts-ignore
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
 
 // ─── Create or retrieve a Stripe customerId from strip to use in createCheckoutSession ───
 const getOrCreateStripeCustomer = async (user) => {
@@ -159,14 +160,14 @@ const handleWebhookEvent = async (event) => {
     }
 
     case "customer.subscription.updated": {
-      // if subscription status changes to incomplete_expired, or user cancel the subscription from the billing portal update subscription in the db to be canceled
+      // if user cancel the subscription from the billing portal send the updated hook to backend
       const subscription = event.data.object;
       if (subscription.cancel_at_period_end === true) {
         console.log(
           `⚠️ Subscription set to cancel at period end. Forcing immediate cancellation for testing: ${subscription.id}`,
         );
         await stripe.subscriptions.cancel(subscription.id);
-        // This triggers 'customer.subscription.deleted' next, which actually updates the DB.
+        // This triggers deleted hook to update the databse when cancel the subscription right after without waiting for the period end
       }
       break;
     }
@@ -220,7 +221,7 @@ const handleWebhookEvent = async (event) => {
   }
 };
 
-// ─── Get Subscription Status ────────────────
+// ─── Get Subscription with the isPremium status from DB────────────────
 const getSubscriptionStatus = async (userId) => {
   const subscription = await prisma.subscription.findFirst({
     where: { userId, status: "active" },

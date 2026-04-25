@@ -8,11 +8,14 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // ─── Create Checkout Session ────────────────
 const createCheckoutSession = asyncHandler(async (req, res) => {
   const { offerId } = req.body;
-  const result = await paymentService.createCheckoutSession(req.user.id, offerId);
+  const result = await paymentService.createCheckoutSession(
+    req.user.id,
+    offerId,
+  );
   sendSuccess(res, { data: result });
 });
 
-// ─── Stripe Webhook ─────────────────────────
+// ─── get the signature from strip server and verify it and send Stripe Webhook to backend server to update database ───────────────
 const handleWebhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
 
@@ -27,7 +30,7 @@ const handleWebhook = async (req, res) => {
     event = stripe.webhooks.constructEvent(
       req.body,
       sig,
-      process.env.STRIPE_WEBHOOK_SECRET
+      process.env.STRIPE_WEBHOOK_SECRET,
     );
     console.log("✅ Webhook verified. Event type:", event.type);
   } catch (err) {
@@ -49,7 +52,6 @@ const getSubscriptionStatus = asyncHandler(async (req, res) => {
   const result = await paymentService.getSubscriptionStatus(req.user.id);
   sendSuccess(res, { data: result });
 });
-
 
 // ─── Create Portal Session ──────────────────
 const createPortalSession = asyncHandler(async (req, res) => {
