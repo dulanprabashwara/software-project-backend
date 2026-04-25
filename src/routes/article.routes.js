@@ -39,6 +39,7 @@ router.post("/:id/edit-as-new/discard",authenticate,articleController.discardEdi
 
 // Public article read
 router.get("/:slug", articleController.getArticle);
+router.get("/author/:username/published",articleController.getPublishedByUsername,);
 router.put("/:id", authenticate, articleController.updateArticle);
 router.delete("/:id", authenticate, articleController.deleteArticle);
 
@@ -51,8 +52,5 @@ router.post("/:articleId/save", authenticate, engagementController.toggleSave);
  
 // Report
 router.post("/:articleId/report", authenticate, adminController.reportArticle);
-
-//Trending articles
-router.get("/trending", articleController.getTrendingArticles);
 
 module.exports = router;
