@@ -335,24 +335,66 @@ async function startExistingArticleEditing(articleId, userId) {
     );
   }
 
-  const hasBackup =
-    article.editingBackupTitle !== null ||
-    article.editingBackupContent !== null ||
-    article.editingBackupCoverImage !== null;
+  const shouldCreateBackup = article.status === ARTICLE_STATUS.DRAFT && !article.editingStartedAt;
 
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: {
       status: ARTICLE_STATUS.EDITING,
-      ...(hasBackup
-        ? {}
-        : {
+      ...(shouldCreateBackup
+        ? {
             editingBackupTitle: article.title,
             editingBackupContent: article.content,
             editingBackupCoverImage: article.coverImage,
-            editingStartedAt: article.updatedAt,
-          }),
+            editingStartedAt: new Date(),
+          }
+        : {}),
     },
+    include: {
+      author: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+        },
+      },
+    },
+  });
+
+  return updatedArticle;
+}
+
+async function saveExistingArticleForPreview(articleId, userId, payload) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  const nextTitle = payload.title?.trim() || "";
+  const nextContent = payload.content || "";
+
+  requireCompleteArticle(
+    {
+      title: nextTitle,
+      content: nextContent,
+    },
+    ARTICLE_STATUS.DRAFT,
+  );
+
+  const updateData = {
+    ...buildEditExistingPayload(payload),
+    status: ARTICLE_STATUS.DRAFT,
+    isEdited: true,
+
+  };
+
+  if (nextTitle && nextTitle !== article.title) {
+    updateData.slug = await generateUniqueSlug(nextTitle);
+  }
+
+  updateData.updatedAt = new Date();
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: updateData,
     include: {
       author: {
         select: {
@@ -929,9 +971,9 @@ async function autosaveEditAsNewArticle(articleId, userId, payload) {
 async function discardExistingArticleEdits(articleId, userId) {
   const article = await getOwnedArticleOrThrow(articleId, userId);
 
-  const restoredTitle = article.editingBackupTitle;
-  const restoredContent = article.editingBackupContent;
-  const restoredCoverImage = article.editingBackupCoverImage;
+  const restoredTitle = article.editingBackupTitle || article.title;
+  const restoredContent = article.editingBackupContent ?? article.content;
+  const restoredCoverImage = article.editingBackupCoverImage ?? article.coverImage;
 
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
@@ -1027,6 +1069,17 @@ async function saveExistingArticleAsDraft(articleId, userId, payload) {
         },
       },
     },
+  });
+
+  return updatedArticle;
+}
+
+async function clearEditExistingBackup(articleId, userId) {
+  await getOwnedArticleOrThrow(articleId, userId);
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: buildClearedEditingBackupData(),
   });
 
   return updatedArticle;
@@ -1217,9 +1270,11 @@ module.exports = {
   autosaveExistingArticle,
   discardExistingArticleEdits,
   saveExistingArticleAsDraft,
+  saveExistingArticleForPreview,
   startEditAsNewArticle,
   autosaveEditAsNewArticle,
   discardEditAsNewArticle,
+  clearEditExistingBackup,
   saveEditAsNewArticleAsDraft,
   deleteArticle,
   recordRead,
