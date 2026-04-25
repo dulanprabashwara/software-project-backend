@@ -112,6 +112,24 @@ const getPublishedByUser = asyncHandler(async (req, res) => {
   });
 });
 
+const getPublishedByUsername = asyncHandler(async (req, res) => {
+  const { page, limit } = parsePagination(req.query);
+
+  const { articles, total } = await articleService.getPublishedArticlesByUsername(
+    req.params.username,
+    page,
+    limit,
+  );
+
+  sendPaginated(res, {
+    data: articles,
+    page,
+    limit,
+    total,
+    message: "User published articles retrieved.",
+  });
+});
+
 const getScheduledByUser = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
 
@@ -176,6 +194,35 @@ const saveEditExistingAsDraft = asyncHandler(async (req, res) => {
 
   sendSuccess(res, {
     message: "Edited article saved as draft successfully.",
+    data: article,
+  });
+});
+
+async function saveEditExistingForPreview(req, res, next) {
+  try {
+    const article = await articleService.saveExistingArticleForPreview(
+      req.params.id,
+      req.user.id,
+      req.body,
+    );
+
+    res.status(200).json({
+      success: true,
+      data: article,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+const clearEditExistingBackup = asyncHandler(async (req, res) => {
+  const article = await articleService.clearEditExistingBackup(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Edit-existing backup cleared successfully.",
     data: article,
   });
 });
@@ -282,11 +329,14 @@ module.exports = {
   updateArticle,
   publishArticle,
   getPublishedByUser,
+  getPublishedByUsername,
   getScheduledByUser,
   startEditExisting,
   autosaveEditExisting,
   discardEditExisting,
   saveEditExistingAsDraft,
+  saveEditExistingForPreview,
+  clearEditExistingBackup,
   startEditAsNew,
   autosaveEditAsNew,
   saveEditAsNewAsDraft,

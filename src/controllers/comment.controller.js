@@ -1,11 +1,13 @@
 const prisma = require("../config/prisma");
 const { createNotification } = require("../services/notification.service");
-const { updateCommentCount, updateRatingStats } = require("../services/articleStats.service");
+// Import the new markUserInteraction function
+const { updateCommentCount, updateRatingStats, updateInteractionsTable } = require("../services/articleStats.service");
 
 /**
  * @description Fetch all comments for a specific article
  */
 const getComments = async (req, res) => {
+  // ... (No changes needed here) ...
   try {
     const { articleId } = req.params;
     const comments = await prisma.comment.findMany({
@@ -42,17 +44,12 @@ const createComment = async (req, res) => {
     // 2. Create the comment
     const newComment = await prisma.comment.create({
       data: { content, articleId, authorId, parentId: parentId || null },
-      include: 
-      { author: 
-        { select:
-           { id: true, 
-            displayName: true } } }
+      include: { 
+        author: { 
+          select: { id: true, displayName: true } 
+        } 
+      }
     });
-
-    // --- DEBUG LOGS ---
-    console.log("ATTEMPTING NOTIFICATION");
-    console.log("Dest ID:", article.authorId);
-    console.log("Source ID:", req.user.id);
 
     // 3. Trigger Notification
     const notifResult = await createNotification(req.app, {
@@ -62,8 +59,10 @@ const createComment = async (req, res) => {
       sourceArticleId: article.id   
     });
 
-    console.log("✅ NOTIFICATION SERVICE FINISHED. Result:", notifResult ? "Saved" : "Ignored/Failed");
+    // 4. Update Stats & Interactions
     await updateCommentCount(articleId);
+    await updateInteractionsTable(req.user.id, articleId, 'COMMENT');
+
     res.status(201).json(newComment);
   } catch (error) {
     console.error("CRASH IN CONTROLLER:", error);
@@ -76,14 +75,14 @@ const createComment = async (req, res) => {
  */
 const rateArticle = async (req, res) => {
   try {
-    const { articleId} =req.params;
-    const{ rating } = req.body;
+    const { articleId } = req.params;
+    const { rating } = req.body;
     const userId = req.user.id;
 
     // 1. Fetch the article to get the authorId
     const article = await prisma.article.findUnique({
       where: { id: articleId },
-      select: { id: true, authorId: true } // We just need authorId for the notification
+      select: { id: true, authorId: true } 
     });
 
     if (!article) {
@@ -101,7 +100,6 @@ const rateArticle = async (req, res) => {
 
     if (existingRating) {
       // --- UPDATE SCENARIO ---
-      // Update the score, but DO NOT send a notification
       userRating = await prisma.articleRating.update({
         where: { userId_articleId: { userId, articleId } },
         data: { score: rating }
@@ -121,7 +119,10 @@ const rateArticle = async (req, res) => {
         sourceArticleId: articleId 
       });
     }
+
+    // 3. Update Stats & Interactions
     await updateRatingStats(articleId);
+    await updateInteractionsTable(userId, articleId, 'RATE');
 
     res.status(200).json({ success: true, data: userRating });
   } catch (error) {
@@ -130,7 +131,6 @@ const rateArticle = async (req, res) => {
   }
 };
 
-// CRITICAL: All functions must be in this export object
 module.exports = {
   getComments,
   createComment,

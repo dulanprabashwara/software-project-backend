@@ -29,6 +29,8 @@ router.post("/:id/edit-existing/start",authenticate,articleController.startEditE
 router.put("/:id/edit-existing/autosave",authenticate,articleController.autosaveEditExisting,);
 router.put("/:id/edit-existing/save-draft",authenticate,articleController.saveEditExistingAsDraft,);
 router.post("/:id/edit-existing/discard",authenticate,articleController.discardEditExisting,);
+router.put("/:id/edit-existing/preview",authenticate,articleController.saveEditExistingForPreview,);
+router.put("/:id/edit-existing/clear-backup",authenticate,articleController.clearEditExistingBackup,);
 
 // Edit as new
 router.post("/:id/edit-as-new/start",authenticate,articleController.startEditAsNew,);
@@ -39,6 +41,7 @@ router.post("/:id/edit-as-new/discard",authenticate,articleController.discardEdi
 
 // Public article read
 router.get("/:slug", articleController.getArticle);
+router.get("/author/:username/published",articleController.getPublishedByUsername,);
 router.put("/:id", authenticate, articleController.updateArticle);
 router.delete("/:id", authenticate, articleController.deleteArticle);
 
@@ -51,8 +54,5 @@ router.post("/:articleId/save", authenticate, engagementController.toggleSave);
  
 // Report
 router.post("/:articleId/report", authenticate, adminController.reportArticle);
-
-//Trending articles
-router.get("/trending", articleController.getTrendingArticles);
 
 module.exports = router;

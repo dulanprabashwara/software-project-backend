@@ -20,6 +20,13 @@ const homefeedRoutes = require("./homefeed.routes");
 const articleReadRoutes = require("./articleRead.routes");
 const savedArticleRoutes = require("./savedArticle.routes");
 const trendingArticlesRoutes = require("./trendingArticles.routes");
+const interactedArticlesroutes = require("./interactedArticles.routes");
+const articleRatingRoutes = require("./articleRatings.routes");
+const readHistoryRoutes = require("./readHistory.routes");
+const popularTopicsRoutes = require("./popularTopics.routes");
+
+
+
 
 const router = Router();
 
@@ -44,6 +51,13 @@ router.use("/homefeed", homefeedRoutes);
 router.use("/articleRead", articleReadRoutes);
 router.use("/savedArticle", savedArticleRoutes);
 router.use("/trendingArticles", trendingArticlesRoutes);
+router.use("/interactedArticles", interactedArticlesroutes);
+router.use("/articleRatings", articleRatingRoutes);
+router.use("/readHistory", readHistoryRoutes);
+router.use("/popularTopics", popularTopicsRoutes);
+
+
+
 
 
 module.exports = router;
