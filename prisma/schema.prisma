@@ -372,6 +372,7 @@ model ai_article_logs {
   aiInputTokens     Int       @default(0)
   aiOutputTokens    Int       @default(0)
   deletedAt         DateTime?
+  userResponse      String?     
   users             User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
   articles          Article?  @relation(fields: [linkedArticleId], references: [id])
 
