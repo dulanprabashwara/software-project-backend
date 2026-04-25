@@ -652,6 +652,54 @@ async function getUserPublishedArticles(userId, page = 1, limit = 10) {
   return { articles, total };
 }
 
+async function getPublishedArticlesByUsername(username, page = 1, limit = 10) {
+  const skip = (page - 1) * limit;
+
+  const user = await prisma.user.findUnique({
+    where: { username },
+    select: { id: true },
+  });
+
+  if (!user) {
+    throw ApiError.notFound("User not found.");
+  }
+
+  const where = {
+    authorId: user.id,
+    status: ARTICLE_STATUS.PUBLISHED,
+  };
+
+  const [articles, total] = await Promise.all([
+    prisma.article.findMany({
+      where,
+      orderBy: [{ publishedAt: "desc" }, { updatedAt: "desc" }],
+      skip,
+      take: limit,
+      include: {
+        author: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+            isPremium: true,
+          },
+        },
+        _count: {
+          select: {
+            comments: true,
+            shares: true,
+            savedBy: true,
+          },
+        },
+      },
+    }),
+    prisma.article.count({ where }),
+  ]);
+
+  return { articles, total };
+}
+
 async function getUserScheduledArticles(userId, page = 1, limit = 10) {
   const skip = (page - 1) * limit;
 
@@ -1161,6 +1209,7 @@ module.exports = {
   getArticleBySlug,
   getArticleFeed,
   getUserPublishedArticles,
+  getPublishedArticlesByUsername,
   getUserScheduledArticles,
   publishArticle,
   updateArticle,
