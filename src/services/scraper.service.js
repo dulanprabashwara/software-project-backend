@@ -624,9 +624,36 @@ async function logScrapingEvent(sessionId, { logType, url, category, statusCode,
   }).catch((err) => console.error(`[ScrapingLog] Write failed: ${err.message}`));
 }
 
+// Validates that a category's counters are mathematically consistent before saving to the database.
+// urlsProcessed must always equal the sum of all outcomes — any mismatch is a code bug, not user error.
+function validateCounters(category, c) {
+  const expectedTotal = c.successCount + c.duplicateCount + c.failureCount;
+
+  if (c.urlsProcessed !== expectedTotal) {
+    console.error(
+      `[Phase 2] ⚠️  Counter mismatch in "${category}": ` +
+      `urlsProcessed=${c.urlsProcessed} but success(${c.successCount}) + ` +
+      `dupe(${c.duplicateCount}) + fail(${c.failureCount}) = ${expectedTotal}. ` +
+      `Correcting urlsProcessed to ${expectedTotal}.`
+    );
+    c.urlsProcessed = expectedTotal;
+  }
+
+  if (c.successCount < 0 || c.duplicateCount < 0 || c.failureCount < 0 || c.urlsProcessed < 0) {
+    console.error(`[Phase 2] ⚠️  Negative counter detected in "${category}" — resetting negatives to 0.`);
+    c.successCount   = Math.max(0, c.successCount);
+    c.duplicateCount = Math.max(0, c.duplicateCount);
+    c.failureCount   = Math.max(0, c.failureCount);
+    c.urlsProcessed  = c.successCount + c.duplicateCount + c.failureCount;
+  }
+}
+
 // Saves the scraping result counters for one category to the CategoryScrapingStats table.
 async function saveCategoryScrapingStats(sessionId, category, counters) {
   const c = counters[category];
+
+  validateCounters(category, c);
+
   await prisma.categoryScrapingStats.create({
     data: {
       sessionId,
@@ -639,7 +666,7 @@ async function saveCategoryScrapingStats(sessionId, category, counters) {
   });
   console.log(
     `[Phase 2] Stats saved for "${category}": ` +
-    `✅${c.successCount} ♻️${c.duplicateCount} ❌${c.failureCount}`
+    `🔗${c.urlsProcessed} processed | ✅${c.successCount} saved | ♻️${c.duplicateCount} dupes | ❌${c.failureCount} failed`
   );
 }
 
@@ -664,6 +691,9 @@ async function scrapeSource(source, sessionId, counters) {
       statusCode: err.statusCode || 0,
       reason:     `Homepage request failed: ${err.message}`,
     });
+    // The source itself counts as one URL attempted — without this,
+    // failureCount increments but urlsProcessed stays 0, breaking the math.
+    counters[category].urlsProcessed++;
     counters[category].failureCount++;
     return;
   }
@@ -680,6 +710,8 @@ async function scrapeSource(source, sessionId, counters) {
       category,
       reason:   `Link collection failed: ${err.message}`,
     });
+    // Count the source as one attempted URL so the math stays consistent.
+    counters[category].urlsProcessed++;
     counters[category].failureCount++;
     return;
   }
