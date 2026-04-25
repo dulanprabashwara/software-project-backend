@@ -648,6 +648,67 @@ function validateCounters(category, c) {
   }
 }
 
+// Validates that session-level URL totals are consistent before writing the final session record.
+// totalUrlsFound must equal the sum of all three outcome buckets across all categories.
+function validateSessionCounters(totalUrlsFound, totalSuccess, totalDuplicate, totalFailure) {
+  const expectedTotal = totalSuccess + totalDuplicate + totalFailure;
+
+  if (totalUrlsFound !== expectedTotal) {
+    console.error(
+      `[Phase 2] ⚠️  Session counter mismatch: ` +
+      `totalUrlsFound=${totalUrlsFound} but success(${totalSuccess}) + ` +
+      `dupe(${totalDuplicate}) + fail(${totalFailure}) = ${expectedTotal}. ` +
+      `Correcting totalUrlsFound to ${expectedTotal}.`
+    );
+    return expectedTotal;
+  }
+
+  return totalUrlsFound;
+}
+
+// Validates that enrichment counts are consistent: every scraped article must be either enriched or failed.
+// successCount is the number of scraped articles — all of them should have been attempted for enrichment.
+function validateEnrichmentCounters(successCount, enrichedCount, enrichmentFailed) {
+  const enrichmentTotal = enrichedCount + enrichmentFailed;
+
+  if (enrichmentTotal > successCount) {
+    console.error(
+      `[Phase 3] ⚠️  Enrichment counter overflow: ` +
+      `enriched(${enrichedCount}) + failed(${enrichmentFailed}) = ${enrichmentTotal} ` +
+      `exceeds scraped article count (${successCount}). ` +
+      `Capping enrichmentFailed to ${Math.max(0, successCount - enrichedCount)}.`
+    );
+    return Math.max(0, successCount - enrichedCount);
+  }
+
+  return enrichmentFailed;
+}
+
+// Validates that keyword coverage counts add up to the total number of keywords in the system.
+// Every keyword is either covered (has at least one article) or empty — none can be unaccounted for.
+function validateKeywordCounters(keywordsCoveredCount, keywordsEmptyCount, totalKeywordsInSystem) {
+  const keywordTotal = keywordsCoveredCount + keywordsEmptyCount;
+
+  if (totalKeywordsInSystem > 0 && keywordTotal !== totalKeywordsInSystem) {
+    console.error(
+      `[Phase 3] ⚠️  Keyword counter mismatch: ` +
+      `covered(${keywordsCoveredCount}) + empty(${keywordsEmptyCount}) = ${keywordTotal} ` +
+      `but total keywords in system = ${totalKeywordsInSystem}. ` +
+      `This may indicate a categoryKeywords.js change mid-session.`
+    );
+  }
+
+  if (keywordsCoveredCount < 0 || keywordsEmptyCount < 0) {
+    console.error(`[Phase 3] ⚠️  Negative keyword counter detected — resetting negatives to 0.`);
+    return {
+      keywordsCoveredCount: Math.max(0, keywordsCoveredCount),
+      keywordsEmptyCount:   Math.max(0, keywordsEmptyCount),
+    };
+  }
+
+  return { keywordsCoveredCount, keywordsEmptyCount };
+}
+
 // Saves the scraping result counters for one category to the CategoryScrapingStats table.
 async function saveCategoryScrapingStats(sessionId, category, counters) {
   const c = counters[category];
@@ -933,8 +994,9 @@ function buildCrashReport(sessionId, startTime, config, counters, errorMessage) 
 
 // Runs the full scraping pipeline: Phase 1 (init) → Phase 2 (scrape) → Phase 3 (enrich + email).
 async function runScrapingSession() {
-  const { runEnrichmentStage }                    = require("./enrichment.service");
+  const { runEnrichmentStage }                         = require("./enrichment.service");
   const { sendCompletionNotification, sendErrorAlert } = require("./email.service");
+  const { CATEGORY_KEYWORDS }                          = require("../config/categoryKeywords");
 
   console.log(`\n${"═".repeat(60)}`);
   console.log(`[Scraper] 🚀 Session started: ${new Date().toISOString()}`);
@@ -981,6 +1043,7 @@ async function runScrapingSession() {
 
   process.once("SIGTERM", () => cleanup("SIGTERM"));
   process.once("SIGINT",  () => cleanup("SIGINT"));
+  process.once("SIGHUP",  () => cleanup("SIGHUP")); // fires when terminal window is closed
 
   try {
     // ── Phase 1: Initialization ────────────────────────────────────────────
@@ -992,6 +1055,7 @@ async function runScrapingSession() {
       console.log("[Scraper] No active sources. Session skipped.");
       process.removeListener("SIGTERM", cleanup);
       process.removeListener("SIGINT",  cleanup);
+      process.removeListener("SIGHUP",  cleanup);
       return;
     }
 
@@ -1034,7 +1098,12 @@ async function runScrapingSession() {
     const totalSuccess   = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
     const totalDuplicate = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
     const totalFailure   = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
-    const totalUrlsFound = Object.values(counters).reduce((s, c) => s + c.urlsProcessed,  0);
+    const totalUrlsFound = validateSessionCounters(
+      Object.values(counters).reduce((s, c) => s + c.urlsProcessed, 0),
+      totalSuccess,
+      totalDuplicate,
+      totalFailure
+    );
 
     console.log(`\n[Phase 2] Complete: ✅${totalSuccess} saved | ♻️${totalDuplicate} dupes | ❌${totalFailure} failed`);
 
@@ -1097,6 +1166,23 @@ async function runScrapingSession() {
     const criticalIssues  = checkCriticalErrors(report, counters);
     report.criticalErrors = criticalIssues.length > 0;
 
+    // Validate enrichment math: enriched + failed must not exceed total scraped articles
+    report.enrichmentFailed = validateEnrichmentCounters(
+      report.successCount,
+      report.enrichedCount,
+      report.enrichmentFailed
+    );
+
+    // Validate keyword coverage math: covered + empty must equal total keywords in system
+    const totalKeywordsInSystem = Object.values(CATEGORY_KEYWORDS).reduce((s, kws) => s + kws.length, 0);
+    const validatedKeywords     = validateKeywordCounters(
+      report.totalKeywordsCovered,
+      report.totalKeywordsEmpty,
+      totalKeywordsInSystem
+    );
+    report.totalKeywordsCovered = validatedKeywords.keywordsCoveredCount;
+    report.totalKeywordsEmpty   = validatedKeywords.keywordsEmptyCount;
+
     await prisma.scrapingSession.update({
       where: { id: sessionId },
       data: {
@@ -1133,6 +1219,7 @@ async function runScrapingSession() {
 
     process.removeListener("SIGTERM", cleanup);
     process.removeListener("SIGINT",  cleanup);
+    process.removeListener("SIGHUP",  cleanup);
 
     console.log(`\n${"═".repeat(60)}`);
     console.log(`[Scraper] 🏁 Session complete. ${report.successCount} articles saved. ${report.totalKeywordsCovered} keywords covered.`);
@@ -1145,6 +1232,7 @@ async function runScrapingSession() {
 
     process.removeListener("SIGTERM", cleanup);
     process.removeListener("SIGINT",  cleanup);
+    process.removeListener("SIGHUP",  cleanup);
 
     if (sessionId) {
       await prisma.scrapingSession.update({

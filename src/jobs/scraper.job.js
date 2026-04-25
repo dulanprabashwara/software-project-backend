@@ -1,19 +1,17 @@
 // src/jobs/scraper.job.js
 // Registers the weekly Saturday 06:00 UTC cron job.
-// Includes a distributed database lock so only one process runs per week
-// (relevant when multiple developers share the same NeonDB locally).
+// Also cleans up any sessions left in "running" state from a previous crashed/killed process.
 
 const cron  = require("node-cron");
 const prisma = require("../config/prisma");
 const { runScrapingSession } = require("../services/scraper.service");
 
-// Sessions running longer than 3 hours are considered abandoned (process was killed)
+// Sessions running longer than 3 hours are considered abandoned (process was killed or server crashed).
+// A full session including enrichment normally completes in under 1 hour.
 const STALE_SESSION_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
-// Window within which a running session is considered actively owned by another process
-const LOCK_WINDOW_MS = 10 * 60 * 1000;
-
 // Finds sessions stuck in "running" status for too long, marks them as canceled, and emails a partial report.
+// Called both at server startup and before each cron run to catch sessions left by any previous crash.
 async function cleanupStaleSessions() {
   const cutoff = new Date(Date.now() - STALE_SESSION_TIMEOUT_MS);
 
@@ -49,7 +47,7 @@ async function cleanupStaleSessions() {
         status:         "canceled",
         completedAt:    new Date(),
         criticalErrors: true,
-        reportData:     JSON.stringify({ canceledReason: "Process interrupted — terminal killed or server restarted" }),
+        reportData:     JSON.stringify({ canceledReason: "Process interrupted — server crashed or was restarted" }),
       },
     }).catch((e) => console.error(`[Cron] Failed to mark session ${session.id} canceled: ${e.message}`));
 
@@ -90,46 +88,28 @@ async function cleanupStaleSessions() {
   }
 }
 
-// Checks whether another process already started a session within the lock window.
-// Returns true if this process should proceed, false if it should back off.
-async function acquireSessionLock() {
-  const windowStart = new Date(Date.now() - LOCK_WINDOW_MS);
-
-  const existingSession = await prisma.scrapingSession.findFirst({
-    where: {
-      status:    "running",
-      startedAt: { gte: windowStart },
-    },
-    orderBy: { startedAt: "desc" },
-    select:  { id: true, startedAt: true },
-  });
-
-  if (existingSession) {
-    console.log(
-      `[Cron] 🔒 Session lock held by ${existingSession.id} ` +
-      `(started ${existingSession.startedAt.toISOString()}). ` +
-      `Another process is already running — skipping.`
-    );
-    return false;
+// Registers the weekly cron job and runs startup cleanup.
+// startScrapingJobs() is called once from src/index.js inside server.listen().
+// It is async — the caller must handle the returned promise:
+//   server.listen(PORT, () => { startScrapingJobs().catch(err => console.error(err)); })
+async function startScrapingJobs() {
+  // Clean up any sessions left running from a previous server crash or kill.
+  // This runs at every server start so a crash on any day is recovered promptly,
+  // not just next Saturday when the cron would fire again.
+  try {
+    await cleanupStaleSessions();
+  } catch (err) {
+    console.error(`[Cron] Startup stale session cleanup failed: ${err.message}`);
   }
 
-  return true;
-}
-
-// Registers the weekly cron job and logs when the next run will fire.
-function startScrapingJobs() {
   cron.schedule(
     "0 6 * * 6",     // Every Saturday at 06:00 UTC
     async () => {
       console.log(`\n[Cron] ⏰ Weekly scraping triggered at ${new Date().toISOString()}`);
 
       try {
+        // Clean up again before starting — catches any session that got stuck since server start
         await cleanupStaleSessions();
-
-        const canProceed = await acquireSessionLock();
-        if (!canProceed) return;
-
-        console.log("[Cron] ✅ Lock acquired — starting session...");
         await runScrapingSession();
 
       } catch (err) {
@@ -157,4 +137,4 @@ function getNextSaturdayUTC() {
   return next.toUTCString();
 }
 
-module.exports = { startScrapingJobs, cleanupStaleSessions, acquireSessionLock };
+module.exports = { startScrapingJobs, cleanupStaleSessions };

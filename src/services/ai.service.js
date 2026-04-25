@@ -71,19 +71,14 @@ function countWords(text) {
 }
 
 // ─── SCRAPER REFERENCE CONTENT ────────────────────────────────────────────────
-// Fetches enriched scraped summaries for the keywords the user selected.
-// These are sent to the AI as optional reference material.
+// Fetches enriched scraped summaries for the keywords the user selected and send to AI model as reference content
+
 //
 // ROTATION METHOD — user-specific, day-based:
 //   Each user gets a different set of reference articles even if they select
 //   the same keyword on the same day. The offset is calculated from:
 //     dayOfYear + hash of authorId + keyword position
-//
-//   This means:
-//   - Two users selecting the same keyword on the same day get DIFFERENT articles
-//   - The same user gets different articles on different days
-//   - All scraped summaries for a keyword are cycled through over time
-//   - No randomness — the selection is deterministic and repeatable
+
 
 const REFERENCE_ARTICLES_PER_KEYWORD = 2;
 
@@ -588,7 +583,7 @@ const TRENDING_INITIAL_BATCH  = 20;  // logs to check first
 const TRENDING_EXPANSION_STEP = 5;   // logs added per expansion round
 const TRENDING_SAFETY_CAP     = 200; // never scan more than this many logs
 const TRENDING_MIN_RETURN     = 5;
-const TRENDING_MAX_RETURN     = 10;
+const TRENDING_MAX_RETURN     = 7;
 
 async function getTrendingKeywords() {
   let poolSize = TRENDING_INITIAL_BATCH;
@@ -678,7 +673,7 @@ const getTopAIArticles = async () => {
       status: "PUBLISHED",   // only show publicly visible articles
     },
     orderBy: { trendingScore: "desc" },
-    take: 5,
+    take: 3,
     select: {
       id:    true,
       title: true,
