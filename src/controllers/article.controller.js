@@ -112,6 +112,24 @@ const getPublishedByUser = asyncHandler(async (req, res) => {
   });
 });
 
+const getPublishedByUsername = asyncHandler(async (req, res) => {
+  const { page, limit } = parsePagination(req.query);
+
+  const { articles, total } = await articleService.getPublishedArticlesByUsername(
+    req.params.username,
+    page,
+    limit,
+  );
+
+  sendPaginated(res, {
+    data: articles,
+    page,
+    limit,
+    total,
+    message: "User published articles retrieved.",
+  });
+});
+
 const getScheduledByUser = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
 
@@ -282,6 +300,7 @@ module.exports = {
   updateArticle,
   publishArticle,
   getPublishedByUser,
+  getPublishedByUsername,
   getScheduledByUser,
   startEditExisting,
   autosaveEditExisting,
