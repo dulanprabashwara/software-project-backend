@@ -50,11 +50,6 @@ const getSubscriptionStatus = asyncHandler(async (req, res) => {
   sendSuccess(res, { data: result });
 });
 
-// ─── Cancel Subscription ────────────────────
-const cancelSubscription = asyncHandler(async (req, res) => {
-  const result = await paymentService.cancelSubscription(req.user.id);
-  sendSuccess(res, { message: result.message });
-});
 
 // ─── Create Portal Session ──────────────────
 const createPortalSession = asyncHandler(async (req, res) => {
@@ -72,7 +67,6 @@ module.exports = {
   createCheckoutSession,
   handleWebhook,
   getSubscriptionStatus,
-  cancelSubscription,
   createPortalSession,
   getActiveOffers,
 };

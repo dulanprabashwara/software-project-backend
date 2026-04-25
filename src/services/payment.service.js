@@ -4,7 +4,7 @@ const ApiError = require("../utils/ApiError");
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ─── Create or retrieve a Stripe Customer ───
+// ─── Create or retrieve a Stripe customerId from strip to use in createCheckoutSession ───
 const getOrCreateStripeCustomer = async (user) => {
   if (user.stripeCustomerId) {
     return user.stripeCustomerId;
@@ -24,29 +24,32 @@ const getOrCreateStripeCustomer = async (user) => {
   return customer.id;
 };
 
-// ─── Create Checkout Session ────────────────
+// ─── Create Checkout Session  url by giving id, offerid, and all params required to strip and renturn it to the user to redirect the user to the checkout page ────────────────
 const createCheckoutSession = async (userId, offerId = null) => {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw ApiError.notFound("User not found.");
-  if (user.isPremium) throw ApiError.badRequest("You are already a premium member.");
+  if (user.isPremium)
+    throw ApiError.badRequest("You are already a premium member.");
 
   const customerId = await getOrCreateStripeCustomer(user);
 
-  // Check Stripe directly for any active subscriptions to prevent duplicates
+  // Check if there are any existing subscriptions in strip for that user
   const existingSubscriptions = await stripe.subscriptions.list({
     customer: customerId,
     status: "active",
   });
 
   if (existingSubscriptions.data.length > 0) {
-    // In case the local DB was out of sync (e.g. webhook failed), sync it now
+    // In case the existing subscription user is not premium in the database update the user in the db to be premium
     if (!user.isPremium) {
       await prisma.user.update({
         where: { id: userId },
         data: { isPremium: true },
       });
     }
-    throw ApiError.badRequest("You already have an active subscription. Please manage your existing subscription in the Customer Portal.");
+    throw ApiError.badRequest(
+      "You already have an active subscription. Please manage your existing subscription in the Customer Portal.",
+    );
   }
 
   // Build session params
@@ -67,7 +70,7 @@ const createCheckoutSession = async (userId, offerId = null) => {
     },
   };
 
-  // If an offer is selected, apply its coupon
+  // If an offer is selected put its couponid and offer id to the session params
   if (offerId) {
     const offer = await prisma.offer.findUnique({ where: { id: offerId } });
     if (!offer || !offer.is_active) {
@@ -84,39 +87,51 @@ const createCheckoutSession = async (userId, offerId = null) => {
   return { url: session.url };
 };
 
-// ─── Handle Webhook Events ──────────────────
+// ─── Handle Webhook Events received from stripe ──────────────────
 const handleWebhookEvent = async (event) => {
   console.log(`🔔 Webhook received: ${event.type}`);
   switch (event.type) {
+    //if session completed create a subscription row in the db for the user and update the user as premium in the db
     case "checkout.session.completed": {
+      //get the stripe session data from the event
       const session = event.data.object;
       const userId = session.metadata?.userId;
       const offerId = session.metadata?.offerId || null;
       const subscriptionId = session.subscription;
 
       if (!userId || !subscriptionId) {
-        console.warn("Webhook: Missing userId or subscriptionId in session metadata");
+        console.warn(
+          "Webhook: Missing userId or subscriptionId in session metadata",
+        );
         return;
       }
 
       // Fetch subscription details from Stripe
-      const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-      
+      const stripeSubscription =
+        await stripe.subscriptions.retrieve(subscriptionId);
+
       // Debug: log the subscription to see the structure
-      console.log("Stripe subscription object keys:", Object.keys(stripeSubscription));
+      console.log(
+        "Stripe subscription object keys:",
+        Object.keys(stripeSubscription),
+      );
       console.log("current_period_end:", stripeSubscription.current_period_end);
-      console.log("items:", JSON.stringify(stripeSubscription.items?.data?.[0]?.current_period_end));
+      console.log(
+        "items:",
+        JSON.stringify(stripeSubscription.items?.data?.[0]?.current_period_end),
+      );
 
       // Safely parse the period end date — it may be a Unix timestamp or undefined
       let periodEnd = null;
-      const rawPeriodEnd = stripeSubscription.current_period_end 
-        || stripeSubscription.items?.data?.[0]?.current_period_end;
-      
+      const rawPeriodEnd =
+        stripeSubscription.current_period_end ||
+        stripeSubscription.items?.data?.[0]?.current_period_end;
+
       if (rawPeriodEnd && !isNaN(rawPeriodEnd)) {
         periodEnd = new Date(rawPeriodEnd * 1000);
       }
 
-      // Create subscription record in our DB
+      // Create subscription record for the user in our DB
       await prisma.subscription.upsert({
         where: { stripeSubscriptionId: subscriptionId },
         update: {
@@ -144,12 +159,12 @@ const handleWebhookEvent = async (event) => {
     }
 
     case "customer.subscription.updated": {
+      // if subscription status changes to incomplete_expired, or user cancel the subscription from the billing portal update subscription in the db to be canceled
       const subscription = event.data.object;
-      
-      // If the user clicked cancel in the portal (which defaults to cancel at period end),
-      // we forcefully cancel it immediately here so you don't have to wait to test again.
       if (subscription.cancel_at_period_end === true) {
-        console.log(`⚠️ Subscription set to cancel at period end. Forcing immediate cancellation for testing: ${subscription.id}`);
+        console.log(
+          `⚠️ Subscription set to cancel at period end. Forcing immediate cancellation for testing: ${subscription.id}`,
+        );
         await stripe.subscriptions.cancel(subscription.id);
         // This triggers 'customer.subscription.deleted' next, which actually updates the DB.
       }
@@ -160,7 +175,7 @@ const handleWebhookEvent = async (event) => {
       const subscription = event.data.object;
       const stripeSubscriptionId = subscription.id;
 
-      // Find the subscription in our DB
+      // Find the subscription row in our DB
       const dbSubscription = await prisma.subscription.findUnique({
         where: { stripeSubscriptionId },
       });
@@ -184,6 +199,7 @@ const handleWebhookEvent = async (event) => {
     }
 
     case "invoice.payment_failed": {
+      // if payment failed update subscription in the db to be past_due
       const invoice = event.data.object;
       const stripeSubscriptionId = invoice.subscription;
 
@@ -192,7 +208,9 @@ const handleWebhookEvent = async (event) => {
           where: { stripeSubscriptionId },
           data: { status: "past_due" },
         });
-        console.log(`⚠️ Payment failed for subscription ${stripeSubscriptionId}`);
+        console.log(
+          `⚠️ Payment failed for subscription ${stripeSubscriptionId}`,
+        );
       }
       break;
     }
@@ -219,23 +237,6 @@ const getSubscriptionStatus = async (userId) => {
     isPremium: user?.isPremium || false,
     subscription: subscription || null,
   };
-};
-
-// ─── Cancel Subscription ────────────────────
-const cancelSubscription = async (userId) => {
-  const subscription = await prisma.subscription.findFirst({
-    where: { userId, status: "active" },
-    orderBy: { createdAt: "desc" },
-  });
-
-  if (!subscription) {
-    throw ApiError.notFound("No active subscription found.");
-  }
-
-  // Cancel immediately for testing purposes
-  await stripe.subscriptions.cancel(subscription.stripeSubscriptionId);
-
-  return { message: "Subscription has been canceled immediately." };
 };
 
 // ─── Create Customer Portal Session ─────────
@@ -265,7 +266,6 @@ module.exports = {
   createCheckoutSession,
   handleWebhookEvent,
   getSubscriptionStatus,
-  cancelSubscription,
   createPortalSession,
   getActiveOffers,
 };
