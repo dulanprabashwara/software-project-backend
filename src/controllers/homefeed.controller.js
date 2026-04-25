@@ -13,6 +13,7 @@ exports.getMainFeed = async (req, res) => {
             displayName: true,
             username: true,
             avatarUrl: true,
+            isPremium: true
           },
         },
       },
