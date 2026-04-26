@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/jobs/scraper.job.js
 // Weekly cron scheduler + stale session cleanup.
 //

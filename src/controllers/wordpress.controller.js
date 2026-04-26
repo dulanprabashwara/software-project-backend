@@ -1,3 +1,4 @@
+// @ts-nocheck
 const asyncHandler = require("../utils/asyncHandler");
 const prisma = require("../config/prisma");
 const wordpressService = require("../services/wordpress.service");

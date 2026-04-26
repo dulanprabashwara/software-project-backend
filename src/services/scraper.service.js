@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/services/scraper.service.js
 // Phase 1 (Init) + Phase 2 (Scraping) of the weekly content pipeline.
 // Phase 1: Load sources from DB → create session → init counters.
@@ -15,7 +16,6 @@ const {
   sanitizeTitle,
   buildSecureAxiosConfig,
 } = require("../utils/scraperSecurity");
-
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 

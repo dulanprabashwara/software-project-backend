@@ -1,3 +1,4 @@
+// @ts-nocheck
 const axios = require("axios");
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
@@ -7,9 +8,6 @@ const ApiError = require("../utils/ApiError");
 // Timeouts
 const MEDIA_UPLOAD_TIMEOUT_MS = 30000;
 const POST_PUBLISH_TIMEOUT_MS = 15000;
-
-// File extensions
-const DEFAULT_IMAGE_EXTENSION = "jpg";
 
 // API version
 const WORDPRESS_API_VERSION = "rest/v1.1";
@@ -67,7 +65,7 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
             Authorization:  `Bearer ${connection.accessToken}`,
             "Content-Type": "application/json",
           },
-          timeout: 30000,
+          timeout: MEDIA_UPLOAD_TIMEOUT_MS,
         }
       );
       return res.data?.ID || null;

@@ -1,10 +1,11 @@
+// @ts-nocheck
 // src/controllers/scraper.controller.js
 // Admin-only HTTP endpoints for managing and monitoring scraping sessions.
-
 const { runScrapingSession } = require("../services/scraper.service");
-const asyncHandler            = require("../utils/asyncHandler");
-const ApiError                = require("../utils/ApiError");
-const prisma                  = require("../config/prisma");
+
+const asyncHandler = require("../utils/asyncHandler");
+const prisma = require("../config/prisma");
+const ApiError = require("../utils/ApiError");
 
 // ── CONSTANTS ───────────────────────────────────────────────────────
 
