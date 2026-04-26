@@ -1,3 +1,4 @@
+// @ts-nocheck
 const aiService    = require("../services/ai.service");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError     = require("../utils/ApiError");

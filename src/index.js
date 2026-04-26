@@ -125,7 +125,7 @@ server.listen(PORT, () => {
   └─────────────────────────────────────────┘
   `);
   if (process.env.NODE_ENV !== "test") {
-    startScrapingJobs();
+    startScrapingJobs().catch(err => console.error("[Startup]", err.message));
     startWordPressJobs(); 
     calculateAndSaveScores();
     processScheduledArticles();

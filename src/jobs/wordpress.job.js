@@ -1,114 +1,11 @@
 const prisma = require("../config/prisma");
 const { pushArticleToWordPress, attemptDraftSave } = require("../services/wordpress.service");
 
-// ─── In-memory timeout registry ──────────────────────────────────────────────
-// Maps jobId → Node.js timeout handle.
-// Allows cancelling a timeout if a job is rescheduled or deleted.
+// In-memory map of jobId → setTimeout handle.
+// Lets us cancel or reschedule a job without hitting the database.
 const _timeouts = new Map();
 
-// ─── Execute a single WordPress publish job ───────────────────────────────────
-
-const _executeJob = async (jobId) => {
-  _timeouts.delete(jobId);
-
-  // Fetch fresh job + article + connection at fire time
-  let job;
-  try {
-    job = await prisma.wordPressPublishJob.findUnique({
-      where:   { id: jobId },
-      include: { article: true, wpConnection: true },
-    });
-  } catch (err) {
-    console.error(`[WordPress Scheduler] DB error fetching job ${jobId}:`, err.message);
-    return;
-  }
-
-  if (!job) {
-    console.warn(`[WordPress Scheduler] Job ${jobId} not found at fire time — skipped.`);
-    return;
-  }
-
-  // Only run if still PENDING
-  if (job.status !== "PENDING") {
-    console.log(`[WordPress Scheduler] Job ${jobId} status is "${job.status}" — skipped.`);
-    return;
-  }
-
-  // Article must exist
-  if (!job.article) {
-    await _cancelJob(jobId, "Article no longer exists.");
-    return;
-  }
-
-  // DRAFT: cancel immediately, no retry
-  if (job.article.status === "DRAFT") {
-    await _cancelJob(jobId,
-      "Article is DRAFT — was never published on Easy Blogger. WordPress publish skipped."
-    );
-    return;
-  }
-
-  // SCHEDULED: platform publish not complete yet — retry once after 3 minutes
-  if (job.article.status !== "PUBLISHED") {
-    const retryKey = `${jobId}_retry`;
-    if (_timeouts.has(retryKey)) {
-      // Already retried once — give up
-      _timeouts.delete(retryKey);
-      await _cancelJob(jobId,
-        `Article was not PUBLISHED on Easy Blogger 3 minutes after scheduled time ` +
-        `(status: "${job.article.status}"). WordPress publish cancelled to prevent orphan content.`
-      );
-      console.warn(`[WordPress Scheduler] ⛔ Cancelled ${jobId} after retry — platform status "${job.article.status}".`);
-    } else {
-      console.log(`[WordPress Scheduler] Article not PUBLISHED yet — retrying in 3 minutes.`);
-      const handle = setTimeout(() => _executeJob(jobId), 3 * 60 * 1000);
-      _timeouts.set(retryKey, handle);
-    }
-    return;
-  }
-
-  // Mark IN_PROGRESS before calling WordPress API
-  try {
-    await prisma.wordPressPublishJob.update({
-      where: { id: jobId },
-      data:  { status: "IN_PROGRESS" },
-    });
-  } catch {
-    return; // Another process grabbed it
-  }
-
-  // Push to WordPress
-  try {
-    const { wpPostId, wpPostUrl } = await pushArticleToWordPress(
-      job.article,
-      job.wpConnection
-    );
-
-    await prisma.wordPressPublishJob.update({
-      where: { id: jobId },
-      data:  { status: "PUBLISHED", wpPostId, wpPostUrl, errorMsg: null, draftUrl: null },
-    });
-
-    console.log(`[WordPress Scheduler] ✅ Published "${job.article.title}" → ${wpPostUrl}`);
-
-  } catch (publishErr) {
-    const draftUrl = await attemptDraftSave(job.article, job.wpConnection);
-
-    await prisma.wordPressPublishJob.update({
-      where: { id: jobId },
-      data:  { status: "FAILED", errorMsg: publishErr.message, draftUrl },
-    });
-
-    if (draftUrl) {
-      console.error(`[WordPress Scheduler] ❌ "${job.article.title}" failed: ${publishErr.message}. Draft: ${draftUrl}`);
-    } else {
-      console.error(`[WordPress Scheduler] ❌ "${job.article.title}" failed and draft also failed: ${publishErr.message}`);
-    }
-  }
-};
-
-// ─── Cancel a job in DB ───────────────────────────────────────────────────────
-
+// Marks a job CANCELLED in the database with an explanatory reason.
 const _cancelJob = async (jobId, reason) => {
   try {
     await prisma.wordPressPublishJob.update({
@@ -120,17 +17,89 @@ const _cancelJob = async (jobId, reason) => {
   }
 };
 
-// ─── Register a future publish job ───────────────────────────────────────────
+// Validates the article status, then pushes to WordPress.
+// Returns true if the job was handled (published, failed, or cancelled), false if it should be retried later.
+const _runPublish = async (jobId, article, wpConnection) => {
+  if (!article) {
+    await _cancelJob(jobId, "Article no longer exists.");
+    return true;
+  }
 
-/**
- * Register a setTimeout for a WordPress publish job.
- * Called by scheduleWordPressPublish() when a PENDING job is created,
- * and on server startup for recovery.
- *
- * Zero recurring DB polls — only fires at the exact scheduled time.
- */
+  if (article.status === "DRAFT") {
+    await _cancelJob(jobId, "Article is DRAFT and was never published on Easy Blogger. WordPress publish skipped.");
+    return true;
+  }
+
+  if (article.status !== "PUBLISHED") {
+    return false; // caller decides whether to retry or cancel
+  }
+
+  try {
+    await prisma.wordPressPublishJob.update({ where: { id: jobId }, data: { status: "IN_PROGRESS" } });
+  } catch {
+    return true; // another process grabbed it
+  }
+
+  try {
+    const { wpPostId, wpPostUrl } = await pushArticleToWordPress(article, wpConnection);
+    await prisma.wordPressPublishJob.update({
+      where: { id: jobId },
+      data:  { status: "PUBLISHED", wpPostId, wpPostUrl, errorMsg: null, draftUrl: null },
+    });
+    console.log(`[WordPress Scheduler] ✅ Published "${article.title}" → ${wpPostUrl}`);
+  } catch (publishErr) {
+    const draftUrl = await attemptDraftSave(article, wpConnection);
+    await prisma.wordPressPublishJob.update({
+      where: { id: jobId },
+      data:  { status: "FAILED", errorMsg: publishErr.message, draftUrl },
+    });
+    const suffix = draftUrl ? `. Draft saved: ${draftUrl}` : " and draft save also failed.";
+    console.error(`[WordPress Scheduler] ❌ "${article.title}" failed: ${publishErr.message}${suffix}`);
+  }
+
+  return true;
+};
+
+// Fires when a scheduled job's timeout elapses.
+// Fetches the job fresh from the DB, validates article status, and either
+// publishes to WordPress or retries once after 3 minutes if the platform
+// publish hasn't completed yet.
+const _executeJob = async (jobId) => {
+  _timeouts.delete(jobId);
+
+  let job;
+  try {
+    job = await prisma.wordPressPublishJob.findUnique({
+      where:   { id: jobId },
+      include: { article: true, wpConnection: true },
+    });
+  } catch (err) {
+    console.error(`[WordPress Scheduler] DB error fetching job ${jobId}:`, err.message);
+    return;
+  }
+
+  if (!job)                       return console.warn(`[WordPress Scheduler] Job ${jobId} not found — skipped.`);
+  if (job.status !== "PENDING")   return console.log(`[WordPress Scheduler] Job ${jobId} is "${job.status}" — skipped.`);
+
+  const handled = await _runPublish(jobId, job.article, job.wpConnection);
+
+  if (!handled) {
+    const retryKey = `${jobId}_retry`;
+    if (_timeouts.has(retryKey)) {
+      _timeouts.delete(retryKey);
+      await _cancelJob(jobId, `Article was not PUBLISHED 3 minutes after scheduled time (status: "${job.article.status}"). Cancelled to prevent orphan content.`);
+      console.warn(`[WordPress Scheduler] ⛔ Cancelled ${jobId} after retry.`);
+    } else {
+      console.log(`[WordPress Scheduler] Article not PUBLISHED yet — retrying in 3 minutes.`);
+      _timeouts.set(retryKey, setTimeout(() => _executeJob(jobId), 3 * 60 * 1000));
+    }
+  }
+};
+
+// Registers a setTimeout for a WordPress publish job.
+// Called when a new scheduled job is created and on server startup to recover pending jobs.
+// No recurring database polls — fires only at the exact scheduled time.
 const registerJobTimeout = (jobId, scheduledAt) => {
-  // Cancel existing timeout for this job (handles reschedule)
   if (_timeouts.has(jobId)) {
     clearTimeout(_timeouts.get(jobId));
     _timeouts.delete(jobId);
@@ -139,29 +108,24 @@ const registerJobTimeout = (jobId, scheduledAt) => {
   const msUntilFire = new Date(scheduledAt).getTime() - Date.now();
 
   if (msUntilFire <= 0) {
-    // Overdue — fire immediately (server restart recovery case)
     console.log(`[WordPress Scheduler] Job ${jobId} is overdue, firing now.`);
     setImmediate(() => _executeJob(jobId));
     return;
   }
 
-  // Node.js setTimeout max is ~24.8 days (32-bit int limit).
-  // For jobs further than that, re-register when closer.
+  // Node.js setTimeout has a 32-bit ms limit (~24.8 days).
+  // For jobs beyond that, re-register closer to the time.
   const MAX_MS = 24 * 24 * 60 * 60 * 1000;
   if (msUntilFire > MAX_MS) {
-    const handle = setTimeout(() => registerJobTimeout(jobId, scheduledAt), MAX_MS);
-    _timeouts.set(jobId, handle);
+    _timeouts.set(jobId, setTimeout(() => registerJobTimeout(jobId, scheduledAt), MAX_MS));
     return;
   }
 
-  const handle = setTimeout(() => _executeJob(jobId), msUntilFire);
-  _timeouts.set(jobId, handle);
-
+  _timeouts.set(jobId, setTimeout(() => _executeJob(jobId), msUntilFire));
   console.log(`[WordPress Scheduler] Job ${jobId} registered — fires at ${new Date(scheduledAt).toLocaleString()}.`);
 };
 
-// ─── Cancel a registered timeout ─────────────────────────────────────────────
-
+// Clears the in-memory timeout for a job without touching the database.
 const cancelJobTimeout = (jobId) => {
   if (_timeouts.has(jobId)) {
     clearTimeout(_timeouts.get(jobId));
@@ -169,16 +133,10 @@ const cancelJobTimeout = (jobId) => {
   }
 };
 
-// ─── Startup recovery — runs ONE query, then no more polling ─────────────────
-
-/**
- * Called once from src/index.js on server start.
- * Finds all PENDING jobs and registers their timeouts.
- * After this, the scheduler is entirely event-driven.
- */
+// Runs once on server startup to re-register timeouts for any jobs that were
+// pending when the server last shut down. Resets any IN_PROGRESS jobs back to
+// PENDING since they were interrupted mid-execution.
 const startWordPressJobs = async () => {
-  console.log("[WordPress Scheduler] Starting — recovering pending jobs (single DB query)...");
-
   let pendingJobs;
   try {
     pendingJobs = await prisma.wordPressPublishJob.findMany({
@@ -190,7 +148,6 @@ const startWordPressJobs = async () => {
     return;
   }
 
-  // Reset IN_PROGRESS jobs back to PENDING (interrupted by previous restart)
   const interrupted = pendingJobs.filter(j => j.status === "IN_PROGRESS");
   if (interrupted.length > 0) {
     await prisma.wordPressPublishJob.updateMany({
@@ -203,25 +160,16 @@ const startWordPressJobs = async () => {
     registerJobTimeout(job.id, job.scheduledAt);
   }
 
-  console.log(
-    `[WordPress Scheduler] Ready. ${pendingJobs.length} job(s) recovered. ` +
-    `No recurring polls — fires only when a job is due.`
-  );
+  console.log(`[WordPress Scheduler] Ready — ${pendingJobs.length} job(s) recovered.`);
 };
 
-// ─── Batch processor (used by tests and startup recovery) ────────────────────
-// Not called by any timer in production — the setTimeout scheduler handles
-// individual jobs via _executeJob. This function is exported so tests can
-// simulate batch execution without needing to wire up setTimeout internals.
-
+// Batch processor used by tests. Not called in production — the setTimeout
+// scheduler handles individual jobs via _executeJob.
 const processWordPressJobs = async () => {
   let pendingJobs;
   try {
     pendingJobs = await prisma.wordPressPublishJob.findMany({
-      where: {
-        status:      "PENDING",
-        scheduledAt: { lte: new Date() },
-      },
+      where:   { status: "PENDING", scheduledAt: { lte: new Date() } },
       include: { article: true, wpConnection: true },
     });
   } catch (err) {
@@ -232,49 +180,13 @@ const processWordPressJobs = async () => {
   if (pendingJobs.length === 0) return;
 
   for (const job of pendingJobs) {
-    if (!job.article) {
-      await _cancelJob(job.id, "Article no longer exists.");
-      continue;
-    }
+    const handled = await _runPublish(job.id, job.article, job.wpConnection);
 
-    if (job.article.status === "DRAFT") {
-      await _cancelJob(job.id,
-        "Article is DRAFT — was never published on Easy Blogger. WordPress publish skipped."
-      );
-      continue;
-    }
-
-    if (job.article.status !== "PUBLISHED") {
+    if (!handled) {
       const minutesPast = Math.floor((Date.now() - new Date(job.scheduledAt).getTime()) / 60000);
-      if (minutesPast <= 5) continue; // within grace period — skip this run
-      await _cancelJob(job.id,
-        `Article was not published on Easy Blogger within 5 minutes of scheduled time ` +
-        `(status: "${job.article.status}"). WordPress publish cancelled.`
-      );
-      continue;
-    }
-
-    try {
-      await prisma.wordPressPublishJob.update({
-        where: { id: job.id },
-        data:  { status: "IN_PROGRESS" },
-      });
-    } catch {
-      continue;
-    }
-
-    try {
-      const { wpPostId, wpPostUrl } = await pushArticleToWordPress(job.article, job.wpConnection);
-      await prisma.wordPressPublishJob.update({
-        where: { id: job.id },
-        data:  { status: "PUBLISHED", wpPostId, wpPostUrl, errorMsg: null, draftUrl: null },
-      });
-    } catch (publishErr) {
-      const draftUrl = await attemptDraftSave(job.article, job.wpConnection);
-      await prisma.wordPressPublishJob.update({
-        where: { id: job.id },
-        data:  { status: "FAILED", errorMsg: publishErr.message, draftUrl },
-      });
+      if (minutesPast > 5) {
+        await _cancelJob(job.id, `Article was not published on Easy Blogger within 5 minutes (status: "${job.article.status}"). WordPress publish cancelled.`);
+      }
     }
   }
 };

@@ -28,6 +28,8 @@ router.post("/:id/edit-existing/start",authenticate,articleController.startEditE
 router.put("/:id/edit-existing/autosave",authenticate,articleController.autosaveEditExisting,);
 router.put("/:id/edit-existing/save-draft",authenticate,articleController.saveEditExistingAsDraft,);
 router.post("/:id/edit-existing/discard",authenticate,articleController.discardEditExisting,);
+router.put("/:id/edit-existing/preview",authenticate,articleController.saveEditExistingForPreview,);
+router.put("/:id/edit-existing/clear-backup",authenticate,articleController.clearEditExistingBackup,);
 
 // Edit as new
 router.post("/:id/edit-as-new/start",authenticate,articleController.startEditAsNew,);
