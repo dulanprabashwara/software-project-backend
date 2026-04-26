@@ -2,6 +2,13 @@ const asyncHandler = require("../utils/asyncHandler");
 const prisma = require("../config/prisma");
 const wordpressService = require("../services/wordpress.service");
 
+// ── CONSTANTS ───────────────────────────────────────────────────────
+
+// HTTP status codes
+const HTTP_STATUS_OK = 200;
+const HTTP_STATUS_BAD_REQUEST = 400;
+const HTTP_STATUS_BAD_GATEWAY = 502;
+
 const FRONTEND_URL = process.env.CLIENT_URL || "http://localhost:3000";
 
 // Returns the WordPress.com OAuth URL for the frontend to redirect the user to.
@@ -77,7 +84,7 @@ const publishToWordPress = asyncHandler(async (req, res) => {
   const { articleId, scheduledAt } = req.body;
 
   if (!articleId) {
-    return res.status(400).json({ success: false, message: "articleId is required." });
+    return res.status(HTTP_STATUS_BAD_REQUEST).json({ success: false, message: "articleId is required." });
   }
 
   const result = await wordpressService.scheduleWordPressPublish(
@@ -86,7 +93,7 @@ const publishToWordPress = asyncHandler(async (req, res) => {
     scheduledAt ? new Date(scheduledAt) : null
   );
 
-  res.status(result.success ? 200 : 502).json({ success: result.success, data: result });
+  res.status(result.success ? HTTP_STATUS_OK : HTTP_STATUS_BAD_GATEWAY).json({ success: result.success, data: result });
 });
 
 // Returns the latest WordPress publish job status for a given article.

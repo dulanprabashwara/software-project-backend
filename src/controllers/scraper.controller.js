@@ -6,12 +6,23 @@ const asyncHandler            = require("../utils/asyncHandler");
 const ApiError                = require("../utils/ApiError");
 const prisma                  = require("../config/prisma");
 
+// ── CONSTANTS ───────────────────────────────────────────────────────
+
+// HTTP status codes
+const HTTP_STATUS_ACCEPTED = 202;
+const HTTP_STATUS_OK = 200;
+
+// Pagination and query limits
+const DEFAULT_SESSION_LIMIT = 20;
+const DEFAULT_ARTICLE_LIMIT = 20;
+const DEFAULT_LOG_LIMIT = 200;
+
 // Starts a scraping session in the background and immediately returns 202.
 const triggerScraping = asyncHandler(async (req, res) => {
   runScrapingSession().catch((err) =>
     console.error("[Controller] Manual trigger error:", err.message)
   );
-  res.status(202).json({
+  res.status(HTTP_STATUS_ACCEPTED).json({
     success: true,
     message: "Scraping session started. Check GET /api/scraper/sessions for progress.",
   });
@@ -28,7 +39,7 @@ const triggerEnrichment = asyncHandler(async (req, res) => {
     console.error("[Controller] Manual enrichment error:", err.message)
   );
 
-  res.status(202).json({
+  res.status(HTTP_STATUS_ACCEPTED).json({
     success: true,
     message: sessionId
       ? `Enrichment started for session ${sessionId}.`
@@ -41,7 +52,7 @@ const triggerEnrichment = asyncHandler(async (req, res) => {
 const getSessions = asyncHandler(async (req, res) => {
   const sessions = await prisma.scrapingSession.findMany({
     orderBy: { startedAt: "desc" },
-    take: 20,
+    take: DEFAULT_SESSION_LIMIT,
     select: {
       id: true, startedAt: true, completedAt: true, status: true,
       totalSources: true, successCount: true, duplicateCount: true,
@@ -50,7 +61,7 @@ const getSessions = asyncHandler(async (req, res) => {
       reportSentAt: true, aiInputTokens: true, aiOutputTokens: true,
     },
   });
-  res.status(200).json({ success: true, sessions });
+  res.status(HTTP_STATUS_OK).json({ success: true, sessions });
 });
 
 // Returns full detail for one session including per-category stats and recent logs.
@@ -59,16 +70,16 @@ const getSessionById = asyncHandler(async (req, res) => {
     where:   { id: req.params.sessionId },
     include: {
       categoryStats: { orderBy: { sessionId: "asc"} },
-      logs:          { orderBy: { loggedAt: "desc" }, take: 200 },
+      logs:          { orderBy: { loggedAt: "desc" }, take: DEFAULT_LOG_LIMIT },
     },
   });
   if (!session) throw ApiError.notFound("Session not found.");
-  res.status(200).json({ success: true, session });
+  res.status(HTTP_STATUS_OK).json({ success: true, session });
 });
 
 // Returns a paginated list of scraped articles, optionally filtered by category or keyword.
 const getScrapedArticles = asyncHandler(async (req, res) => {
-  const { category, keyword, limit = "20", skip = "0" } = req.query;
+  const { category, keyword, limit = DEFAULT_ARTICLE_LIMIT.toString(), skip = "0" } = req.query;
   const where = {};
   if (category) where.category = category;
   if (keyword)  where.matchedKeywords = { has: keyword };
@@ -88,7 +99,7 @@ const getScrapedArticles = asyncHandler(async (req, res) => {
     prisma.scrapedArticle.count({ where }),
   ]);
 
-  res.status(200).json({ success: true, total, articles });
+  res.status(HTTP_STATUS_OK).json({ success: true, total, articles });
 });
 
 module.exports = { triggerScraping, triggerEnrichment, getSessions, getSessionById, getScrapedArticles };
