@@ -198,6 +198,35 @@ const saveEditExistingAsDraft = asyncHandler(async (req, res) => {
   });
 });
 
+async function saveEditExistingForPreview(req, res, next) {
+  try {
+    const article = await articleService.saveExistingArticleForPreview(
+      req.params.id,
+      req.user.id,
+      req.body,
+    );
+
+    res.status(200).json({
+      success: true,
+      data: article,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+const clearEditExistingBackup = asyncHandler(async (req, res) => {
+  const article = await articleService.clearEditExistingBackup(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Edit-existing backup cleared successfully.",
+    data: article,
+  });
+});
+
 const startEditAsNew = asyncHandler(async (req, res) => {
   const article = await articleService.startEditAsNewArticle(
     req.params.id,
@@ -306,6 +335,8 @@ module.exports = {
   autosaveEditExisting,
   discardEditExisting,
   saveEditExistingAsDraft,
+  saveEditExistingForPreview,
+  clearEditExistingBackup,
   startEditAsNew,
   autosaveEditAsNew,
   saveEditAsNewAsDraft,
