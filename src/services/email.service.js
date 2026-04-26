@@ -4,11 +4,21 @@
 const nodemailer = require("nodemailer");
 const prisma     = require("../config/prisma");
 
+// ── CONSTANTS ───────────────────────────────────────────────────────────────
+
+// Email configuration
+const DEFAULT_SMTP_PORT = 587;
+const DEFAULT_SMTP_HOST = "smtp.gmail.com";
+
+// Email content limits
+const TOP_KEYWORDS_LIMIT = 10;
+const EMPTY_KEYWORDS_LIMIT = 20;
+
 // Creates the nodemailer SMTP transporter from environment config.
 function createTransporter() {
   return nodemailer.createTransport({
-    host:   process.env.SMTP_HOST || "smtp.gmail.com",
-    port:   parseInt(process.env.SMTP_PORT) || 587,
+    host:   process.env.SMTP_HOST || DEFAULT_SMTP_HOST,
+    port:   parseInt(process.env.SMTP_PORT) || DEFAULT_SMTP_PORT,
     secure: false,
     auth: {
       user: process.env.SMTP_USER,
@@ -86,7 +96,7 @@ function buildCompletionEmailHtml(report) {
     </tr>
   `).join("");
 
-  const topKeywords    = (report.keywordsWithContent || []).slice(0, 10);
+  const topKeywords    = (report.keywordsWithContent || []).slice(0, TOP_KEYWORDS_LIMIT);
   const topKeywordRows = topKeywords.map((k) => `
     <tr style="border-bottom:1px solid #eee;">
       <td style="padding:6px 12px;">${k.keyword}</td>
@@ -94,10 +104,10 @@ function buildCompletionEmailHtml(report) {
     </tr>
   `).join("");
 
-  const emptyKeywords = (report.keywordsWithoutContent || []).slice(0, 20);
+  const emptyKeywords = (report.keywordsWithoutContent || []).slice(0, EMPTY_KEYWORDS_LIMIT);
   const emptySection  = emptyKeywords.length > 0
     ? `<p style="margin-top:8px;font-size:13px;color:#999;">
-        Keywords with no reference content this session (showing first 20 of ${report.totalKeywordsEmpty}):
+        Keywords with no reference content this session (showing first ${EMPTY_KEYWORDS_LIMIT} of ${report.totalKeywordsEmpty}):
         <br><em>${emptyKeywords.join(", ")}</em>
        </p>`
     : "";

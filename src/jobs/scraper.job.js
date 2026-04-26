@@ -1,29 +1,60 @@
+// @ts-nocheck
 // src/jobs/scraper.job.js
-// Registers the weekly Saturday 06:00 UTC cron job.
-// Includes a distributed database lock so only one process runs per week
-// (relevant when multiple developers share the same NeonDB locally).
+// Weekly cron scheduler + stale session cleanup.
+//
+// Two types of abandoned sessions are handled:
+//   "canceled" + reportSentAt=null — signal was caught, DB updated, email not yet sent
+//   "running"  + older than 3h    — process was force-killed (SIGKILL), no handler ran
 
 const cron  = require("node-cron");
 const prisma = require("../config/prisma");
 const { runScrapingSession } = require("../services/scraper.service");
 
-// Sessions running longer than 3 hours are considered abandoned (process was killed)
-const STALE_SESSION_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+const STALE_SESSION_TIMEOUT_MS = 3 * 60 * 60 * 1000; // 3 hours — max time a real session runs
 
-// Window within which a running session is considered actively owned by another process
-const LOCK_WINDOW_MS = 10 * 60 * 1000;
+// Queries ScrapedArticle to get the true saved/enriched counts for a session.
+async function recoverSessionStats(sessionId) {
+  const savedArticles    = await prisma.scrapedArticle.count({ where: { sessionId } });
+  const enrichedArticles = await prisma.scrapedArticle.count({
+    where: { sessionId, summary: { not: null } },
+  });
 
-// Finds sessions stuck in "running" status for too long, marks them as canceled, and emails a partial report.
+  // Also read any enrichment token usage written by runEnrichmentStage mid-run
+  const sessionRow = await prisma.scrapingSession.findUnique({
+    where:  { id: sessionId },
+    select: { aiInputTokens: true, aiOutputTokens: true, enrichmentFailedCount: true },
+  });
+
+  console.log(`[Cron] Session ${sessionId} — recovered: ${savedArticles} saved, ${enrichedArticles} enriched`);
+
+  return {
+    savedArticles,
+    enrichedArticles,
+    enrichmentFailed: sessionRow?.enrichmentFailedCount || 0,
+    aiInputTokens:    sessionRow?.aiInputTokens  || 0,
+    aiOutputTokens:   sessionRow?.aiOutputTokens || 0,
+  };
+}
+
+// Finds and resolves all abandoned sessions — canceled ones with no email sent yet,
+// and running ones older than 3 hours (force-killed with no signal handler).
 async function cleanupStaleSessions() {
-  const cutoff = new Date(Date.now() - STALE_SESSION_TIMEOUT_MS);
+  const staleRunningCutoff = new Date(Date.now() - STALE_SESSION_TIMEOUT_MS);
 
-  const staleSessions = await prisma.scrapingSession.findMany({
+  // Fetch both types of abandoned sessions in one query using OR
+  const abandonedSessions = await prisma.scrapingSession.findMany({
     where: {
-      status:    "running",
-      startedAt: { lt: cutoff },
+      reportSentAt: null,
+      OR: [
+        // Signal was caught → DB already says "canceled" but email never sent
+        { status: "canceled" },
+        // Force-killed (SIGKILL) → stayed "running", no handler fired
+        { status: "running", startedAt: { lt: staleRunningCutoff } },
+      ],
     },
     select: {
       id:                  true,
+      status:              true,
       startedAt:           true,
       totalSources:        true,
       successCount:        true,
@@ -36,25 +67,70 @@ async function cleanupStaleSessions() {
     },
   });
 
-  if (!staleSessions.length) return;
+  if (!abandonedSessions.length) return;
 
-  console.warn(`[Cron] ⚠️  Found ${staleSessions.length} stale session(s). Marking as canceled...`);
+  console.warn(`[Cron] ⚠️  Found ${abandonedSessions.length} abandoned session(s). Processing...`);
 
-  for (const session of staleSessions) {
+  for (const session of abandonedSessions) {
     const durationMinutes = (Date.now() - new Date(session.startedAt).getTime()) / 60000;
 
+    // Recover stats from ScrapedArticle if session row counters are all zero
+    let successCount   = session.successCount   || 0;
+    let duplicateCount = session.duplicateCount || 0;
+    let failureCount   = session.failureCount   || 0;
+    let enrichedCount  = session.enrichedCount  || 0;
+    let enrichmentFailed = 0;
+    let aiInputTokens  = session.aiInputTokens  || 0;
+    let aiOutputTokens = session.aiOutputTokens || 0;
+
+    const noStats = successCount === 0 && duplicateCount === 0 && failureCount === 0;
+
+    try {
+      const recovered = await recoverSessionStats(session.id);
+
+      // Always use recovered enrichment stats — they include mid-enrichment writes
+      enrichedCount    = recovered.enrichedArticles;
+      enrichmentFailed = recovered.enrichmentFailed;
+      aiInputTokens    = recovered.aiInputTokens;
+      aiOutputTokens   = recovered.aiOutputTokens;
+
+      // Only override scraping counters if they were zero (killed before Phase 2 wrote them)
+      if (noStats) {
+        successCount = recovered.savedArticles;
+      }
+    } catch (e) {
+      console.error(`[Cron] Stat recovery failed for ${session.id}: ${e.message}`);
+    }
+
+    const totalUrlsFound = successCount + duplicateCount + failureCount;
+    const attempted      = successCount + failureCount;
+    const successRate    = attempted > 0
+      ? parseFloat(((successCount / attempted) * 100).toFixed(2))
+      : null;
+
+    // Write final stats and mark canceled (handles both "canceled" and stuck "running" sessions)
     await prisma.scrapingSession.update({
       where: { id: session.id },
       data: {
-        status:         "canceled",
-        completedAt:    new Date(),
-        criticalErrors: true,
-        reportData:     JSON.stringify({ canceledReason: "Process interrupted — terminal killed or server restarted" }),
+        status:               "canceled",
+        completedAt:          session.status === "canceled" ? undefined : new Date(),
+        criticalErrors:       true,
+        totalUrlsFound,
+        successCount,
+        duplicateCount,
+        failureCount,
+        enrichedCount,
+        enrichmentFailedCount: enrichmentFailed,
+        successRate,
+        durationMinutes:      parseFloat(durationMinutes.toFixed(2)),
+        aiInputTokens,
+        aiOutputTokens,
       },
-    }).catch((e) => console.error(`[Cron] Failed to mark session ${session.id} canceled: ${e.message}`));
+    }).catch((e) => console.error(`[Cron] Failed to update session ${session.id}: ${e.message}`));
 
-    console.warn(`[Cron] Session ${session.id} marked canceled (ran for ${durationMinutes.toFixed(0)}m)`);
+    console.warn(`[Cron] Session ${session.id} (was: ${session.status}) — canceled after ${durationMinutes.toFixed(0)}m`);
 
+    // Send interruption email then mark reportSentAt to prevent re-sending
     try {
       const { sendCompletionNotification } = require("../services/email.service");
 
@@ -64,89 +140,65 @@ async function cleanupStaleSessions() {
         completedAt:          new Date().toISOString(),
         durationMinutes:      parseFloat(durationMinutes.toFixed(2)),
         totalSources:         session.totalSources,
-        totalUrlsFound:       session.successCount + session.duplicateCount + session.failureCount,
-        successCount:         session.successCount,
-        duplicateCount:       session.duplicateCount,
-        failureCount:         session.failureCount,
-        successRate:          null,
-        enrichedCount:        session.enrichedCount,
-        enrichmentFailed:     0,
-        totalKeywordsCovered: session.keywordsCoveredCount,
+        totalUrlsFound,
+        successCount,
+        duplicateCount,
+        failureCount,
+        successRate,
+        enrichedCount,
+        enrichmentFailed,
+        totalKeywordsCovered: session.keywordsCoveredCount || 0,
         totalKeywordsEmpty:   0,
         keywordsWithContent:  [],
         keywordsWithoutContent: [],
         aiTokenUsage: {
-          inputTokens:      session.aiInputTokens,
-          outputTokens:     session.aiOutputTokens,
+          inputTokens:      aiInputTokens,
+          outputTokens:     aiOutputTokens,
           estimatedCostUSD: 0,
         },
         criticalErrors: true,
         isInterrupted:  true,
       });
-      console.log(`[Cron] Interruption email sent for canceled session ${session.id}`);
+
+      // Set reportSentAt only after email succeeds — ensures retry on next start if email fails
+      await prisma.scrapingSession.update({
+        where: { id: session.id },
+        data:  { reportSentAt: new Date() },
+      }).catch(() => {});
+
+      console.log(`[Cron] ✅ Interruption email sent for session ${session.id}`);
     } catch (emailErr) {
-      console.error(`[Cron] Interruption email failed for session ${session.id}: ${emailErr.message}`);
+      console.error(`[Cron] Email failed for session ${session.id}: ${emailErr.message}`);
     }
   }
 }
 
-// Checks whether another process already started a session within the lock window.
-// Returns true if this process should proceed, false if it should back off.
-async function acquireSessionLock() {
-  const windowStart = new Date(Date.now() - LOCK_WINDOW_MS);
-
-  const existingSession = await prisma.scrapingSession.findFirst({
-    where: {
-      status:    "running",
-      startedAt: { gte: windowStart },
-    },
-    orderBy: { startedAt: "desc" },
-    select:  { id: true, startedAt: true },
-  });
-
-  if (existingSession) {
-    console.log(
-      `[Cron] 🔒 Session lock held by ${existingSession.id} ` +
-      `(started ${existingSession.startedAt.toISOString()}). ` +
-      `Another process is already running — skipping.`
-    );
-    return false;
+// Called once from src/index.js: startScrapingJobs().catch(err => console.error(err))
+async function startScrapingJobs() {
+  try {
+    await cleanupStaleSessions();
+  } catch (err) {
+    console.error(`[Cron] Startup cleanup failed: ${err.message}`);
   }
 
-  return true;
-}
-
-// Registers the weekly cron job and logs when the next run will fire.
-function startScrapingJobs() {
   cron.schedule(
-    "0 6 * * 6",     // Every Saturday at 06:00 UTC
+    "0 6 * * 6",
     async () => {
       console.log(`\n[Cron] ⏰ Weekly scraping triggered at ${new Date().toISOString()}`);
-
       try {
         await cleanupStaleSessions();
-
-        const canProceed = await acquireSessionLock();
-        if (!canProceed) return;
-
-        console.log("[Cron] ✅ Lock acquired — starting session...");
         await runScrapingSession();
-
       } catch (err) {
         console.error(`[Cron] ❌ Session failed: ${err.message}`);
       }
     },
-    {
-      scheduled: true,
-      timezone:  "UTC",
-    }
+    { scheduled: true, timezone: "UTC" }
   );
 
   console.log("[Cron] ✅ Weekly scraping scheduled: Every Saturday at 06:00 UTC");
   console.log(`[Cron]    Next run: ${getNextSaturdayUTC()}`);
 }
 
-// Returns the UTC timestamp of the next Saturday at 06:00.
 function getNextSaturdayUTC() {
   const now  = new Date();
   const day  = now.getUTCDay();
@@ -157,4 +209,4 @@ function getNextSaturdayUTC() {
   return next.toUTCString();
 }
 
-module.exports = { startScrapingJobs, cleanupStaleSessions, acquireSessionLock };
+module.exports = { startScrapingJobs, cleanupStaleSessions };

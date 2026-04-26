@@ -1,137 +1,56 @@
 // tests/scraptests/scraper_job.test.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests for the NEW logic in scraper.job.js:
+// Tests for scraper.job.js:
+//   1. cleanupStaleSessions — marks stuck "running" sessions as "canceled", emails admins
+//   2. startScrapingJobs — runs startup cleanup before registering the cron
 //
-//   1. acquireSessionLock — skips if another process started within 10 minutes,
-//      proceeds if no recent running session exists
-//   2. cleanupStaleSessions — marks old "running" sessions as "canceled",
-//      sends a partial interruption email per stale session
+// acquireSessionLock has been removed from the codebase (the session lock
+// mechanism was removed because it had a race window and is unnecessary
+// in single-server production deployments). Its tests are removed accordingly.
 //
-// What is NOT tested:
-//   - node-cron scheduling (we don't tick fake timers for a whole week)
-//   - Real process signals (SIGTERM/SIGINT) — those are tested in a
-//     separate integration test scenario
-//   - Real email delivery (nodemailer is mocked)
-//
-// Mocking strategy:
-//   - prisma → prisma.mock.js
-//   - email.service → jest.mock so sendCompletionNotification is a spy
-//   - node-cron → jest.mock so no real cron is registered during tests
-// ─────────────────────────────────────────────────────────────────────────────
+// Mocks: prisma, node-cron, scraper.service, email.service
 
 jest.mock("../../src/config/prisma", () => require("../mocks/prisma.mock"));
 
-// Mock node-cron so no real scheduler starts
 jest.mock("node-cron", () => ({
-  schedule: jest.fn(),
+  schedule: jest.fn((expr, fn, opts) => {
+    // Expose the scheduled callback so tests can invoke it directly
+    mockCronCallback = fn;
+  }),
 }));
 
-// Mock runScrapingSession so the job doesn't actually scrape
+let mockCronCallback = null;
+
 jest.mock("../../src/services/scraper.service", () => ({
   runScrapingSession: jest.fn().mockResolvedValue({ status: "completed", sessionId: "sess-cron" }),
 }));
 
-// Mock email service
 const mockSendCompletionNotification = jest.fn().mockResolvedValue(undefined);
 jest.mock("../../src/services/email.service", () => ({
   sendCompletionNotification: mockSendCompletionNotification,
   sendErrorAlert:             jest.fn().mockResolvedValue(undefined),
 }));
 
-const prisma = require("../../src/config/prisma");
-const { acquireSessionLock, cleanupStaleSessions } = require("../../src/jobs/scraper.job");
+const prisma              = require("../../src/config/prisma");
+const { runScrapingSession } = require("../../src/services/scraper.service");
+const { cleanupStaleSessions, startScrapingJobs } = require("../../src/jobs/scraper.job");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeStaleSession(overrides = {}) {
-  const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
   return {
-    id:             "stale-sess-001",
-    startedAt:      fourHoursAgo,
-    totalSources:   10,
-    successCount:   5,
-    duplicateCount: 2,
-    failureCount:   1,
-    enrichedCount:  3,
+    id:                  "stale-sess-001",
+    startedAt:           new Date(Date.now() - 4 * 60 * 60 * 1000), // 4 hours ago
+    totalSources:        10,
+    successCount:        5,
+    duplicateCount:      2,
+    failureCount:        1,
+    enrichedCount:       3,
     keywordsCoveredCount: 10,
-    aiInputTokens:  500,
-    aiOutputTokens: 200,
+    aiInputTokens:       500,
+    aiOutputTokens:      200,
     ...overrides,
   };
 }
-
-// ════════════════════════════════════════════════════════════════════════════
-// acquireSessionLock
-// ════════════════════════════════════════════════════════════════════════════
-
-describe("acquireSessionLock", () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  test("returns true when no running session exists in the lock window", async () => {
-    prisma.scrapingSession.findFirst.mockResolvedValue(null);
-
-    const canProceed = await acquireSessionLock();
-
-    expect(canProceed).toBe(true);
-  });
-
-  test("returns false when a running session exists within the 10-minute window", async () => {
-    // A session that started 2 minutes ago — within the lock window
-    prisma.scrapingSession.findFirst.mockResolvedValue({
-      id:        "active-sess",
-      startedAt: new Date(Date.now() - 2 * 60 * 1000),
-    });
-
-    const canProceed = await acquireSessionLock();
-
-    expect(canProceed).toBe(false);
-  });
-
-  test("queries only sessions with status 'running'", async () => {
-    prisma.scrapingSession.findFirst.mockResolvedValue(null);
-
-    await acquireSessionLock();
-
-    expect(prisma.scrapingSession.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({ status: "running" }),
-      })
-    );
-  });
-
-  test("the lock window query uses gte (greater than or equal) for startedAt", async () => {
-    prisma.scrapingSession.findFirst.mockResolvedValue(null);
-
-    await acquireSessionLock();
-
-    const callArg = prisma.scrapingSession.findFirst.mock.calls[0][0];
-    expect(callArg.where.startedAt).toHaveProperty("gte");
-  });
-
-  test("the gte timestamp is approximately 10 minutes ago", async () => {
-    prisma.scrapingSession.findFirst.mockResolvedValue(null);
-    const beforeCall = Date.now();
-
-    await acquireSessionLock();
-
-    const afterCall  = Date.now();
-    const callArg    = prisma.scrapingSession.findFirst.mock.calls[0][0];
-    const gteTime    = callArg.where.startedAt.gte.getTime();
-    const tenMinMs   = 10 * 60 * 1000;
-
-    expect(gteTime).toBeGreaterThanOrEqual(beforeCall - tenMinMs - 100);
-    expect(gteTime).toBeLessThanOrEqual(afterCall   - tenMinMs + 100);
-  });
-
-  test("returns true when the only running session is older than the lock window", async () => {
-    // A session that started 15 minutes ago — outside the lock window
-    // The lock query uses startedAt gte (10 min ago), so this session won't be found
-    prisma.scrapingSession.findFirst.mockResolvedValue(null);
-
-    const canProceed = await acquireSessionLock();
-    expect(canProceed).toBe(true);
-  });
-});
 
 // ════════════════════════════════════════════════════════════════════════════
 // cleanupStaleSessions
@@ -162,7 +81,6 @@ describe("cleanupStaleSessions", () => {
     expect(callArg.where.status).toBe("running");
     expect(callArg.where.startedAt).toHaveProperty("lt");
 
-    // The lt timestamp should be approximately 3 hours ago
     const ltTime      = callArg.where.startedAt.lt.getTime();
     const threeHourMs = 3 * 60 * 60 * 1000;
     expect(ltTime).toBeCloseTo(Date.now() - threeHourMs, -4);
@@ -181,21 +99,13 @@ describe("cleanupStaleSessions", () => {
     );
   });
 
-  test("sets criticalErrors = true on the canceled session", async () => {
+  test("sets criticalErrors = true and completedAt on the canceled session", async () => {
     prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession()]);
 
     await cleanupStaleSessions();
 
     const updateArg = prisma.scrapingSession.update.mock.calls[0][0];
     expect(updateArg.data.criticalErrors).toBe(true);
-  });
-
-  test("sets completedAt on the canceled session", async () => {
-    prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession()]);
-
-    await cleanupStaleSessions();
-
-    const updateArg = prisma.scrapingSession.update.mock.calls[0][0];
     expect(updateArg.data.completedAt).toBeInstanceOf(Date);
   });
 
@@ -210,28 +120,18 @@ describe("cleanupStaleSessions", () => {
     expect(mockSendCompletionNotification).toHaveBeenCalledTimes(2);
   });
 
-  test("interruption email has isInterrupted: true", async () => {
-    prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession()]);
-
-    await cleanupStaleSessions();
-
-    const reportArg = mockSendCompletionNotification.mock.calls[0][0];
-    expect(reportArg.isInterrupted).toBe(true);
-  });
-
-  test("interruption email contains correct session ID", async () => {
+  test("interruption email has isInterrupted: true and correct sessionId", async () => {
     prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession({ id: "stale-sess-007" })]);
 
     await cleanupStaleSessions();
 
     const reportArg = mockSendCompletionNotification.mock.calls[0][0];
+    expect(reportArg.isInterrupted).toBe(true);
     expect(reportArg.sessionId).toBe("stale-sess-007");
   });
 
   test("interruption email contains partial successCount from stale session", async () => {
-    prisma.scrapingSession.findMany.mockResolvedValue([
-      makeStaleSession({ successCount: 12 }),
-    ]);
+    prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession({ successCount: 12 })]);
 
     await cleanupStaleSessions();
 
@@ -263,52 +163,138 @@ describe("cleanupStaleSessions", () => {
 
     await cleanupStaleSessions();
 
-    const updatedIds = prisma.scrapingSession.update.mock.calls.map(
-      (call) => call[0].where.id
-    );
+    const updatedIds = prisma.scrapingSession.update.mock.calls.map((c) => c[0].where.id);
     expect(updatedIds).toContain("stale-A");
     expect(updatedIds).toContain("stale-B");
     expect(updatedIds).toContain("stale-C");
   });
+
+  test("reportData written to DB contains canceledReason string", async () => {
+    prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession()]);
+
+    await cleanupStaleSessions();
+
+    const updateArg    = prisma.scrapingSession.update.mock.calls[0][0];
+    const reportData   = JSON.parse(updateArg.data.reportData);
+    expect(typeof reportData.canceledReason).toBe("string");
+    expect(reportData.canceledReason.length).toBeGreaterThan(0);
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// Integration: lock prevents duplicate sessions
+// startScrapingJobs — startup cleanup behaviour
 // ════════════════════════════════════════════════════════════════════════════
 
-describe("lock + cleanup integration", () => {
+describe("startScrapingJobs — startup stale session cleanup", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockCronCallback   = null;
     prisma.scrapingSession.update.mockResolvedValue({});
     mockSendCompletionNotification.mockResolvedValue(undefined);
   });
 
-  test("cleanup runs before the lock check on each cron tick", async () => {
-    // Stale session exists AND a recent running session exists
-    prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession()]);
-    // After cleanup marks stale as canceled, the lock check finds no running sessions
-    prisma.scrapingSession.findFirst.mockResolvedValue(null);
+  test("runs cleanupStaleSessions at startup even when no stale sessions exist", async () => {
+    // No stale sessions — cleanup should still be called without error
+    prisma.scrapingSession.findMany.mockResolvedValue([]);
 
-    // Simulate the cron tick sequence manually
-    await cleanupStaleSessions();
-    const canProceed = await acquireSessionLock();
+    await startScrapingJobs();
 
-    expect(prisma.scrapingSession.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "canceled" }) })
+    // findMany must have been called (that is the startup cleanup query)
+    expect(prisma.scrapingSession.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: "running" }) })
     );
-    expect(canProceed).toBe(true);
   });
 
-  test("second developer process backs off when first already created a session", async () => {
-    // Developer 1 started a session 30 seconds ago (within the 10-min lock window)
-    prisma.scrapingSession.findFirst.mockResolvedValue({
-      id:        "dev1-session",
-      startedAt: new Date(Date.now() - 30 * 1000),
-    });
+  test("cancels a stale session found during startup — no need to wait for next Saturday", async () => {
+    // Session stuck in "running" from a previous force-kill
+    prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession({ id: "stuck-at-start" })]);
 
-    const canProceed = await acquireSessionLock();
+    await startScrapingJobs();
 
-    // Developer 2 should NOT proceed
-    expect(canProceed).toBe(false);
+    expect(prisma.scrapingSession.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "stuck-at-start" },
+        data:  expect.objectContaining({ status: "canceled" }),
+      })
+    );
+  });
+
+  test("sends interruption email at startup for a stuck session", async () => {
+    prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession({ id: "startup-stale" })]);
+
+    await startScrapingJobs();
+
+    expect(mockSendCompletionNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "startup-stale", isInterrupted: true })
+    );
+  });
+
+  test("does not crash if startup cleanup throws — server still starts", async () => {
+    prisma.scrapingSession.findMany.mockRejectedValue(new Error("DB unreachable at startup"));
+
+    await expect(startScrapingJobs()).resolves.not.toThrow();
+  });
+
+  test("registers the cron job after cleanup completes", async () => {
+    prisma.scrapingSession.findMany.mockResolvedValue([]);
+    const cron = require("node-cron");
+
+    await startScrapingJobs();
+
+    expect(cron.schedule).toHaveBeenCalledWith(
+      "0 6 * * 6",
+      expect.any(Function),
+      expect.objectContaining({ timezone: "UTC" })
+    );
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Cron tick behaviour — cleanup runs again before each session
+// ════════════════════════════════════════════════════════════════════════════
+
+describe("cron tick — cleanup runs before each session start", () => {
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockCronCallback = null;
+    prisma.scrapingSession.findMany.mockResolvedValue([]); // no stale at startup
+    prisma.scrapingSession.update.mockResolvedValue({});
+    mockSendCompletionNotification.mockResolvedValue(undefined);
+    runScrapingSession.mockResolvedValue({ status: "completed", sessionId: "cron-sess" });
+
+    // Register the cron to capture its callback
+    await startScrapingJobs();
+  });
+
+  test("cron callback runs cleanupStaleSessions before runScrapingSession", async () => {
+    // A new stale session appears between startup and cron fire
+    prisma.scrapingSession.findMany.mockResolvedValue([makeStaleSession({ id: "cron-stale" })]);
+
+    expect(mockCronCallback).not.toBeNull();
+    await mockCronCallback();
+
+    // Cleanup should have run (update called for the new stale session)
+    expect(prisma.scrapingSession.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "cron-stale" } })
+    );
+    // Then the session should have started
+    expect(runScrapingSession).toHaveBeenCalled();
+  });
+
+  test("cron session still runs when no stale sessions found", async () => {
+    prisma.scrapingSession.findMany.mockResolvedValue([]);
+
+    expect(mockCronCallback).not.toBeNull();
+    await mockCronCallback();
+
+    expect(runScrapingSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("cron does not crash if runScrapingSession throws", async () => {
+    prisma.scrapingSession.findMany.mockResolvedValue([]);
+    runScrapingSession.mockRejectedValue(new Error("Session boom"));
+
+    expect(mockCronCallback).not.toBeNull();
+    await expect(mockCronCallback()).resolves.not.toThrow();
   });
 });

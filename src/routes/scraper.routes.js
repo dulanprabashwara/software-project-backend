@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/routes/scraper.routes.js
 // Admin-only routes — all requests must pass authentication and ADMIN role check.
 
