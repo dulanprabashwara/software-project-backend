@@ -346,7 +346,7 @@ async function startExistingArticleEditing(articleId, userId) {
             editingBackupTitle: article.title,
             editingBackupContent: article.content,
             editingBackupCoverImage: article.coverImage,
-            editingStartedAt: new Date(),
+            editingStartedAt: article.updatedAt,
           }
         : {}),
     },
