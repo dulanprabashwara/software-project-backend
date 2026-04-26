@@ -40,8 +40,6 @@ const MIN_PARAGRAPH_COUNT          = 2;   // minimum paragraph breaks required
 const CRITICAL_SUCCESS_RATE_THRESHOLD      = 50; // % — below this triggers an error alert
 const CRITICAL_FAILED_CATEGORIES_THRESHOLD = 2;  // categories with zero success triggers alert
 
-// Grace period before the process exits after a SIGTERM/SIGINT cleanup
-const CLEANUP_EXIT_DELAY_MS = 2000;
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1007,38 +1005,45 @@ async function runScrapingSession() {
   let counters   = {};
   const startTime = Date.now();
 
-  // Graceful shutdown — marks the session as canceled and emails a partial report if the process is killed
   let cleanupCalled = false;
 
-  const cleanup = async (signal) => {
+  const cleanup = (signal) => {
     if (cleanupCalled) return;
     cleanupCalled = true;
 
-    console.warn(`\n[Scraper] ⚠️  ${signal} received — canceling session...`);
+    console.warn(`\n[Scraper] ⚠️  ${signal} received — stopping.`);
 
     if (!sessionId) {
-      console.warn("[Scraper] Session not yet created — no DB update needed.");
       process.exit(0);
     }
 
-    try {
-      await prisma.scrapingSession.update({
-        where: { id: sessionId },
-        data:  { status: "canceled", completedAt: new Date(), criticalErrors: true },
-      });
+    // Sum in-memory counters accumulated so far
+    const totalSuccess   = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
+    const totalDuplicate = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
+    const totalFailure   = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
+    const totalUrlsFound = validateSessionCounters(
+      Object.values(counters).reduce((s, c) => s + c.urlsProcessed, 0),
+      totalSuccess, totalDuplicate, totalFailure
+    );
 
-      const partialReport = buildPartialReport(sessionId, startTime, config, counters);
-
-      await sendCompletionNotification(partialReport).catch((e) =>
-        console.error("[Scraper] Interruption email failed:", e.message)
-      );
-
-      console.log(`[Scraper] Session ${sessionId} marked canceled. Partial report emailed.`);
-    } catch (e) {
-      console.error("[Scraper] Cleanup failed:", e.message);
-    }
-
-    setTimeout(() => process.exit(0), CLEANUP_EXIT_DELAY_MS);
+    // Mark canceled immediately with whatever stats are in memory.
+    // reportSentAt is left null — cleanupStaleSessions() picks this up on
+    // next server start, recovers any enrichment stats from ScrapedArticle,
+    // and sends the email then. This avoids trying to send email from a
+    // dying process on a tight timeout.
+    prisma.scrapingSession.update({
+      where: { id: sessionId },
+      data: {
+        status:         "canceled",
+        completedAt:    new Date(),
+        criticalErrors: true,
+        totalUrlsFound,
+        successCount:   totalSuccess,
+        duplicateCount: totalDuplicate,
+        failureCount:   totalFailure,
+      },
+    }).catch((e) => console.error("[Scraper] DB cancel update failed:", e.message))
+      .finally(() => process.exit(0));
   };
 
   process.once("SIGTERM", () => cleanup("SIGTERM"));
@@ -1235,6 +1240,28 @@ async function runScrapingSession() {
     process.removeListener("SIGHUP",  cleanup);
 
     if (sessionId) {
+      // Read whatever partial enrichment stats were written to the session row
+      // before the crash — runEnrichmentStage now writes after each category.
+      let enrichedCount         = 0;
+      let enrichmentFailedCount = 0;
+      let aiInputTokens         = 0;
+      let aiOutputTokens        = 0;
+
+      try {
+        const partial = await prisma.scrapingSession.findUnique({
+          where:  { id: sessionId },
+          select: { enrichedCount: true, enrichmentFailedCount: true, aiInputTokens: true, aiOutputTokens: true },
+        });
+        if (partial) {
+          enrichedCount         = partial.enrichedCount         || 0;
+          enrichmentFailedCount = partial.enrichmentFailedCount || 0;
+          aiInputTokens         = partial.aiInputTokens         || 0;
+          aiOutputTokens        = partial.aiOutputTokens        || 0;
+        }
+      } catch {
+        // If this read fails the crash report still sends with zeros — acceptable
+      }
+
       await prisma.scrapingSession.update({
         where: { id: sessionId },
         data: {
@@ -1245,9 +1272,17 @@ async function runScrapingSession() {
         },
       }).catch(() => {});
 
-      // Notify admins — a crashed session produces no normal completion email,
-      // so without this admins would receive nothing and not know the session failed.
       const crashReport = buildCrashReport(sessionId, startTime, config, counters, err.message);
+
+      // Overlay the partial enrichment stats into the crash report
+      crashReport.enrichedCount   = enrichedCount;
+      crashReport.enrichmentFailed = enrichmentFailedCount;
+      crashReport.aiTokenUsage     = {
+        inputTokens:      aiInputTokens,
+        outputTokens:     aiOutputTokens,
+        estimatedCostUSD: 0,
+      };
+
       await sendCompletionNotification(crashReport).catch((e) =>
         console.error("[Scraper] Crash notification email failed:", e.message)
       );
