@@ -12,6 +12,7 @@ const STALE_SESSION_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
 // Finds sessions stuck in "running" status for too long, marks them as canceled, and emails a partial report.
 // Called both at server startup and before each cron run to catch sessions left by any previous crash.
+
 async function cleanupStaleSessions() {
   const cutoff = new Date(Date.now() - STALE_SESSION_TIMEOUT_MS);
 
@@ -41,6 +42,49 @@ async function cleanupStaleSessions() {
   for (const session of staleSessions) {
     const durationMinutes = (Date.now() - new Date(session.startedAt).getTime()) / 60000;
 
+   
+    // Derive the real counts from ScrapedArticle rows tagged with this sessionId 
+    let successCount   = session.successCount   || 0;
+    let duplicateCount = session.duplicateCount || 0;
+    let failureCount   = session.failureCount   || 0;
+    let enrichedCount  = session.enrichedCount  || 0;
+
+    const sessionHasNoStats = successCount === 0 && duplicateCount === 0 && failureCount === 0;
+
+    if (sessionHasNoStats) {
+      try {
+        // Count articles actually saved before the kill
+        const savedArticles = await prisma.scrapedArticle.count({
+          where: { sessionId: session.id },
+        });
+        // Count how many were enriched (have a non-null summary)
+        const enrichedArticles = await prisma.scrapedArticle.count({
+          where: { sessionId: session.id, summary: { not: null } },
+        });
+
+        successCount  = savedArticles;
+        enrichedCount = enrichedArticles;
+
+        console.log(
+          `[Cron] Session ${session.id} — recovered stats from ScrapedArticle: ` +
+          `${savedArticles} saved, ${enrichedArticles} enriched`
+        );
+
+        // Write recovered stats back to the session row so future reads are correct
+        await prisma.scrapingSession.update({
+          where: { id: session.id },
+          data: {
+            successCount:  savedArticles,
+            enrichedCount: enrichedArticles,
+            totalUrlsFound: savedArticles,
+          },
+        }).catch((e) => console.error(`[Cron] Failed to write recovered stats for ${session.id}: ${e.message}`));
+
+      } catch (e) {
+        console.error(`[Cron] Failed to recover stats for session ${session.id}: ${e.message}`);
+      }
+    }
+
     await prisma.scrapingSession.update({
       where: { id: session.id },
       data: {
@@ -56,26 +100,29 @@ async function cleanupStaleSessions() {
     try {
       const { sendCompletionNotification } = require("../services/email.service");
 
+      const totalUrlsFound = successCount + duplicateCount + failureCount;
+      const attempted      = successCount + failureCount;
+
       await sendCompletionNotification({
         sessionId:            session.id,
         startedAt:            session.startedAt,
         completedAt:          new Date().toISOString(),
         durationMinutes:      parseFloat(durationMinutes.toFixed(2)),
         totalSources:         session.totalSources,
-        totalUrlsFound:       session.successCount + session.duplicateCount + session.failureCount,
-        successCount:         session.successCount,
-        duplicateCount:       session.duplicateCount,
-        failureCount:         session.failureCount,
-        successRate:          null,
-        enrichedCount:        session.enrichedCount,
+        totalUrlsFound,
+        successCount,
+        duplicateCount,
+        failureCount,
+        successRate:          attempted > 0 ? parseFloat(((successCount / attempted) * 100).toFixed(2)) : null,
+        enrichedCount,
         enrichmentFailed:     0,
-        totalKeywordsCovered: session.keywordsCoveredCount,
+        totalKeywordsCovered: session.keywordsCoveredCount || 0,
         totalKeywordsEmpty:   0,
         keywordsWithContent:  [],
         keywordsWithoutContent: [],
         aiTokenUsage: {
-          inputTokens:      session.aiInputTokens,
-          outputTokens:     session.aiOutputTokens,
+          inputTokens:      session.aiInputTokens  || 0,
+          outputTokens:     session.aiOutputTokens || 0,
           estimatedCostUSD: 0,
         },
         criticalErrors: true,
