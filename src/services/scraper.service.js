@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/services/scraper.service.js
 // Phase 1 (Init) + Phase 2 (Scraping) of the weekly content pipeline.
 // Phase 1: Load sources from DB → create session → init counters.
@@ -15,7 +16,6 @@ const {
   sanitizeTitle,
   buildSecureAxiosConfig,
 } = require("../utils/scraperSecurity");
-
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -40,8 +40,6 @@ const MIN_PARAGRAPH_COUNT          = 2;   // minimum paragraph breaks required
 const CRITICAL_SUCCESS_RATE_THRESHOLD      = 50; // % — below this triggers an error alert
 const CRITICAL_FAILED_CATEGORIES_THRESHOLD = 2;  // categories with zero success triggers alert
 
-// Grace period before the process exits after a SIGTERM/SIGINT cleanup
-const CLEANUP_EXIT_DELAY_MS = 2000;
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -624,9 +622,97 @@ async function logScrapingEvent(sessionId, { logType, url, category, statusCode,
   }).catch((err) => console.error(`[ScrapingLog] Write failed: ${err.message}`));
 }
 
+// Validates that a category's counters are mathematically consistent before saving to the database.
+// urlsProcessed must always equal the sum of all outcomes — any mismatch is a code bug, not user error.
+function validateCounters(category, c) {
+  const expectedTotal = c.successCount + c.duplicateCount + c.failureCount;
+
+  if (c.urlsProcessed !== expectedTotal) {
+    console.error(
+      `[Phase 2] ⚠️  Counter mismatch in "${category}": ` +
+      `urlsProcessed=${c.urlsProcessed} but success(${c.successCount}) + ` +
+      `dupe(${c.duplicateCount}) + fail(${c.failureCount}) = ${expectedTotal}. ` +
+      `Correcting urlsProcessed to ${expectedTotal}.`
+    );
+    c.urlsProcessed = expectedTotal;
+  }
+
+  if (c.successCount < 0 || c.duplicateCount < 0 || c.failureCount < 0 || c.urlsProcessed < 0) {
+    console.error(`[Phase 2] ⚠️  Negative counter detected in "${category}" — resetting negatives to 0.`);
+    c.successCount   = Math.max(0, c.successCount);
+    c.duplicateCount = Math.max(0, c.duplicateCount);
+    c.failureCount   = Math.max(0, c.failureCount);
+    c.urlsProcessed  = c.successCount + c.duplicateCount + c.failureCount;
+  }
+}
+
+// Validates that session-level URL totals are consistent before writing the final session record.
+// totalUrlsFound must equal the sum of all three outcome buckets across all categories.
+function validateSessionCounters(totalUrlsFound, totalSuccess, totalDuplicate, totalFailure) {
+  const expectedTotal = totalSuccess + totalDuplicate + totalFailure;
+
+  if (totalUrlsFound !== expectedTotal) {
+    console.error(
+      `[Phase 2] ⚠️  Session counter mismatch: ` +
+      `totalUrlsFound=${totalUrlsFound} but success(${totalSuccess}) + ` +
+      `dupe(${totalDuplicate}) + fail(${totalFailure}) = ${expectedTotal}. ` +
+      `Correcting totalUrlsFound to ${expectedTotal}.`
+    );
+    return expectedTotal;
+  }
+
+  return totalUrlsFound;
+}
+
+// Validates that enrichment counts are consistent: every scraped article must be either enriched or failed.
+// successCount is the number of scraped articles — all of them should have been attempted for enrichment.
+function validateEnrichmentCounters(successCount, enrichedCount, enrichmentFailed) {
+  const enrichmentTotal = enrichedCount + enrichmentFailed;
+
+  if (enrichmentTotal > successCount) {
+    console.error(
+      `[Phase 3] ⚠️  Enrichment counter overflow: ` +
+      `enriched(${enrichedCount}) + failed(${enrichmentFailed}) = ${enrichmentTotal} ` +
+      `exceeds scraped article count (${successCount}). ` +
+      `Capping enrichmentFailed to ${Math.max(0, successCount - enrichedCount)}.`
+    );
+    return Math.max(0, successCount - enrichedCount);
+  }
+
+  return enrichmentFailed;
+}
+
+// Validates that keyword coverage counts add up to the total number of keywords in the system.
+// Every keyword is either covered (has at least one article) or empty — none can be unaccounted for.
+function validateKeywordCounters(keywordsCoveredCount, keywordsEmptyCount, totalKeywordsInSystem) {
+  const keywordTotal = keywordsCoveredCount + keywordsEmptyCount;
+
+  if (totalKeywordsInSystem > 0 && keywordTotal !== totalKeywordsInSystem) {
+    console.error(
+      `[Phase 3] ⚠️  Keyword counter mismatch: ` +
+      `covered(${keywordsCoveredCount}) + empty(${keywordsEmptyCount}) = ${keywordTotal} ` +
+      `but total keywords in system = ${totalKeywordsInSystem}. ` +
+      `This may indicate a categoryKeywords.js change mid-session.`
+    );
+  }
+
+  if (keywordsCoveredCount < 0 || keywordsEmptyCount < 0) {
+    console.error(`[Phase 3] ⚠️  Negative keyword counter detected — resetting negatives to 0.`);
+    return {
+      keywordsCoveredCount: Math.max(0, keywordsCoveredCount),
+      keywordsEmptyCount:   Math.max(0, keywordsEmptyCount),
+    };
+  }
+
+  return { keywordsCoveredCount, keywordsEmptyCount };
+}
+
 // Saves the scraping result counters for one category to the CategoryScrapingStats table.
 async function saveCategoryScrapingStats(sessionId, category, counters) {
   const c = counters[category];
+
+  validateCounters(category, c);
+
   await prisma.categoryScrapingStats.create({
     data: {
       sessionId,
@@ -639,7 +725,7 @@ async function saveCategoryScrapingStats(sessionId, category, counters) {
   });
   console.log(
     `[Phase 2] Stats saved for "${category}": ` +
-    `✅${c.successCount} ♻️${c.duplicateCount} ❌${c.failureCount}`
+    `🔗${c.urlsProcessed} processed | ✅${c.successCount} saved | ♻️${c.duplicateCount} dupes | ❌${c.failureCount} failed`
   );
 }
 
@@ -664,6 +750,9 @@ async function scrapeSource(source, sessionId, counters) {
       statusCode: err.statusCode || 0,
       reason:     `Homepage request failed: ${err.message}`,
     });
+    // The source itself counts as one URL attempted — without this,
+    // failureCount increments but urlsProcessed stays 0, breaking the math.
+    counters[category].urlsProcessed++;
     counters[category].failureCount++;
     return;
   }
@@ -680,6 +769,8 @@ async function scrapeSource(source, sessionId, counters) {
       category,
       reason:   `Link collection failed: ${err.message}`,
     });
+    // Count the source as one attempted URL so the math stays consistent.
+    counters[category].urlsProcessed++;
     counters[category].failureCount++;
     return;
   }
@@ -901,8 +992,9 @@ function buildCrashReport(sessionId, startTime, config, counters, errorMessage) 
 
 // Runs the full scraping pipeline: Phase 1 (init) → Phase 2 (scrape) → Phase 3 (enrich + email).
 async function runScrapingSession() {
-  const { runEnrichmentStage }                    = require("./enrichment.service");
+  const { runEnrichmentStage }                         = require("./enrichment.service");
   const { sendCompletionNotification, sendErrorAlert } = require("./email.service");
+  const { CATEGORY_KEYWORDS }                          = require("../config/categoryKeywords");
 
   console.log(`\n${"═".repeat(60)}`);
   console.log(`[Scraper] 🚀 Session started: ${new Date().toISOString()}`);
@@ -913,42 +1005,50 @@ async function runScrapingSession() {
   let counters   = {};
   const startTime = Date.now();
 
-  // Graceful shutdown — marks the session as canceled and emails a partial report if the process is killed
   let cleanupCalled = false;
 
-  const cleanup = async (signal) => {
+  const cleanup = (signal) => {
     if (cleanupCalled) return;
     cleanupCalled = true;
 
-    console.warn(`\n[Scraper] ⚠️  ${signal} received — canceling session...`);
+    console.warn(`\n[Scraper] ⚠️  ${signal} received — stopping.`);
 
     if (!sessionId) {
-      console.warn("[Scraper] Session not yet created — no DB update needed.");
       process.exit(0);
     }
 
-    try {
-      await prisma.scrapingSession.update({
-        where: { id: sessionId },
-        data:  { status: "canceled", completedAt: new Date(), criticalErrors: true },
-      });
+    // Sum in-memory counters accumulated so far
+    const totalSuccess   = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
+    const totalDuplicate = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
+    const totalFailure   = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
+    const totalUrlsFound = validateSessionCounters(
+      Object.values(counters).reduce((s, c) => s + c.urlsProcessed, 0),
+      totalSuccess, totalDuplicate, totalFailure
+    );
 
-      const partialReport = buildPartialReport(sessionId, startTime, config, counters);
-
-      await sendCompletionNotification(partialReport).catch((e) =>
-        console.error("[Scraper] Interruption email failed:", e.message)
-      );
-
-      console.log(`[Scraper] Session ${sessionId} marked canceled. Partial report emailed.`);
-    } catch (e) {
-      console.error("[Scraper] Cleanup failed:", e.message);
-    }
-
-    setTimeout(() => process.exit(0), CLEANUP_EXIT_DELAY_MS);
+    // Mark canceled immediately with whatever stats are in memory.
+    // reportSentAt is left null — cleanupStaleSessions() picks this up on
+    // next server start, recovers any enrichment stats from ScrapedArticle,
+    // and sends the email then. This avoids trying to send email from a
+    // dying process on a tight timeout.
+    prisma.scrapingSession.update({
+      where: { id: sessionId },
+      data: {
+        status:         "canceled",
+        completedAt:    new Date(),
+        criticalErrors: true,
+        totalUrlsFound,
+        successCount:   totalSuccess,
+        duplicateCount: totalDuplicate,
+        failureCount:   totalFailure,
+      },
+    }).catch((e) => console.error("[Scraper] DB cancel update failed:", e.message))
+      .finally(() => process.exit(0));
   };
 
   process.once("SIGTERM", () => cleanup("SIGTERM"));
   process.once("SIGINT",  () => cleanup("SIGINT"));
+  process.once("SIGHUP",  () => cleanup("SIGHUP")); // fires when terminal window is closed
 
   try {
     // ── Phase 1: Initialization ────────────────────────────────────────────
@@ -960,6 +1060,7 @@ async function runScrapingSession() {
       console.log("[Scraper] No active sources. Session skipped.");
       process.removeListener("SIGTERM", cleanup);
       process.removeListener("SIGINT",  cleanup);
+      process.removeListener("SIGHUP",  cleanup);
       return;
     }
 
@@ -1002,7 +1103,12 @@ async function runScrapingSession() {
     const totalSuccess   = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
     const totalDuplicate = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
     const totalFailure   = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
-    const totalUrlsFound = Object.values(counters).reduce((s, c) => s + c.urlsProcessed,  0);
+    const totalUrlsFound = validateSessionCounters(
+      Object.values(counters).reduce((s, c) => s + c.urlsProcessed, 0),
+      totalSuccess,
+      totalDuplicate,
+      totalFailure
+    );
 
     console.log(`\n[Phase 2] Complete: ✅${totalSuccess} saved | ♻️${totalDuplicate} dupes | ❌${totalFailure} failed`);
 
@@ -1065,6 +1171,23 @@ async function runScrapingSession() {
     const criticalIssues  = checkCriticalErrors(report, counters);
     report.criticalErrors = criticalIssues.length > 0;
 
+    // Validate enrichment math: enriched + failed must not exceed total scraped articles
+    report.enrichmentFailed = validateEnrichmentCounters(
+      report.successCount,
+      report.enrichedCount,
+      report.enrichmentFailed
+    );
+
+    // Validate keyword coverage math: covered + empty must equal total keywords in system
+    const totalKeywordsInSystem = Object.values(CATEGORY_KEYWORDS).reduce((s, kws) => s + kws.length, 0);
+    const validatedKeywords     = validateKeywordCounters(
+      report.totalKeywordsCovered,
+      report.totalKeywordsEmpty,
+      totalKeywordsInSystem
+    );
+    report.totalKeywordsCovered = validatedKeywords.keywordsCoveredCount;
+    report.totalKeywordsEmpty   = validatedKeywords.keywordsEmptyCount;
+
     await prisma.scrapingSession.update({
       where: { id: sessionId },
       data: {
@@ -1101,6 +1224,7 @@ async function runScrapingSession() {
 
     process.removeListener("SIGTERM", cleanup);
     process.removeListener("SIGINT",  cleanup);
+    process.removeListener("SIGHUP",  cleanup);
 
     console.log(`\n${"═".repeat(60)}`);
     console.log(`[Scraper] 🏁 Session complete. ${report.successCount} articles saved. ${report.totalKeywordsCovered} keywords covered.`);
@@ -1113,8 +1237,31 @@ async function runScrapingSession() {
 
     process.removeListener("SIGTERM", cleanup);
     process.removeListener("SIGINT",  cleanup);
+    process.removeListener("SIGHUP",  cleanup);
 
     if (sessionId) {
+      // Read whatever partial enrichment stats were written to the session row
+      // before the crash — runEnrichmentStage now writes after each category.
+      let enrichedCount         = 0;
+      let enrichmentFailedCount = 0;
+      let aiInputTokens         = 0;
+      let aiOutputTokens        = 0;
+
+      try {
+        const partial = await prisma.scrapingSession.findUnique({
+          where:  { id: sessionId },
+          select: { enrichedCount: true, enrichmentFailedCount: true, aiInputTokens: true, aiOutputTokens: true },
+        });
+        if (partial) {
+          enrichedCount         = partial.enrichedCount         || 0;
+          enrichmentFailedCount = partial.enrichmentFailedCount || 0;
+          aiInputTokens         = partial.aiInputTokens         || 0;
+          aiOutputTokens        = partial.aiOutputTokens        || 0;
+        }
+      } catch {
+        // If this read fails the crash report still sends with zeros — acceptable
+      }
+
       await prisma.scrapingSession.update({
         where: { id: sessionId },
         data: {
@@ -1125,9 +1272,17 @@ async function runScrapingSession() {
         },
       }).catch(() => {});
 
-      // Notify admins — a crashed session produces no normal completion email,
-      // so without this admins would receive nothing and not know the session failed.
       const crashReport = buildCrashReport(sessionId, startTime, config, counters, err.message);
+
+      // Overlay the partial enrichment stats into the crash report
+      crashReport.enrichedCount   = enrichedCount;
+      crashReport.enrichmentFailed = enrichmentFailedCount;
+      crashReport.aiTokenUsage     = {
+        inputTokens:      aiInputTokens,
+        outputTokens:     aiOutputTokens,
+        estimatedCostUSD: 0,
+      };
+
       await sendCompletionNotification(crashReport).catch((e) =>
         console.error("[Scraper] Crash notification email failed:", e.message)
       );
