@@ -4,11 +4,43 @@ const KEYWORD_LIST = require("../config/keywords");
 const prisma = require("../config/prisma");
 const { generateUniqueSlug, calculateReadingTime } = require("../utils/helpers");
 
-const client = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey:  process.env.OPENROUTER_API_KEY,
-});
+// ── CONSTANTS ───────────────────────────────────────────────────────────────
 
+// Time constants
+const MS_PER_SECOND = 1000;
+const MS_PER_MINUTE = 60 * MS_PER_SECOND;
+const MS_PER_HOUR   = 60 * MS_PER_MINUTE;
+const MS_PER_DAY    = 24 * MS_PER_HOUR;
+const MS_PER_WEEK   = 7 * MS_PER_DAY;
+
+// Top AI articles settings
+const TOP_AI_ARTICLES_LIMIT = 3;
+
+// Cleanup settings
+const ONE_HOUR_MS = 60 * MS_PER_MINUTE;
+
+// Reference content settings
+const REFERENCE_ARTICLES_PER_KEYWORD = 2;
+const REFERENCE_POOL_SIZE = 20;
+const REFERENCE_KEYWORD_OFFSET_MULTIPLIER = 7;
+
+// AI response limits
+const MAX_KEYWORDS_SELECTED = 10;
+const CHOICE_INDEX = 0; // OpenAI API choice index
+
+// Token defaults
+const DEFAULT_PROMPT_TOKENS = 0;
+const DEFAULT_COMPLETION_TOKENS = 0;
+
+// Hash settings
+const HASH_BIT_MASK = 0; // 32-bit int conversion
+const HASH_SHIFT_AMOUNT = 5;
+
+// Session cache settings
+const SESSION_CACHE_TTL_MS = 2 * MS_PER_HOUR; // 2 hours
+const SESSION_CLEANUP_INTERVAL_MS = 30 * MS_PER_MINUTE; // 30 minutes
+
+// AI model configuration
 const MODELS = [
   "openai/gpt-oss-120b:free",
   "google/gemma-4-31b-it:free",
@@ -16,6 +48,12 @@ const MODELS = [
   "nousresearch/hermes-3-llama-3.1-405b:free",
   "meta-llama/llama-3.3-70b-instruct:free",
 ];
+
+// ── AI CLIENT ───────────────────────────────────────────────────────────────
+const client = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey:  process.env.OPENROUTER_API_KEY,
+});
 
 const LENGTH_CONFIG = {
   short:        { min: 300,  max: 1000,  label: "300 to 1000 words"  },
@@ -28,9 +66,9 @@ const sessionCache = new Map();
 setInterval(() => {
   const now = Date.now();
   for (const [id, s] of sessionCache.entries()) {
-    if (now - s.createdAt > 2 * 60 * 60 * 1000) sessionCache.delete(id);
+    if (now - s.createdAt > SESSION_CACHE_TTL_MS) sessionCache.delete(id);
   }
-}, 30 * 60 * 1000);
+}, SESSION_CLEANUP_INTERVAL_MS);
 
 // ─── AI helpers ───────────────────────────────────────────────────────────────
 
@@ -80,14 +118,13 @@ function countWords(text) {
 //     dayOfYear + hash of authorId + keyword position
 
 
-const REFERENCE_ARTICLES_PER_KEYWORD = 2;
 
 // Simple numeric hash of a string — used to make per-user offset
 function simpleHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0; // convert to 32-bit int
+    hash = ((hash << HASH_SHIFT_AMOUNT) - hash) + str.charCodeAt(i);
+    hash |= HASH_BIT_MASK; // convert to 32-bit int
   }
   return Math.abs(hash);
 }
@@ -97,7 +134,7 @@ async function fetchReferenceContent(selectedKeywords, authorId) {
 
   const today     = new Date();
   const dayOfYear = Math.floor(
-    (today - new Date(today.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24)
+    (today.getTime() - new Date(today.getFullYear(), 0, 0).getTime()) / MS_PER_DAY
   );
 
   // Per-user offset — different user ID produces a different base offset
@@ -113,7 +150,7 @@ async function fetchReferenceContent(selectedKeywords, authorId) {
       },
       orderBy: { scrapedAt: "desc" },
       select:  { id: true, title: true, summary: true },
-      take:    20,
+      take:    REFERENCE_POOL_SIZE,
     });
 
     if (articles.length === 0) {
@@ -123,7 +160,7 @@ async function fetchReferenceContent(selectedKeywords, authorId) {
 
     // Combine day, user hash, and keyword position for the final offset
     const keywordPos  = selectedKeywords.indexOf(keyword);
-    const finalOffset = (dayOfYear + userOffset + keywordPos * 7) % articles.length;
+    const finalOffset = (dayOfYear + userOffset + keywordPos * REFERENCE_KEYWORD_OFFSET_MULTIPLIER) % articles.length;
    
     let fetchedForKeyword = 0;
     for (let i = 0; i < REFERENCE_ARTICLES_PER_KEYWORD; i++) {
@@ -192,7 +229,7 @@ async function analyzePrompt(userInput) {
 
   const { content: raw, usage } = await callAI(messages);
   const parsed   = parseAIJson(raw);
-  const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 10) : [];
+  const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, MAX_KEYWORDS_SELECTED) : [];
 
   const sessionId = uuidv4();
   sessionCache.set(sessionId, {
@@ -714,4 +751,5 @@ module.exports = {
   getTrendingKeywords,
   getTopAIArticles,
   setUserResponse,
+  sessionCache,
 };

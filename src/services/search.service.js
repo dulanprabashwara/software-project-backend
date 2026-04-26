@@ -1,12 +1,30 @@
 const prisma = require("../config/prisma");
 
+// ── CONSTANTS ───────────────────────────────────────────────────────
+
+// Search limits
+const DEFAULT_SEARCH_LIMIT = 10;
+const TITLE_MATCH_LIMIT = 50;
+const SUMMARY_MATCH_LIMIT = 50;
+const AUTOCOMPLETE_ARTICLES_LIMIT = 5;
+const AUTOCOMPLETE_USERS_LIMIT = 3;
+const AUTOCOMPLETE_MIN_QUERY_LENGTH = 2;
+
+// Engagement scoring
+const ENGAGEMENT_RATING_MULTIPLIER = 10;
+const ENGAGEMENT_COMMENT_MULTIPLIER = 2;
+const FOLLOWER_ARTICLE_MULTIPLIER = 10;
+
+// Pagination
+const SEARCH_RESULTS_MULTIPLIER = 5;
+
 // Computes an engagement score for ranking article search results.
 // Uses averageRating × ratingCount as the primary signal (reflects both
 // quality and popularity), supplemented by read count and comment count.
 const computeEngagement = (article) =>
-  (article.averageRating || 0) * (article.ratingCount || 0) * 10 +
+  (article.averageRating || 0) * (article.ratingCount || 0) * ENGAGEMENT_RATING_MULTIPLIER +
   (article.readCount     || 0) +
-  (article.commentCount  || 0) * 2;
+  (article.commentCount  || 0) * ENGAGEMENT_COMMENT_MULTIPLIER;
 
 const ARTICLE_AUTHOR_SELECT = {
   author: {
@@ -29,7 +47,7 @@ const sortByEngagement = (articles) =>
 // Title matches are always ranked above summary matches.
 // Within each group, results are ordered by engagement score.
 // When currentUserId is provided, stamps isSaved on each result.
-const searchArticles = async ({ query, page = 1, limit = 10, currentUserId = null }) => {
+const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, currentUserId = null }) => {
   const q = (query || "").trim();
   if (!q) return { articles: [], total: 0, page, limit, totalPages: 0 };
 
@@ -40,7 +58,7 @@ const searchArticles = async ({ query, page = 1, limit = 10, currentUserId = nul
     where: { ...publishedFilter, ...caseInsensitive("title") },
     include: ARTICLE_AUTHOR_SELECT,
     orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }, { readCount: "desc" }],
-    take: 50,
+    take: TITLE_MATCH_LIMIT,
   });
 
   const titleIds = titleMatches.map((a) => a.id);
@@ -53,7 +71,7 @@ const searchArticles = async ({ query, page = 1, limit = 10, currentUserId = nul
     },
     include: ARTICLE_AUTHOR_SELECT,
     orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }, { readCount: "desc" }],
-    take: 50,
+    take: SUMMARY_MATCH_LIMIT,
   });
 
   const total = await prisma.article.count({
@@ -91,7 +109,7 @@ const searchArticles = async ({ query, page = 1, limit = 10, currentUserId = nul
 // Searches users by username or displayName.
 // Results are ranked by follower_score = totalFollowers + (articleCount × 10).
 // When currentUserId is provided, stamps isFollowing on each result.
-const searchUsers = async ({ query, page = 1, limit = 10, currentUserId = null }) => {
+const searchUsers = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, currentUserId = null }) => {
   const q = (query || "").trim();
   if (!q) return { users: [], total: 0, page, limit, totalPages: 0 };
 
@@ -115,14 +133,14 @@ const searchUsers = async ({ query, page = 1, limit = 10, currentUserId = null }
         stats:  { select: { totalFollowers: true, articleCount: true } },
         _count: { select: { articles: true, followers: true } },
       },
-      take: Math.max(limit * 5, 50),
+      take: Math.max(limit * SEARCH_RESULTS_MULTIPLIER, 50),
     }),
     prisma.user.count({ where: nameFilter }),
   ]);
 
   const followerScore = (u) =>
     (u.stats?.totalFollowers ?? u._count?.followers ?? 0) +
-    (u.stats?.articleCount   ?? u._count?.articles  ?? 0) * 10;
+    (u.stats?.articleCount   ?? u._count?.articles  ?? 0) * FOLLOWER_ARTICLE_MULTIPLIER;
 
   const sorted    = [...rawUsers].sort((a, b) => followerScore(b) - followerScore(a));
   const skip      = (page - 1) * limit;
@@ -153,14 +171,14 @@ const searchUsers = async ({ query, page = 1, limit = 10, currentUserId = null }
 // Returns up to 5 article titles and 3 user names. Minimum query length: 2.
 const getSearchSuggestions = async (query) => {
   const q = (query || "").trim();
-  if (q.length < 2) return { articles: [], users: [] };
+  if (q.length < AUTOCOMPLETE_MIN_QUERY_LENGTH) return { articles: [], users: [] };
 
   const [articles, users] = await Promise.all([
     prisma.article.findMany({
       where: { status: "PUBLISHED", title: { contains: q, mode: "insensitive" } },
       select:  { id: true, title: true, slug: true },
       orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }],
-      take: 5,
+      take: AUTOCOMPLETE_ARTICLES_LIMIT,
     }),
     prisma.user.findMany({
       where: {
@@ -170,7 +188,7 @@ const getSearchSuggestions = async (query) => {
         ],
       },
       select: { id: true, username: true, displayName: true, avatarUrl: true },
-      take: 3,
+      take: AUTOCOMPLETE_USERS_LIMIT,
     }),
   ]);
 

@@ -2,9 +2,20 @@ const axios = require("axios");
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 
-const WP_OAUTH_BASE = "https://public-api.wordpress.com/oauth2";
-const WP_API_BASE   = "https://public-api.wordpress.com/rest/v1.1";
+// ── CONSTANTS ───────────────────────────────────────────────────────
 
+// Timeouts
+const MEDIA_UPLOAD_TIMEOUT_MS = 30000;
+const POST_PUBLISH_TIMEOUT_MS = 15000;
+
+// File extensions
+const DEFAULT_IMAGE_EXTENSION = "jpg";
+
+// API version
+const WORDPRESS_API_VERSION = "rest/v1.1";
+
+const WP_OAUTH_BASE = "https://public-api.wordpress.com/oauth2";
+const WP_API_BASE   = "https://public-api.wordpress.com/" + WORDPRESS_API_VERSION;
 
 const stripProtocol = (url = "") =>
   url.replace(/^https?:\/\//, "").replace(/\/$/, "");
@@ -41,7 +52,7 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
           "Content-Type":      mimeType,
           "Content-Disposition": `attachment; filename="cover.${ext}"`,
         },
-        timeout: 30000,
+        timeout: MEDIA_UPLOAD_TIMEOUT_MS,
       });
       return res.data?.ID || null;
     }
@@ -204,7 +215,7 @@ const pushArticleToWordPress = async (article, connection) => {
       buildWpPostBody(article, "publish", featuredMediaId),
       {
         headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
-        timeout: 15000,
+        timeout: POST_PUBLISH_TIMEOUT_MS,
       }
     );
     wpRes = res.data;
@@ -229,7 +240,7 @@ const attemptDraftSave = async (article, connection) => {
       buildWpPostBody(article, "draft", featuredMediaId),
       {
         headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
-        timeout: 15000,
+        timeout: POST_PUBLISH_TIMEOUT_MS,
       }
     );
     return `https://wordpress.com/posts/${stripProtocol(connection.siteUrl)}`;
