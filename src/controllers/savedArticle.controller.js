@@ -1,89 +1,60 @@
-const prisma = require("../config/prisma");
+const savedArticleService = require("../services/savedArticle.service");
 
-/**
- * @description Fetch all saved articles for the logged-in user
- * Route: GET /api/saved-articles
- */
+ //function to get already saved articles
 const getMySavedArticles = async (req, res) => {
   try {
-    const userId = req.user.id;
-
-    // Fetch the junction table records
-    const savedRecords = await prisma.savedArticle.findMany({
-      where: { userId: userId },
-      orderBy: { savedAt: 'desc' }, // Newest saves first
-      include: {
-        article: {
-          include: {
-            author: {
-              select: { id: true, displayName: true, avatarUrl: true, isPremium: true }
-            },
-            _count: {
-              select: { comments: true }
-            }
-          }
-        }
-      }
-    });
-
-    // Extract the nested 'article' objects into a flat array for the frontend
-    const articles = savedRecords.map(record => ({
-      ...record.article,
-      savedAt: record.savedAt // Optional: Keep track of exactly when they saved it
-    }));
+    const userId = req.user.id; // Extract from Auth middleware
+    
+    // Call the Service
+    const articles = await savedArticleService.getUserSavedArticles(userId);
 
     res.status(200).json({ success: true, data: articles });
   } catch (error) {
     console.error("Fetch Saved Articles Error:", error.message);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: "Failed to fetch saved articles." });
   }
 };
 
-/**
- * @description Save an article for the user
- * Route: POST /api/saved-articles
- */
+ 
 const saveArticle = async (req, res) => {
   try {
     const { articleId } = req.body;
     const userId = req.user.id;
 
-    const savedArticle = await prisma.savedArticle.create({
-      data: { userId, articleId },
-    });
+    // Call the Service
+    const savedArticle = await savedArticleService.createSavedArticle(userId, articleId);
 
     res.status(201).json({ success: true, data: savedArticle });
-  } catch (error) {
-    if (error.code === 'P2002') {
+  } 
+  
+  catch (error) {
+    // Handle the custom error thrown by our Service
+    if (error.isDuplicate) {
       return res.status(200).json({ success: true, message: "Already saved" });
     }
+    
     console.error("Save Article Error:", error.message);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: "Failed to save article." });
   }
 };
 
-/**
- * @description Remove a saved article
- * Route: DELETE /api/saved-articles
- */
 const unsaveArticle = async (req, res) => {
   try {
     const articleId = req.body.id || req.body.articleId;
     const userId = req.user.id;
 
-    await prisma.savedArticle.delete({
-      where: {
-        userId_articleId: { userId, articleId },
-      },
-    });
+    // Call the Service
+    await savedArticleService.removeSavedArticle(userId, articleId);
 
     res.status(200).json({ success: true, message: "Article unsaved" });
   } catch (error) {
-    if (error.code === 'P2025') {
+    // Handle the custom error thrown by our Service
+    if (error.isMissing) {
       return res.status(200).json({ success: true, message: "Already unsaved" });
     }
+
     console.error("Unsave Article Error:", error.message);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: "Failed to unsave article." });
   }
 };
 
