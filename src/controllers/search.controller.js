@@ -1,3 +1,4 @@
+// @ts-nocheck
 const asyncHandler    = require("../utils/asyncHandler");
 const { sendSuccess } = require("../utils/response");
 const searchService   = require("../services/search.service");

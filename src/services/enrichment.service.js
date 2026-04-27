@@ -405,6 +405,19 @@ async function runEnrichmentStage(sessionId) {
       totalEnriched += enriched;
       totalFailed   += failed;
     }
+
+    // Write partial enrichment progress to the session row after each category.
+      await prisma.scrapingSession.update({
+      where: { id: sessionId },
+      data: {
+        enrichedCount:         totalEnriched,
+        enrichmentFailedCount: totalFailed,
+        aiInputTokens:         tokenTracker.inputTokens,
+        aiOutputTokens:        tokenTracker.outputTokens,
+      },
+    }).catch((e) =>
+      console.error(`[Enrichment] Failed to write partial stats after "${category}": ${e.message}`)
+    );
   }
 
   const { keywordsWithContent, keywordsWithoutContent } = await buildKeywordCoverageReport(sessionId);
