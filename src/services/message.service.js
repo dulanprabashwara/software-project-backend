@@ -2,7 +2,7 @@ const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 
 /**
- * Get conversation history between two users.
+ * Get conversation history and message count between two users.
  */
 const getConversation = async (userId, otherUserId, page = 1, limit = 50) => {
   const skip = (page - 1) * limit;
@@ -43,10 +43,10 @@ const getConversation = async (userId, otherUserId, page = 1, limit = 50) => {
 };
 
 /**
- * Get list of conversations (latest message from each unique user).
+ * Get list of conversations and latest message from each conversation to display in the sidebar
  */
 const getConversationList = async (userId) => {
-  // Get all unique users the current user has exchanged messages with
+  // find the ID of every single person you have chatted with
   const sent = await prisma.message.findMany({
     where: { senderId: userId },
     select: { receiverId: true },
@@ -79,7 +79,7 @@ const getConversationList = async (userId) => {
       orderBy: { sentAt: "desc" },
     });
 
-    // Count unread messages from this user
+    //get unread message count that the other user sent to you
     const unreadCount = await prisma.message.count({
       where: {
         senderId: otherUserId,
@@ -108,7 +108,7 @@ const getConversationList = async (userId) => {
     });
   }
 
-  // Sort conversations by the most recent message
+  // Sort conversations list by the most recent message
   conversations.sort((a, b) => {
     const timeA = a.lastMessage ? new Date(a.lastMessage.sentAt).getTime() : 0;
     const timeB = b.lastMessage ? new Date(b.lastMessage.sentAt).getTime() : 0;
@@ -119,7 +119,7 @@ const getConversationList = async (userId) => {
 };
 
 /**
- * Mark all messages from a sender as read.
+ * Mark all messages from a sender as read when open the chat
  */
 const markAsRead = async (userId, senderId) => {
   await prisma.message.updateMany({
@@ -133,7 +133,7 @@ const markAsRead = async (userId, senderId) => {
 };
 
 /**
- * Get total unread message count.
+ * Get total unread message count across all chats
  */
 const getUnreadCount = async (userId) => {
   const count = await prisma.message.count({
