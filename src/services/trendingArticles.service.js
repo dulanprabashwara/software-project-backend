@@ -1,12 +1,13 @@
 const prisma = require("../config/prisma");
 
 const fetchTrendingTitles = async () => {
+    const limit = 5;
   return await prisma.article.findMany({
     // Note: Kept "DRAFT" here to match your original code, 
     // but double-check if you actually meant "PUBLISHED" for trending!
     where: { status: "DRAFT" },
     orderBy: { trendingScore: 'desc' },
-    take: 5,
+    take: limit,
     select: {
       id: true,
       title: true,
@@ -19,9 +20,12 @@ const fetchTrendingTitles = async () => {
 };
 
 const fetchTrendingArticles = async () => {
-  return await prisma.article.findMany({
+const limit = 10;
+  
+return await prisma.article.findMany({
     where: { status: "PUBLISHED" }, 
     orderBy: { trendingScore: "desc" },
+    take: limit,
     include: {
       author: {
         select: {

@@ -15,6 +15,20 @@ const getMySavedArticles = async (req, res) => {
   }
 };
 
+const getMySavedList = async (req, res) => {
+  try {
+    const userId = req.user.id; // Extract from Auth middleware
+    
+    // Call the Service
+    const articles = await savedArticleService.getSavedList(userId);
+
+    res.status(200).json({ success: true, data: articles });
+  } catch (error) {
+    console.error("Fetch Saved Articles Error:", error.message);
+    res.status(500).json({ success: false, message: "Failed to fetch saved List" });
+  }
+};
+
  
 const saveArticle = async (req, res) => {
   try {
@@ -62,4 +76,5 @@ module.exports = {
   getMySavedArticles,
   saveArticle,
   unsaveArticle,
+  getMySavedList
 };

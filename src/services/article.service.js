@@ -763,6 +763,7 @@ async function getUserScheduledArticles(userId, page = 1, limit = 10) {
             username: true,
             displayName: true,
             avatarUrl: true,
+            isPremium:true,
           },
         },
         _count: {

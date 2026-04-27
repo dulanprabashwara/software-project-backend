@@ -5,10 +5,16 @@ const prisma = require("../config/prisma");
  */
 const updateCommentCount = async (articleId) => {
   try {
+      const commentcount = await prisma.Comment.aggregate({
+      where: { articleId: articleId },
+      _count: { articleId: true }
+    });
+
+
     const updatedArticle = await prisma.article.update({
       where: { id: articleId },
       data: {
-        commentCount: { increment: 1 } // Safely adds 1 to the current count
+        commentCount:commentcount ._count.articleId// Safely adds 1 to the current count
       }
     });
     
