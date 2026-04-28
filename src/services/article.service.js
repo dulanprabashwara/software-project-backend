@@ -7,7 +7,8 @@ const {
   calculateReadingTime,
 } = require("../utils/helpers");
 
-const ARTICLE_STATUS = Object.freeze({
+// Keep article status values in one place to avoid typo-based bugs.
+const ARTICLE_STATUS = Object.freeze({ 
   EDITING: "EDITING",
   DRAFT: "DRAFT",
   PUBLISHED: "PUBLISHED",
@@ -15,6 +16,20 @@ const ARTICLE_STATUS = Object.freeze({
 });
 
 const MAX_TAGS = 5;
+
+// Reuse the same author fields across article queries so response shape stays consistent.
+const BASIC_AUTHOR_SELECT = { 
+  id: true,
+  username: true,
+  displayName: true,
+  avatarUrl: true,
+};
+
+const ARTICLE_AUTHOR_INCLUDE = {
+  author: {
+    select: BASIC_AUTHOR_SELECT,
+  },
+};
 
 function normalizeArticleStatus(status) {
   if (!status) return ARTICLE_STATUS.EDITING;
@@ -43,6 +58,7 @@ function requireCompleteArticle({ title, content }, status) {
   }
 }
 
+// Normalize tags before saving so duplicate tags with different casing are treated as the same tag.
 function normalizeTags(tags) {
   if (tags === undefined) {
     return undefined;
@@ -70,6 +86,7 @@ function normalizeTags(tags) {
   return normalized;
 }
 
+// Scheduled articles must have a valid future date before they can be saved.
 function parseScheduledAt(value) {
   if (!value) {
     throw ApiError.badRequest("scheduledAt is required when scheduling an article.");
@@ -88,6 +105,7 @@ function parseScheduledAt(value) {
   return scheduledAt;
 }
 
+// These fields store the original article before edit-existing starts.
 function buildEditExistingPayload(payload) {
   return {
     title: payload.title?.trim() || "Untitled",
@@ -115,6 +133,7 @@ function buildClearedEditingBackupData() {
   };
 }
 
+// Only update the timestamp when visible article content actually changed.
 function shouldUpdateArticleTimestamp(existingArticle, updateData) {
   return (
     (updateData.title !== undefined && updateData.title !== existingArticle.title) ||
@@ -126,6 +145,26 @@ function shouldUpdateArticleTimestamp(existingArticle, updateData) {
   );
 }
 
+// Compare edited content with the original backup, not the current edited row.
+function applyEditExistingTimestamp(article, updateData) {
+  const originalTitle = article.editingBackupTitle ?? article.title;
+  const originalContent = article.editingBackupContent ?? article.content;
+  const originalCoverImage =
+    article.editingBackupCoverImage ?? article.coverImage;
+
+  const hasMeaningfulChanges =
+    updateData.title !== originalTitle ||
+    updateData.content !== originalContent ||
+    updateData.coverImage !== originalCoverImage;
+
+  updateData.updatedAt = hasMeaningfulChanges
+    ? new Date()
+    : article.editingStartedAt || article.updatedAt;
+
+  return updateData;
+}
+
+// Most edit actions require both ownership and existence checks.
 async function getOwnedArticleOrThrow(articleId, userId) {
   const article = await prisma.article.findUnique({
     where: { id: articleId },
@@ -279,16 +318,7 @@ async function decrementPublishedArticleCount(userId) {
 async function getArticleById(articleId, userId) {
   const article = await prisma.article.findUnique({
     where: { id: articleId },
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   if (!article) {
@@ -311,16 +341,7 @@ async function getCurrentEditingArticle(userId) {
     orderBy: {
       updatedAt: "desc",
     },
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   return article || null;
@@ -334,7 +355,7 @@ async function startExistingArticleEditing(articleId, userId) {
       "Published articles cannot be edited from this page.",
     );
   }
-
+  // Create a backup only when starting a fresh edit-existing session.
   const shouldCreateBackup = article.status === ARTICLE_STATUS.DRAFT && !article.editingStartedAt;
 
   const updatedArticle = await prisma.article.update({
@@ -350,16 +371,7 @@ async function startExistingArticleEditing(articleId, userId) {
           }
         : {}),
     },
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   return updatedArticle;
@@ -390,23 +402,15 @@ async function saveExistingArticleForPreview(articleId, userId, payload) {
     updateData.slug = await generateUniqueSlug(nextTitle);
   }
 
-  updateData.updatedAt = new Date();
+  // Preview saves should not change updatedAt if the article matches its backup.
+  applyEditExistingTimestamp(article, updateData);
+
 
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
-
   return updatedArticle;
 }
 
@@ -428,16 +432,7 @@ async function startEditAsNewArticle(sourceArticleId, userId) {
         sourceArticleId,
       },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      include: {
-        author: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatarUrl: true,
-          },
-        },
-      },
+      include: ARTICLE_AUTHOR_INCLUDE,
     });
 
     if (existingCopies.length > 0) {
@@ -475,16 +470,7 @@ async function startEditAsNewArticle(sourceArticleId, userId) {
         sourceArticleId: sourceArticle.id,
         authorId: userId,
       },
-      include: {
-        author: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatarUrl: true,
-          },
-        },
-      },
+      include: ARTICLE_AUTHOR_INCLUDE,
     });
   });
 
@@ -500,16 +486,7 @@ async function createArticle(authorId, payload) {
 
   const article = await prisma.article.create({
     data: articleData,
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   if (normalizedStatus === ARTICLE_STATUS.PUBLISHED) {
@@ -525,10 +502,7 @@ async function getArticleBySlug(slug, currentUserId = null) {
     include: {
       author: {
         select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
+          ...BASIC_AUTHOR_SELECT,
           isPremium: true,
         },
       },
@@ -536,22 +510,12 @@ async function getArticleBySlug(slug, currentUserId = null) {
         where: { parentId: null },
         include: {
           author: {
-            select: {
-              id: true,
-              username: true,
-              displayName: true,
-              avatarUrl: true,
-            },
+            select: BASIC_AUTHOR_SELECT,
           },
           replies: {
             include: {
               author: {
-                select: {
-                  id: true,
-                  username: true,
-                  displayName: true,
-                  avatarUrl: true,
-                },
+                select: BASIC_AUTHOR_SELECT,
               },
             },
             orderBy: { createdAt: "asc" },
@@ -671,14 +635,7 @@ async function getUserPublishedArticles(userId, page = 1, limit = 10) {
       skip,
       take: limit,
       include: {
-        author: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatarUrl: true,
-          },
-        },
+        ...ARTICLE_AUTHOR_INCLUDE,
         _count: {
           select: {
             comments: true,
@@ -719,13 +676,7 @@ async function getPublishedArticlesByUsername(username, page = 1, limit = 10) {
       take: limit,
       include: {
         author: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatarUrl: true,
-            isPremium: true,
-          },
+          select: BASIC_AUTHOR_SELECT,
         },
         _count: {
           select: {
@@ -758,12 +709,7 @@ async function getUserScheduledArticles(userId, page = 1, limit = 10) {
       take: limit,
       include: {
         author: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatarUrl: true,
-          },
+          select: BASIC_AUTHOR_SELECT,
         },
         _count: {
           select: {
@@ -796,7 +742,7 @@ async function publishArticle(articleId, userId, payload) {
   );
 
   const tags = normalizeTags(payload.tags);
-  const timing = String(payload.timing || "now").trim().toLowerCase();
+  const timing = String(payload.timing || "now").trim().toLowerCase(); //// Publishing supports either immediate publish or scheduling for later.
 
   if (timing !== "now" && timing !== "schedule") {
     throw ApiError.badRequest("timing must be either 'now' or 'schedule'.");
@@ -821,16 +767,7 @@ async function publishArticle(articleId, userId, payload) {
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   if (
@@ -844,18 +781,7 @@ async function publishArticle(articleId, userId, payload) {
 }
 
 async function updateArticle(articleId, authorId, payload) {
-  const existingArticle = await prisma.article.findUnique({
-    where: { id: articleId },
-  });
-
-  if (!existingArticle) {
-    throw ApiError.notFound("Article not found.");
-  }
-
-  if (existingArticle.authorId !== authorId) {
-    throw ApiError.forbidden("You can only edit your own articles.");
-  }
-
+  const existingArticle = await getOwnedArticleOrThrow(articleId, authorId);
   const updateData = buildArticleUpdateData(existingArticle, payload);
 
   if (shouldUpdateArticleTimestamp(existingArticle, updateData)) {
@@ -874,16 +800,7 @@ async function updateArticle(articleId, authorId, payload) {
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   const wasPublished = existingArticle.status === ARTICLE_STATUS.PUBLISHED;
@@ -912,23 +829,15 @@ async function autosaveExistingArticle(articleId, userId, payload) {
     updateData.slug = await generateUniqueSlug(payload.title.trim());
   }
 
+  // Autosave should preserve the original timestamp when edits are reverted.
   if (shouldUpdateArticleTimestamp(article, updateData)) {
-    updateData.updatedAt = new Date();
+    applyEditExistingTimestamp(article, updateData);
   }
 
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   return updatedArticle;
@@ -953,16 +862,7 @@ async function autosaveEditAsNewArticle(articleId, userId, payload) {
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   return updatedArticle;
@@ -975,6 +875,7 @@ async function discardExistingArticleEdits(articleId, userId) {
   const restoredContent = article.editingBackupContent ?? article.content;
   const restoredCoverImage = article.editingBackupCoverImage ?? article.coverImage;
 
+  // Restore the article to the backup captured before editing started.
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: {
@@ -986,16 +887,7 @@ async function discardExistingArticleEdits(articleId, userId) {
       updatedAt: article.editingStartedAt || article.updatedAt,
       ...buildClearedEditingBackupData(),
     },
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   return updatedArticle;
@@ -1059,27 +951,22 @@ async function saveExistingArticleAsDraft(articleId, userId, payload) {
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
-
   return updatedArticle;
+
 }
 
 async function clearEditExistingBackup(articleId, userId) {
-  await getOwnedArticleOrThrow(articleId, userId);
+  const article = await getOwnedArticleOrThrow(articleId, userId);
 
+  // Clearing backup fields is metadata cleanup, so keep the article timestamp unchanged.
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
-    data: buildClearedEditingBackupData(),
+    data: {
+      ...buildClearedEditingBackupData(),
+      updatedAt: article.updatedAt,
+    },
   });
 
   return updatedArticle;
@@ -1115,16 +1002,7 @@ async function saveEditAsNewArticleAsDraft(articleId, userId, payload) {
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: updateData,
-    include: {
-      author: {
-        select: {
-          id: true,
-          username: true,
-          displayName: true,
-          avatarUrl: true,
-        },
-      },
-    },
+    include: ARTICLE_AUTHOR_INCLUDE,
   });
 
   return updatedArticle;
@@ -1206,16 +1084,7 @@ async function getUserDrafts(userId, page = 1, limit = 10, filters = {}) {
       orderBy: { updatedAt: "desc" },
       skip,
       take: limit,
-      include: {
-        author: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatarUrl: true,
-          },
-        },
-      },
+      include: ARTICLE_AUTHOR_INCLUDE,
     }),
     prisma.article.count({ where }),
   ]);

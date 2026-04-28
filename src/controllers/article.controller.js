@@ -15,6 +15,7 @@ const createArticle = asyncHandler(async (req, res) => {
   });
 });
 
+// currentUserId is optional because public users can read articles too.
 const getArticle = asyncHandler(async (req, res) => {
   const currentUserId = req.user?.id || null;
   const article = await articleService.getArticleBySlug(
@@ -49,6 +50,7 @@ const getCurrentEditing = asyncHandler(async (req, res) => {
   });
 });
 
+// Feed filters come from query params, while pagination is normalized separately.
 const getFeed = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
   const { tag, search, sortBy, authorId } = req.query;
@@ -78,6 +80,7 @@ const updateArticle = asyncHandler(async (req, res) => {
   });
 });
 
+// The response message depends on whether the article was published now or scheduled.
 const publishArticle = asyncHandler(async (req, res) => {
   const article = await articleService.publishArticle(
     req.params.id,
@@ -198,23 +201,21 @@ const saveEditExistingAsDraft = asyncHandler(async (req, res) => {
   });
 });
 
-async function saveEditExistingForPreview(req, res, next) {
-  try {
-    const article = await articleService.saveExistingArticleForPreview(
-      req.params.id,
-      req.user.id,
-      req.body,
-    );
+// Preview saves article data so the user can view it without finalizing the edit.
+async function saveEditExistingForPreview(req, res) {
+  const article = await articleService.saveExistingArticleForPreview(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
 
-    res.status(200).json({
-      success: true,
-      data: article,
-    });
-  } catch (error) {
-    next(error);
-  }
+  sendSuccess(res, {
+    message: "Article preview saved.",
+    data: article,
+  });
 }
 
+// Backup is cleared only after the edit-existing flow no longer needs restore data.
 const clearEditExistingBackup = asyncHandler(async (req, res) => {
   const article = await articleService.clearEditExistingBackup(
     req.params.id,
@@ -289,16 +290,20 @@ const recordRead = asyncHandler(async (req, res) => {
   sendSuccess(res, { message: "Read recorded." });
 });
 
+// Convert optional boolean query params into real booleans for service filters.
+function parseBooleanQuery(value) {
+  if (value === "true") 
+    return true;
+  if (value === "false") 
+    return false;
+  return undefined;
+}
+
 const getDrafts = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
 
-  let isAiGenerated;
-  if (req.query.isAiGenerated === "true") {
-    isAiGenerated = true;
-  } else if (req.query.isAiGenerated === "false") {
-    isAiGenerated = false;
-  }
-
+  const  isAiGenerated = parseBooleanQuery(req.query.isAiGenerated);
+  
   const { drafts, total } = await articleService.getUserDrafts(
     req.user.id,
     page,
@@ -314,10 +319,13 @@ const getDrafts = asyncHandler(async (req, res) => {
     message: "Drafts retrieved.",
   });
 });
-// GET /api/articles/trending
+// Trending articles are used by the article suggestion/slider UI.
 const getTrendingArticles = asyncHandler(async (req, res) => {
   const articles = await articleService.getTrendingArticles();
-  res.status(200).json({ success: true, articles });
+  sendSuccess(res, {
+    message: "Trending articles retrieved.",
+    data: articles,
+  });
 });
 
 module.exports = {
