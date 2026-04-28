@@ -924,7 +924,6 @@ async function saveExistingArticleAsDraft(articleId, userId, payload) {
   const updateData = {
     ...buildEditExistingPayload(payload),
     status: ARTICLE_STATUS.DRAFT,
-    isEdited: true,
     ...buildClearedEditingBackupData(),
   };
 
@@ -941,6 +940,8 @@ async function saveExistingArticleAsDraft(articleId, userId, payload) {
     updateData.title !== originalTitle ||
     updateData.content !== originalContent ||
     updateData.coverImage !== originalCoverImage;
+
+  updateData.isEdited = article.isEdited || hasMeaningfulChanges;
 
   if (hasMeaningfulChanges) 
     updateData.updatedAt = new Date(); // Real article changes happened
