@@ -279,6 +279,9 @@ async function startEditAsNewArticle(sourceArticleId, userId) {
 
   // Using a transaction ensures that we don't end up with partial 
   // data or multiple orphaned clones if the request fails halfway.
+  // We explicitly set a higher timeout (15s) and pass the 'tx' client to helpers.
+  // This prevents connection pool contention and 'Transaction not found' errors 
+  // that occur on slower networks or busy databases when using the default 5s timeout.
   const result = await prisma.$transaction(async (tx) => {
     const existingCopies = await tx.article.findMany({
       where: {
@@ -310,8 +313,12 @@ async function startEditAsNewArticle(sourceArticleId, userId) {
       return primaryCopy;
     }
 
+    // We MUST pass 'tx' here to reuse the current transaction's database connection.
+    // Calling generateUniqueSlug with the global prisma client inside a transaction 
+    // can exhaust the connection pool and cause the transaction to time out.
     const slug = await generateUniqueSlug(
       sourceArticle.title?.trim() || "Untitled",
+      tx,
     );
 
     return tx.article.create({
@@ -331,6 +338,10 @@ async function startEditAsNewArticle(sourceArticleId, userId) {
       },
       include: ARTICLE_AUTHOR_INCLUDE,
     });
+  }, {
+    // 15s provides ample headroom for slug generation and DB writes on high-latency connections
+    maxWait: 15000,
+    timeout: 15000,
   });
 
   return result;

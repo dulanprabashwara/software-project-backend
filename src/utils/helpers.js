@@ -6,16 +6,17 @@ const prisma = require("../config/prisma");
  * If the slug already exists, appends a random suffix.
  *
  * @param {string} title
+ * @param {object} [client] - Optional Prisma client/transaction
  * @returns {Promise<string>}
  */
-const generateUniqueSlug = async (title) => {
+const generateUniqueSlug = async (title, client = prisma) => {
   // @ts-ignore
   const slugifyFn = slugify.default || slugify;
   // @ts-ignore
   let slug = slugifyFn(title, { lower: true, strict: true, trim: true });
 
-  // Check for existing slug
-  const existing = await prisma.article.findUnique({ where: { slug } });
+  // Check for existing slug using the provided client
+  const existing = await client.article.findUnique({ where: { slug } });
 
   if (existing) {
     const suffix = Math.random().toString(36).substring(2, 8);
