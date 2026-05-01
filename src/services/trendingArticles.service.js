@@ -5,7 +5,7 @@ const fetchTrendingTitles = async () => {
   return await prisma.article.findMany({
     // Note: Kept "DRAFT" here to match your original code, 
     // but double-check if you actually meant "PUBLISHED" for trending!
-    where: { status: "DRAFT" },
+    where: { status: "PUBLISHED" },
     orderBy: { trendingScore: 'desc' },
     take: limit,
     select: {

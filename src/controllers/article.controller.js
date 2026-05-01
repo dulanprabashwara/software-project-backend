@@ -83,6 +83,7 @@ const updateArticle = asyncHandler(async (req, res) => {
 // The response message depends on whether the article was published now or scheduled.
 const publishArticle = asyncHandler(async (req, res) => {
   const article = await articleService.publishArticle(
+    req.app
     req.params.id,
     req.user.id,
     req.body,

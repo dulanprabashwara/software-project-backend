@@ -7,6 +7,8 @@ const {
   calculateReadingTime,
 } = require("../utils/helpers");
 
+const { notifyFollowersOfNewArticle } = require("./notification.service");
+
 // Keep article status values in one place to avoid typo-based bugs.
 const ARTICLE_STATUS = Object.freeze({ 
   EDITING: "EDITING",
@@ -726,7 +728,7 @@ async function getUserScheduledArticles(userId, page = 1, limit = 10) {
   return { articles, total };
 }
 
-async function publishArticle(articleId, userId, payload) {
+async function publishArticle(app,articleId, userId, payload) {
   const article = await getOwnedArticleOrThrow(articleId, userId);
 
   if (article.status === ARTICLE_STATUS.PUBLISHED) {
@@ -776,6 +778,9 @@ async function publishArticle(articleId, userId, payload) {
   ) {
     await incrementPublishedArticleCount(userId);
   }
+
+  notifyFollowersOfNewArticle(app, userId, updatedArticle.id).catch(console.error);
+  
 
   return updatedArticle;
 }
