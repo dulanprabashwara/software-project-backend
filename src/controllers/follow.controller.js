@@ -9,6 +9,7 @@ const { parsePagination } = require("../utils/helpers");
  */
 const toggleFollow = asyncHandler(async (req, res) => {
   const result = await followService.toggleFollow(
+    req.app,
     req.user.id,
     req.params.userId,
   );

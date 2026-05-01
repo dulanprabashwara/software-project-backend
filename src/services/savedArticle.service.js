@@ -18,6 +18,7 @@ const getUserSavedArticles = async (userId) => {
               displayName: true,
               avatarUrl: true,
               isPremium: true,
+              username:true
             },
           },
           _count: {
