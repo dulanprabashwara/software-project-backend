@@ -2,62 +2,53 @@ const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 
 /**
- * Get conversation history between two users.
+ * Get conversation history and message count between two users.
  */
 const getConversation = async (userId, otherUserId, page = 1, limit = 50) => {
   const skip = (page - 1) * limit;
 
-  const [messages, total] = await Promise.all([
-    prisma.message.findMany({
-      where: {
-        OR: [
-          { senderId: userId, receiverId: otherUserId },
-          { senderId: otherUserId, receiverId: userId },
-        ],
-      },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            username: true,
-            displayName: true,
-            avatarUrl: true,
-          },
+  const messages = await prisma.message.findMany({
+    where: {
+      OR: [
+        { senderId: userId, receiverId: otherUserId },
+        { senderId: otherUserId, receiverId: userId },
+      ],
+    },
+    include: {
+      sender: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
         },
       },
-      orderBy: { sentAt: "desc" },
-      skip,
-      take: limit,
-    }),
-    prisma.message.count({
-      where: {
-        OR: [
-          { senderId: userId, receiverId: otherUserId },
-          { senderId: otherUserId, receiverId: userId },
-        ],
-      },
-    }),
-  ]);
+    },
+    orderBy: { sentAt: "desc" },
+    skip,
+    take: limit,
+  });
 
-  return { messages: messages.reverse(), total };
+  return { messages: messages.reverse() };
 };
 
 /**
- * Get list of conversations (latest message from each unique user).
+ * Get list of conversations and latest message from each conversation to display in the sidebar
  */
 const getConversationList = async (userId) => {
-  // Get all unique users the current user has exchanged messages with
-  const sent = await prisma.message.findMany({
-    where: { senderId: userId },
-    select: { receiverId: true },
-    distinct: ["receiverId"],
-  });
-
-  const received = await prisma.message.findMany({
-    where: { receiverId: userId },
-    select: { senderId: true },
-    distinct: ["senderId"],
-  });
+  // find the ID of every single person you have chatted with
+  const [sent, received] = await Promise.all([
+    prisma.message.findMany({
+      where: { senderId: userId },
+      select: { receiverId: true },
+      distinct: ["receiverId"],
+    }),
+    prisma.message.findMany({
+      where: { receiverId: userId },
+      select: { senderId: true },
+      distinct: ["senderId"],
+    }),
+  ]);
 
   // Combine unique user IDs
   const userIds = new Set([
@@ -65,50 +56,49 @@ const getConversationList = async (userId) => {
     ...received.map((m) => m.senderId),
   ]);
 
-  const conversations = [];
+  // Run all per-conversation queries in parallel instead of one-by-one
+  const conversations = await Promise.all(
+    [...userIds].map(async (otherUserId) => {
+      const [lastMessage, unreadCount, otherUser] = await Promise.all([
+        // Get the latest message in each conversation
+        prisma.message.findFirst({
+          where: {
+            OR: [
+              { senderId: userId, receiverId: otherUserId },
+              { senderId: otherUserId, receiverId: userId },
+            ],
+          },
+          orderBy: { sentAt: "desc" },
+        }),
 
-  for (const otherUserId of userIds) {
-    // Get the latest message in each conversation
-    const lastMessage = await prisma.message.findFirst({
-      where: {
-        OR: [
-          { senderId: userId, receiverId: otherUserId },
-          { senderId: otherUserId, receiverId: userId },
-        ],
-      },
-      orderBy: { sentAt: "desc" },
-    });
+        //get unread message count that the other user sent to you
+        prisma.message.count({
+          where: {
+            senderId: otherUserId,
+            receiverId: userId,
+            isRead: false,
+          },
+        }),
 
-    // Count unread messages from this user
-    const unreadCount = await prisma.message.count({
-      where: {
-        senderId: otherUserId,
-        receiverId: userId,
-        isRead: false,
-      },
-    });
+        // Get the other user's info
+        prisma.user.findUnique({
+          where: { id: otherUserId },
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+            isOnline: true,
+            lastSeen: true,
+          },
+        }),
+      ]);
 
-    // Get the other user's info
-    const otherUser = await prisma.user.findUnique({
-      where: { id: otherUserId },
-      select: {
-        id: true,
-        username: true,
-        displayName: true,
-        avatarUrl: true,
-        isOnline: true,
-        lastSeen: true,
-      },
-    });
+      return { user: otherUser, lastMessage, unreadCount };
+    }),
+  );
 
-    conversations.push({
-      user: otherUser,
-      lastMessage,
-      unreadCount,
-    });
-  }
-
-  // Sort conversations by the most recent message
+  // Sort conversations list by the most recent message
   conversations.sort((a, b) => {
     const timeA = a.lastMessage ? new Date(a.lastMessage.sentAt).getTime() : 0;
     const timeB = b.lastMessage ? new Date(b.lastMessage.sentAt).getTime() : 0;
@@ -119,7 +109,7 @@ const getConversationList = async (userId) => {
 };
 
 /**
- * Mark all messages from a sender as read.
+ * Mark all messages from a sender as read when open the chat
  */
 const markAsRead = async (userId, senderId) => {
   await prisma.message.updateMany({
@@ -133,7 +123,7 @@ const markAsRead = async (userId, senderId) => {
 };
 
 /**
- * Get total unread message count.
+ * Get total unread message count across all chats
  */
 const getUnreadCount = async (userId) => {
   const count = await prisma.message.count({

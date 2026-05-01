@@ -7,6 +7,7 @@ const { parsePagination } = require("../utils/helpers");
  * GET /api/v1/users/:identifier
  * Get a user profile by ID or username.
  */
+
 const getProfile = asyncHandler(async (req, res) => {
   const { identifier } = req.params;
   const currentUserId = req.user?.id || null;
@@ -88,4 +89,10 @@ const deleteAccount = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { getProfile, getMe, updateProfile, searchUsers, deleteAccount };
+module.exports = {
+  getProfile,
+  getMe,
+  updateProfile,
+  searchUsers,
+  deleteAccount,
+};

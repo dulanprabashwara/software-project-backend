@@ -4,16 +4,27 @@ const { authenticate } = require("../middlewares/auth");
 
 const router = Router();
 
-// Public — get active offers (no auth required)
+// Public — get active offers
 router.get("/offers", paymentController.getActiveOffers);
 
-// Webhook — must be BEFORE any body-parsing middleware (handled in index.js)
+// Webhook — must be BEFORE any body-parsing middleware. send the stripe http request to this route
 router.post("/webhook", paymentController.handleWebhook);
 
 // Protected routes — require authentication
-router.post("/create-checkout-session", authenticate, paymentController.createCheckoutSession);
-router.get("/subscription", authenticate, paymentController.getSubscriptionStatus);
-router.post("/cancel", authenticate, paymentController.cancelSubscription);
+//create the checkout session when the user want to subscribe
+router.post(
+  "/create-checkout-session",
+  authenticate,
+  paymentController.createCheckoutSession,
+);
+// get user's current subscription status
+router.get(
+  "/subscription",
+  authenticate,
+  paymentController.getSubscriptionStatus,
+);
+
+//create the customer portal session to manage the subscription when the user want to update or cancel the subscription
 router.post("/portal", authenticate, paymentController.createPortalSession);
 
 module.exports = router;

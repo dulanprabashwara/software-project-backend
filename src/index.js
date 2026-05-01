@@ -16,7 +16,7 @@ const prisma = require("./config/prisma");
 const { processScheduledArticles } = require("./jobs/scheduledArticles.job");
 const { startScrapingJobs } = require("./jobs/scraper.job");
 const { startWordPressJobs } = require("./jobs/wordpress.job");
-const {calculateAndSaveScores} = require('./jobs/trendingScore.job');
+const { calculateAndSaveScores } = require("./jobs/trendingScore.job");
 
 // ─── App Setup ──────────────────────────────
 
@@ -126,7 +126,7 @@ server.listen(PORT, () => {
   `);
   if (process.env.NODE_ENV !== "test") {
     startScrapingJobs().catch(err => console.error("[Startup]", err.message));
-    startWordPressJobs(); 
+    startWordPressJobs();
     calculateAndSaveScores();
     processScheduledArticles();
   }
