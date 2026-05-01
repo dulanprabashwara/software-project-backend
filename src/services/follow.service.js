@@ -1,10 +1,10 @@
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
-
+const { createNotification } = require("./notification.service");
 /**
  * Toggle follow/unfollow a user.
  */
-const toggleFollow = async (followerId, followingId) => {
+const toggleFollow = async (app, followerId, followingId) => {
   if (followerId === followingId) {
     throw ApiError.badRequest("You cannot follow yourself.");
   }
@@ -49,6 +49,13 @@ const toggleFollow = async (followerId, followingId) => {
             create: { userId: followingId, totalFollowers: 1 },
           }),
         ]);
+          createNotification(app, {
+          type: "FOLLOW",
+          destUserId:followingId, 
+          sourceUserId:followerId,    
+          sourceArticleId: null
+        }).catch(err => console.error("Failed to create follow notification:", err));
+
         return { followed: true };
       } catch (createError) {
         // P2003: Foreign key constraint failed (The target user doesn't exist)

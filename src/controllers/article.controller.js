@@ -6,12 +6,52 @@ const articleService = require("../services/article.service");
 const linkedinService = require("../services/linkedin.service");
 const { parsePagination } = require("../utils/helpers");
 
-//  PUBLIC VIEWS & DISCOVERY
+const createArticle = asyncHandler(async (req, res) => {
+  const article = await articleService.createArticle(req.user.id, req.body);
 
-/*
- Returns a paginated feed of published articles. Filters (tag, search, sortBy) 
- are parsed from query params to allow flexible discovery.
- */
+  sendSuccess(res, {
+    statusCode: 201,
+    message: "Article created successfully.",
+    data: article,
+  });
+});
+
+// currentUserId is optional because public users can read articles too.
+const getArticle = asyncHandler(async (req, res) => {
+  const currentUserId = req.user?.id || null;
+  const article = await articleService.getArticleBySlug(
+    req.params.slug,
+    currentUserId,
+  );
+
+  sendSuccess(res, {
+    message: "Article retrieved.",
+    data: article,
+  });
+});
+
+const getArticleById = asyncHandler(async (req, res) => {
+  const article = await articleService.getArticleById(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Article retrieved.",
+    data: article,
+  });
+});
+
+const getCurrentEditing = asyncHandler(async (req, res) => {
+  const article = await articleService.getCurrentEditingArticle(req.user.id);
+
+  sendSuccess(res, {
+    message: "Current editing article retrieved.",
+    data: article,
+  });
+});
+
+// Feed filters come from query params, while pagination is normalized separately.
 const getFeed = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
   const { tag, search, sortBy, authorId } = req.query;
@@ -28,90 +68,6 @@ const getFeed = asyncHandler(async (req, res) => {
   sendPaginated(res, { data: articles, page, limit, total });
 });
 
-/*
- Returns trending articles based on engagement scores. Used to drive 
- the recommendation engine/slider on the landing page.
- */
-const getTrendingArticles = asyncHandler(async (req, res) => {
-  const articles = await articleService.getTrendingArticles();
-  sendSuccess(res, {
-    message: "Trending articles retrieved.",
-    data: articles,
-  });
-});
-
-/*
- Fetches a single article by its unique slug. currentUserId is optional 
- to allow both public and logged-in users to access content.
- */
-const getArticle = asyncHandler(async (req, res) => {
-  const currentUserId = req.user?.id || null;
-  const article = await articleService.getArticleBySlug(
-    req.params.slug,
-    currentUserId,
-  );
-
-  sendSuccess(res, {
-    message: "Article retrieved.",
-    data: article,
-  });
-});
-
-/*
- Fetches all published articles for a specific user profile by their username.
- */
-const getPublishedByUsername = asyncHandler(async (req, res) => {
-  const { page, limit } = parsePagination(req.query);
-
-  const { articles, total } = await articleService.getPublishedArticlesByUsername(
-    req.params.username,
-    page,
-    limit,
-  );
-
-  sendPaginated(res, {
-    data: articles,
-    page,
-    limit,
-    total,
-    message: "User published articles retrieved.",
-  });
-});
-
-//  CORE USER CRUD 
-
-/*
- Creates a new article. The initial state is usually 'EDITING' or 'DRAFT'.
- */
-const createArticle = asyncHandler(async (req, res) => {
-  const article = await articleService.createArticle(req.user.id, req.body);
-
-  sendSuccess(res, {
-    statusCode: 201,
-    message: "Article created successfully.",
-    data: article,
-  });
-});
-
-/*
- Fetches a private article by ID. Requires ownership verification.
- */
-const getArticleById = asyncHandler(async (req, res) => {
-  const article = await articleService.getArticleById(
-    req.params.id,
-    req.user.id,
-  );
-
-  sendSuccess(res, {
-    message: "Article retrieved.",
-    data: article,
-  });
-});
-
-/*
- Updates article content or metadata. Timestamps are refreshed only 
- if meaningful content changed.
- */
 const updateArticle = asyncHandler(async (req, res) => {
   const article = await articleService.updateArticle(
     req.params.id,
@@ -125,20 +81,24 @@ const updateArticle = asyncHandler(async (req, res) => {
   });
 });
 
-/*
- Permanently removes an article and updates user stats (like articleCount).
- */
-const deleteArticle = asyncHandler(async (req, res) => {
-  await articleService.deleteArticle(req.params.id, req.user.id, req.user.role);
+// The response message depends on whether the article was published now or scheduled.
+const publishArticle = asyncHandler(async (req, res) => {
+  const article = await articleService.publishArticle(
+    req.app,
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
 
-  sendSuccess(res, { message: "Article deleted successfully." });
+  sendSuccess(res, {
+    message:
+      article.status === "SCHEDULED"
+        ? "Article scheduled successfully."
+        : "Article published successfully.",
+    data: article,
+  });
 });
 
-//  USER CONTENT MANAGEMENT 
-
-/*
- Returns a paginated list of the logged-in user's published articles.
- */
 const getPublishedByUser = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
 
@@ -157,9 +117,24 @@ const getPublishedByUser = asyncHandler(async (req, res) => {
   });
 });
 
-/*
- Returns articles scheduled for future publication.
- */
+const getPublishedByUsername = asyncHandler(async (req, res) => {
+  const { page, limit } = parsePagination(req.query);
+
+  const { articles, total } = await articleService.getPublishedArticlesByUsername(
+    req.params.username,
+    page,
+    limit,
+  );
+
+  sendPaginated(res, {
+    data: articles,
+    page,
+    limit,
+    total,
+    message: "User published articles retrieved.",
+  });
+});
+
 const getScheduledByUser = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
 
@@ -178,11 +153,157 @@ const getScheduledByUser = asyncHandler(async (req, res) => {
   });
 });
 
-/*
- Returns a user's private drafts. Supports filtering by AI generation status.
- */
+const startEditExisting = asyncHandler(async (req, res) => {
+  const article = await articleService.startExistingArticleEditing(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Existing article editing session started.",
+    data: article,
+  });
+});
+
+const autosaveEditExisting = asyncHandler(async (req, res) => {
+  const article = await articleService.autosaveExistingArticle(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Existing article autosaved.",
+    data: article,
+  });
+});
+
+const discardEditExisting = asyncHandler(async (req, res) => {
+  const article = await articleService.discardExistingArticleEdits(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Article changes discarded successfully.",
+    data: article,
+  });
+});
+
+const saveEditExistingAsDraft = asyncHandler(async (req, res) => {
+  const article = await articleService.saveExistingArticleAsDraft(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Edited article saved as draft successfully.",
+    data: article,
+  });
+});
+
+// Preview saves article data so the user can view it without finalizing the edit.
+async function saveEditExistingForPreview(req, res) {
+  const article = await articleService.saveExistingArticleForPreview(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Article preview saved.",
+    data: article,
+  });
+}
+
+// Backup is cleared only after the edit-existing flow no longer needs restore data.
+const clearEditExistingBackup = asyncHandler(async (req, res) => {
+  const article = await articleService.clearEditExistingBackup(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Edit-existing backup cleared successfully.",
+    data: article,
+  });
+});
+
+const startEditAsNew = asyncHandler(async (req, res) => {
+  const article = await articleService.startEditAsNewArticle(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    statusCode: 201,
+    message: "Edit-as-new article created successfully.",
+    data: article,
+  });
+});
+
+const autosaveEditAsNew = asyncHandler(async (req, res) => {
+  const article = await articleService.autosaveEditAsNewArticle(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Edit-as-new article autosaved successfully.",
+    data: article,
+  });
+});
+
+const saveEditAsNewAsDraft = asyncHandler(async (req, res) => {
+  const article = await articleService.saveEditAsNewArticleAsDraft(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Edit-as-new article saved as draft successfully.",
+    data: article,
+  });
+});
+
+const discardEditAsNew = asyncHandler(async (req, res) => {
+  await articleService.discardEditAsNewArticle(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Edit-as-new article discarded successfully.",
+  });
+});
+
+const deleteArticle = asyncHandler(async (req, res) => {
+  await articleService.deleteArticle(req.params.id, req.user.id, req.user.role);
+
+  sendSuccess(res, { message: "Article deleted successfully." });
+});
+
+const recordRead = asyncHandler(async (req, res) => {
+  await articleService.recordRead(req.params.id, req.user.id);
+
+  sendSuccess(res, { message: "Read recorded." });
+});
+
+// Convert optional boolean query params into real booleans for service filters.
+function parseBooleanQuery(value) {
+  if (value === "true")
+    return true;
+  if (value === "false")
+    return false;
+  return undefined;
+}
+
 const getDrafts = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
+
   const isAiGenerated = parseBooleanQuery(req.query.isAiGenerated);
 
   const { drafts, total } = await articleService.getUserDrafts(
@@ -200,19 +321,16 @@ const getDrafts = asyncHandler(async (req, res) => {
     message: "Drafts retrieved.",
   });
 });
-
-/*
- Attempts to find the most recent active editing session for the user.
- */
-const getCurrentEditing = asyncHandler(async (req, res) => {
-  const article = await articleService.getCurrentEditingArticle(req.user.id);
-
+// Trending articles are used by the article suggestion/slider UI.
+const getTrendingArticles = asyncHandler(async (req, res) => {
+  const articles = await articleService.getTrendingArticles();
   sendSuccess(res, {
-    message: "Current editing article retrieved.",
-    data: article,
+    message: "Trending articles retrieved.",
+    data: articles,
   });
 });
 
+<<<<<<< HEAD
 //  EDIT EXISTING FLOW 
 
 /*
@@ -374,18 +492,8 @@ const discardEditAsNew = asyncHandler(async (req, res) => {
   });
 });
 
-//  PUBLISHING & INTERACTIONS 
-
-/*
- Handles the transition to PUBLISHED or SCHEDULED. The success message 
- adapts dynamically to the final status.
- */
-const publishArticle = asyncHandler(async (req, res) => {
-  const article = await articleService.publishArticle(
-    req.params.id,
-    req.user.id,
-    req.body,
-  );
+const deleteArticle = asyncHandler(async (req, res) => {
+  await articleService.deleteArticle(req.params.id, req.user.id, req.user.role);
 
   // Auto-sync to LinkedIn if requested in payload
   if (req.body.linkedinSync) {
@@ -425,29 +533,31 @@ function parseBooleanQuery(value) {
   return undefined;
 }
 
+=======
+>>>>>>> main
 module.exports = {
-  getFeed,
-  getTrendingArticles,
-  getArticle,
-  getPublishedByUsername,
   createArticle,
+  getArticle,
   getArticleById,
-  updateArticle,
-  deleteArticle,
-  getPublishedByUser,
-  getScheduledByUser,
-  getDrafts,
   getCurrentEditing,
+  getFeed,
+  updateArticle,
+  publishArticle,
+  getPublishedByUser,
+  getPublishedByUsername,
+  getScheduledByUser,
   startEditExisting,
   autosaveEditExisting,
-  saveEditExistingForPreview,
-  saveEditExistingAsDraft,
   discardEditExisting,
+  saveEditExistingAsDraft,
+  saveEditExistingForPreview,
   clearEditExistingBackup,
   startEditAsNew,
   autosaveEditAsNew,
   saveEditAsNewAsDraft,
   discardEditAsNew,
-  publishArticle,
+  deleteArticle,
   recordRead,
+  getDrafts,
+  getTrendingArticles
 };

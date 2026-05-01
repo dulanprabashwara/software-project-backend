@@ -1,37 +1,14 @@
-const prisma = require("../config/prisma");
+const interactedArticlesService = require("../services/interactedArticles.service");
 
 const getMyInteractedArticles = async (req, res) => {
   try {
     const userId = req.user.id;
-
-    const interactedRecords = await prisma.articleInteractions.findMany({
-      where: { userId: userId },
-      orderBy: { dateUpdated: 'desc' },
-      include: {
-        article: {
-          include: {
-            author: {
-              select: { id: true, displayName: true, avatarUrl: true, isPremium: true }
-            },
-            _count: {
-              select: { comments: true }
-            }
-          }
-        }
-      }
-    });
-
-    const articles = interactedRecords.map(record => ({
-      ...record.article,
-      commentStatus: record.commentStatus,
-      rateStatus: record.rateStatus,
-      interactedAt: record.dateUpdated 
-    }));
+    const articles = await interactedArticlesService.fetchUserInteractions(userId);
 
     res.status(200).json({ success: true, data: articles });
   } catch (error) {
     console.error(error.message);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: "Failed to fetch interacted articles" });
   }
 };
 

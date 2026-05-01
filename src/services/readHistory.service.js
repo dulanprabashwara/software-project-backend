@@ -18,10 +18,14 @@ const getUserReadHistory = async (userId) => {
           commentCount:true,
           ratingCount:true,
           averageRating:true,
+          status:true,
+          isAiGenerated:true,
           author: {
             select: { 
                 displayName: true,
                 isPremium: true,
+                username: true
+
                  
             }
           }

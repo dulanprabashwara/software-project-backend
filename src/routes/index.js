@@ -4,11 +4,8 @@ const authRoutes = require("./auth.routes");
 const userRoutes = require("./user.routes");
 const articleRoutes = require("./article.routes");
 const commentRoutes = require("./comment.routes");
-const storyRoutes = require("./story.routes");
-const messageRoutes = require("./message.routes");
-const statsRoutes = require("./stats.routes");
-const libraryRoutes = require("./library.routes");
-const feedRoutes = require("./feed.routes");
+ const messageRoutes = require("./message.routes");
+  const feedRoutes = require("./feed.routes");
 const notificationRoutes = require("./notification.routes");
 const adminRoutes = require("./admin.routes");
 const aiRoutes = require("./ai.routes");
@@ -26,6 +23,9 @@ const interactedArticlesroutes = require("./interactedArticles.routes");
 const articleRatingRoutes = require("./articleRatings.routes");
 const readHistoryRoutes = require("./readHistory.routes");
 const popularTopicsRoutes = require("./popularTopics.routes");
+const articleReportsRoutes = require("./articleReports.routes");
+const articleDeleteRoutes = require("./articleDelete.routes");
+
 
 
 
@@ -37,10 +37,7 @@ router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/articles", articleRoutes);
 router.use("/comments", commentRoutes);
-router.use("/stories", storyRoutes);
 router.use("/messages", messageRoutes);
-router.use("/stats", statsRoutes);
-router.use("/library", libraryRoutes);
 router.use("/feed", feedRoutes);
 router.use("/notifications", notificationRoutes);
 router.use("/admin", adminRoutes);
@@ -59,6 +56,10 @@ router.use("/interactedArticles", interactedArticlesroutes);
 router.use("/articleRatings", articleRatingRoutes);
 router.use("/readHistory", readHistoryRoutes);
 router.use("/popularTopics", popularTopicsRoutes);
+router.use("/articleReports", articleReportsRoutes);
+router.use("/articleDelete", articleDeleteRoutes);
+
+
 
 
 

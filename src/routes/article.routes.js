@@ -3,8 +3,7 @@
 const { Router } = require("express");
 const articleController = require("../controllers/article.controller");
 const commentController = require("../controllers/comment.controller");
-const engagementController = require("../controllers/engagement.controller");
-const adminController = require("../controllers/admin.controller");
+ const adminController = require("../controllers/admin.controller");
 const { authenticate } = require("../middlewares/auth");
 
 const router = Router();
@@ -41,18 +40,17 @@ router.post("/:id/edit-as-new/discard",authenticate,articleController.discardEdi
 
 // Public article read
 router.get("/:slug", articleController.getArticle);
-router.get("/author/:username/published",articleController.getPublishedByUsername,);
 router.put("/:id", authenticate, articleController.updateArticle);
 router.delete("/:id", authenticate, articleController.deleteArticle);
 
 // Engagement
 router.post("/:id/read", authenticate, articleController.recordRead);
-router.post("/:articleId/like", authenticate, engagementController.toggleLike);
-router.post("/:articleId/share",authenticate,engagementController.shareArticle,);
-router.post("/:articleId/save", authenticate, engagementController.toggleSave);
-
+ 
  
 // Report
 router.post("/:articleId/report", authenticate, adminController.reportArticle);
+
+//Trending articles
+router.get("/trending", articleController.getTrendingArticles);
 
 module.exports = router;
