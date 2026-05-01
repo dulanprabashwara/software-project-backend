@@ -1,7 +1,7 @@
 const prisma = require("../config/prisma");
 
 const createNotification = async (app, { type, destUserId, sourceUserId, sourceArticleId }) => {
- console.log(`🔔 Notif Triggered: Type=${type}, To=${destUserId}, From=${sourceUserId}, Article=${sourceArticleId}`);
+  console.log(`🔔 Notif Triggered: Type=${type}, To=${destUserId}, From=${sourceUserId}, Article=${sourceArticleId}`);
   try {
     // Don't notify the user of their own actions
     if (destUserId === sourceUserId) return null;
@@ -34,4 +34,104 @@ const createNotification = async (app, { type, destUserId, sourceUserId, sourceA
   }
 };
 
-module.exports = { createNotification };
+/**
+ * Notify all followers when an author publishes a new article.
+ */
+const notifyFollowersOfNewArticle = async (app, authorId, articleId) => {
+  console.log(`📢 Broadcasting new article (${articleId}) to followers of user (${authorId})`);
+  
+  try {
+    // 1. Fetch all users who are following this author
+    const followers = await prisma.follow.findMany({
+      where: { followingId: authorId },
+      select: { followerId: true }
+    });
+
+    if (!followers || followers.length === 0) return 0; // No followers to notify
+
+    // 2. Prepare the bulk insert payload
+    const notificationPayloads = followers.map((follower) => ({
+      type: "NEW_ARTICLE",
+      destUserId: follower.followerId,
+      sourceUserId: authorId,
+      sourceArticleId: articleId
+    }));
+
+    // 3. Perform a highly efficient bulk insert
+    await prisma.notification.createMany({
+      data: notificationPayloads,
+      skipDuplicates: true
+    });
+
+    // 4. Fetch the author and article details ONCE to attach to the socket payload
+    // (createMany does not return the included relations, so we fetch it manually)
+    const authorDetails = await prisma.user.findUnique({
+      where: { id: authorId },
+      select: { username: true, displayName: true, avatarUrl: true }
+    });
+    
+    const articleDetails = await prisma.article.findUnique({
+      where: { id: articleId },
+      select: { title: true, slug: true }
+    });
+
+    // 5. Emit instantly to all followers via Socket.io
+    const io = app.get("io");
+    if (io) {
+      followers.forEach((follower) => {
+        // Construct the payload to match what the frontend expects
+        const socketPayload = {
+          type: "NEW_ARTICLE",
+          destUserId: follower.followerId,
+          sourceUserId: authorId,
+          sourceArticleId: articleId,
+          createdAt: new Date(), // Approximate time for the UI
+          isRead: false,
+          sourceUser: authorDetails,
+          sourceArticle: articleDetails
+        };
+        
+        io.to(`user:${follower.followerId}`).emit("notification:receive", socketPayload);
+      });
+    }
+
+    console.log(`✅ Successfully notified ${followers.length} followers.`);
+    return followers.length;
+
+  } catch (error) {
+    console.error("Failed to notify followers of new article:", error.message);
+    return 0;
+  }
+};
+
+const fetchUserNotifications = async (userId) => {
+  return await prisma.notification.findMany({
+    where: { destUserId: userId },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+    include: {
+      sourceUser: { select: { username: true, displayName: true, avatarUrl: true } },
+      sourceArticle: { select: { title: true, id: true } }
+    }
+  });
+};
+
+const deleteNotifications = async (userId, notificationId) => {
+  // If a specific ID is provided, delete just that one. Otherwise, clear all.
+  if (notificationId) {
+    return await prisma.notification.deleteMany({
+      where: { id: notificationId, destUserId: userId },
+    });
+  } else {
+    return await prisma.notification.deleteMany({
+      where: { destUserId: userId },
+    });
+  }
+};
+
+module.exports = { 
+  createNotification, 
+  notifyFollowersOfNewArticle, // <-- Export the new function
+  fetchUserNotifications,
+  deleteNotifications 
+};

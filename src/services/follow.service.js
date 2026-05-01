@@ -10,7 +10,8 @@ const toggleFollow = async (followerId, followingId) => {
   }
 
   try {
-    // Attempt to Unfollow first
+    // Attempt to Unfollow first (Optimistic)
+    // Runs entirely in 1 database roundtrip
     await prisma.$transaction([
       prisma.follow.delete({
         where: { followerId_followingId: { followerId, followingId } },
@@ -28,10 +29,11 @@ const toggleFollow = async (followerId, followingId) => {
     ]);
     return { followed: false };
   } catch (error) {
-    // P2025: Record to delete does not exist
+    // P2025: Record to delete does not exist (They weren't following yet)
     if (error.code === "P2025") {
       try {
         // Attempt to Follow instead
+        // Runs entirely in 1 database roundtrip
         await prisma.$transaction([
           prisma.follow.create({
             data: { followerId, followingId },
@@ -98,7 +100,7 @@ const getFollowers = async (userId, page = 1, limit = 20) => {
 };
 
 /**
- * Get user's following list
+ * Get users that a user is following.
  */
 const getFollowing = async (userId, page = 1, limit = 20) => {
   const skip = (page - 1) * limit;

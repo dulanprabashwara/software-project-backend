@@ -3,7 +3,7 @@ const admin = require("../config/firebase");
 const prisma = require("../config/prisma");
 
 /**
- * Initialize Socket.IO in the backend server
+ * Initialize Socket.IO on the HTTP server.
  *
  * Handles:
  * - Authentication via Firebase ID tokens
@@ -11,9 +11,10 @@ const prisma = require("../config/prisma");
  * - Private messaging
  * - Typing indicators
  * - Notification broadcasting
+ *
+ * @param {import("http").Server} httpServer
+ * @returns {Server}
  */
-
-//initialize socket.io in the backend
 const initializeSocket = (httpServer) => {
   const io = new Server(httpServer, {
     cors: {
@@ -25,7 +26,7 @@ const initializeSocket = (httpServer) => {
     pingInterval: 25000,
   });
 
-  // ── Authentication middleware for Socket.IO  ──
+  // ── Authentication middleware for Socket.IO ──
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token;
@@ -33,7 +34,6 @@ const initializeSocket = (httpServer) => {
         return next(new Error("Authentication required"));
       }
 
-      //verify jwt token before connect via websocket
       const decodedToken = await admin.auth().verifyIdToken(token);
       const user = await prisma.user.findUnique({
         where: { firebaseUid: decodedToken.uid },
@@ -49,7 +49,6 @@ const initializeSocket = (httpServer) => {
         return next(new Error("User not found"));
       }
 
-      //get the user data from the databse atatch the user data and id to socket connection
       socket.data.userId = user.id;
       socket.data.userData = user;
       next();
@@ -69,10 +68,9 @@ const initializeSocket = (httpServer) => {
       `⚡ User connected: ${socket.data.userData.username} (${socket.data.userId})`,
     );
 
-    // put the user to a private room
+    // Join a personal room for targeted messages
     socket.join(`user:${socket.data.userId}`);
 
-    //count how many tabs user has open
     const userId = socket.data.userId;
     const currentCount = userConnections.get(userId) || 0;
     userConnections.set(userId, currentCount + 1);
@@ -84,7 +82,7 @@ const initializeSocket = (httpServer) => {
     }
 
     if (currentCount === 0) {
-      // if this is the first open tab mark user as online
+      // First connection, mark user as online
       await prisma.user.update({
         where: { id: userId },
         data: { isOnline: true, lastSeen: new Date() },
@@ -106,7 +104,8 @@ const initializeSocket = (httpServer) => {
           return callback?.({ error: "Receiver ID and content are required" });
         }
 
-        // Check if the sender follows the receiver
+        // --- SECURITY ENFORCEMENT 1: Follow or Prior History ---
+        // Check if the sender follows the receiver OR if they have prior chat history
         const isFollowing = await prisma.follow.findUnique({
           where: {
             followerId_followingId: {
@@ -139,8 +138,9 @@ const initializeSocket = (httpServer) => {
             error: "You can only start conversations with users you follow.",
           });
         }
+        // -----------------------------------------------------
 
-        // if can Save message to database
+        // Save message to database
         const message = await prisma.message.create({
           data: {
             content: content.trim(),
@@ -159,7 +159,7 @@ const initializeSocket = (httpServer) => {
           },
         });
 
-        // forward the message to the receiver's private room
+        // Send to receiver in real time
         io.to(`user:${receiverId}`).emit("message:receive", message);
 
         // Acknowledge to sender
@@ -174,11 +174,12 @@ const initializeSocket = (httpServer) => {
     socket.on("message:delete", async (data, callback) => {
       try {
         const { messageId } = data;
+
         if (!messageId) {
           return callback?.({ error: "Message ID is required" });
         }
 
-        // get the message from the database
+        // Find the message
         const message = await prisma.message.findUnique({
           where: { id: messageId },
         });
@@ -187,18 +188,19 @@ const initializeSocket = (httpServer) => {
           return callback?.({ error: "Message not found" });
         }
 
-        //Only Sender can Delete
+        // --- SECURITY ENFORCEMENT 2: Only Sender can Delete ---
         if (message.senderId !== socket.data.userId) {
           return callback?.({
             error: "Unauthorized: You can only delete messages you sent.",
           });
         }
+        // ------------------------------------------------------
 
         await prisma.message.delete({
           where: { id: messageId },
         });
 
-        //sends a signal to both the sender and the receiver's computers to make the message disappear
+        // Notify both sender and receiver that a message was deleted so their UI can remove it
         io.to(`user:${message.senderId}`).emit("message:deleted", {
           messageId,
         });
@@ -255,20 +257,18 @@ const initializeSocket = (httpServer) => {
     // ── Disconnect ──
     socket.on("disconnect", async () => {
       console.log(`💤 User disconnected: ${socket.data.userData.username}`);
-
+      
       const userId = socket.data.userId;
       let count = userConnections.get(userId) || 0;
       count = Math.max(0, count - 1);
 
-      //if the tab count hit zero
       if (count === 0) {
         userConnections.delete(userId);
 
-        // Wait 4 seconds to allow reconnects during page reloads
+        // Wait 4 seconds to allow reconnects during page reloads/React Strict Mode
         const timeout = setTimeout(async () => {
           if (!userConnections.has(userId)) {
             try {
-              //if  the 4 seconds pass and they haven't reconnected, it updates the database to isOnline: false
               await prisma.user.update({
                 where: { id: userId },
                 data: { isOnline: false, lastSeen: new Date() },

@@ -18,7 +18,7 @@ router.put("/profile", authenticate, userController.updateProfile); // Keep old 
 // Delete own account (protected)
 router.delete("/me", authenticate, userController.deleteAccount);
 
-//get User profile by ID or username (public but optionalAuth so can see if you are following that user)
+// User profile by ID or username (public, but optionalAuth so isFollowing works)
 router.get("/:identifier", optionalAuth, userController.getProfile);
 
 // Follow system (protected)

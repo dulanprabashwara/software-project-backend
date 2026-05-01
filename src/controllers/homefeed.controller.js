@@ -1,28 +1,15 @@
-// backend/controllers/homefeed.controller.js
-const prisma = require("../config/prisma");
+const homefeedService = require("../services/homefeed.service");
 
-// Endpoint 1: Main Feed Articles
 exports.getMainFeed = async (req, res) => {
   try {
-    const articles = await prisma.article.findMany({
-      where: { status: "PUBLISHED" }, 
-      orderBy: { publishedAt: "desc" },
-      include: {
-        author: {
-          select: {
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            isPremium: true
-          },
-        },
-      },
-    });
-    res.status(200).json(articles); // Returning just the array
+    // Read the page from the URL query (e.g., ?page=2), default to 1
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = 10; 
+
+    const articles = await homefeedService.getPublishedMainFeed(page, limit);
+    res.status(200).json(articles); 
   } catch (error) {
     console.error("MAIN FEED ERROR:", error.message);
     res.status(500).json({ error: "Failed to fetch main feed" });
   }
 };
-
-// Endpoint 2: Trending Articles

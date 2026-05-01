@@ -5,7 +5,7 @@ const { parsePagination } = require("../utils/helpers");
 
 /**
  * GET /api/v1/messages/conversations
- * Get list of conversations to display in the conversations sidebar
+ * Get list of conversations.
  */
 const getConversations = asyncHandler(async (req, res) => {
   const conversations = await messageService.getConversationList(req.user.id);
@@ -18,22 +18,22 @@ const getConversations = asyncHandler(async (req, res) => {
 
 /**
  * GET /api/v1/messages/:userId
- * Get conversation history with a specific user
+ * Get conversation history with a specific user.
  */
 const getConversation = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
   const { messages, total } = await messageService.getConversation(
-    req.user.id, // current user's id
-    req.params.userId, // target user's id
+    req.user.id,
+    req.params.userId,
     page,
     limit,
   );
 
   sendPaginated(res, {
     data: messages,
-    page, //current page
-    limit, //limit per page
-    total, //total messages
+    page,
+    limit,
+    total,
     message: "Messages retrieved.",
   });
 });
