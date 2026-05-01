@@ -39,6 +39,7 @@ router.post("/:id/edit-as-new/discard",authenticate,articleController.discardEdi
 );
 
 // Public article read
+router.get("/author/:username/published", articleController.getPublishedByUsername);
 router.get("/:slug", articleController.getArticle);
 router.put("/:id", authenticate, articleController.updateArticle);
 router.delete("/:id", authenticate, articleController.deleteArticle);

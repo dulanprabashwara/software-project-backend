@@ -82,6 +82,7 @@ const updateArticle = asyncHandler(async (req, res) => {
 });
 
 // The response message depends on whether the article was published now or scheduled.
+// LinkedIn auto-sync is correctly placed here.
 const publishArticle = asyncHandler(async (req, res) => {
   const article = await articleService.publishArticle(
     req.app,
@@ -89,6 +90,14 @@ const publishArticle = asyncHandler(async (req, res) => {
     req.user.id,
     req.body,
   );
+
+  // Auto-sync to LinkedIn if requested in payload
+  if (req.body.linkedinSync) {
+    const scheduledAt = req.body.timing === "schedule" ? req.body.scheduledAt : null;
+    linkedinService
+      .scheduleLinkedInPublish(article.id, req.user.id, scheduledAt, req.body.linkedinCaption)
+      .catch((err) => console.error("[LinkedIn Auto-Sync Error]", err.message));
+  }
 
   sendSuccess(res, {
     message:
@@ -153,6 +162,8 @@ const getScheduledByUser = asyncHandler(async (req, res) => {
   });
 });
 
+// --- EDIT EXISTING FLOW ---
+
 const startEditExisting = asyncHandler(async (req, res) => {
   const article = await articleService.startExistingArticleEditing(
     req.params.id,
@@ -204,7 +215,7 @@ const saveEditExistingAsDraft = asyncHandler(async (req, res) => {
 });
 
 // Preview saves article data so the user can view it without finalizing the edit.
-async function saveEditExistingForPreview(req, res) {
+const saveEditExistingForPreview = asyncHandler(async (req, res) => {
   const article = await articleService.saveExistingArticleForPreview(
     req.params.id,
     req.user.id,
@@ -215,7 +226,7 @@ async function saveEditExistingForPreview(req, res) {
     message: "Article preview saved.",
     data: article,
   });
-}
+});
 
 // Backup is cleared only after the edit-existing flow no longer needs restore data.
 const clearEditExistingBackup = asyncHandler(async (req, res) => {
@@ -229,6 +240,8 @@ const clearEditExistingBackup = asyncHandler(async (req, res) => {
     data: article,
   });
 });
+
+// --- EDIT AS NEW FLOW ---
 
 const startEditAsNew = asyncHandler(async (req, res) => {
   const article = await articleService.startEditAsNewArticle(
@@ -294,10 +307,8 @@ const recordRead = asyncHandler(async (req, res) => {
 
 // Convert optional boolean query params into real booleans for service filters.
 function parseBooleanQuery(value) {
-  if (value === "true")
-    return true;
-  if (value === "false")
-    return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
   return undefined;
 }
 
@@ -321,6 +332,7 @@ const getDrafts = asyncHandler(async (req, res) => {
     message: "Drafts retrieved.",
   });
 });
+
 // Trending articles are used by the article suggestion/slider UI.
 const getTrendingArticles = asyncHandler(async (req, res) => {
   const articles = await articleService.getTrendingArticles();
@@ -330,211 +342,6 @@ const getTrendingArticles = asyncHandler(async (req, res) => {
   });
 });
 
-<<<<<<< HEAD
-//  EDIT EXISTING FLOW 
-
-/*
- Transitions an existing draft into the active EDITING state and captures a backup 
- to allow for future restoration.
- */
-const startEditExisting = asyncHandler(async (req, res) => {
-  const article = await articleService.startExistingArticleEditing(
-    req.params.id,
-    req.user.id,
-  );
-
-  sendSuccess(res, {
-    message: "Existing article editing session started.",
-    data: article,
-  });
-});
-
-/*
- Silently saves the current state of an 'Edit Existing' session.
- */
-const autosaveEditExisting = asyncHandler(async (req, res) => {
-  const article = await articleService.autosaveExistingArticle(
-    req.params.id,
-    req.user.id,
-    req.body,
-  );
-
-  sendSuccess(res, {
-    message: "Existing article autosaved.",
-    data: article,
-  });
-});
-
-/*
- Temporarily saves state to the 'DRAFT' status so the user can see a live 
- preview without finalizing the edit session.
- */
-const saveEditExistingForPreview = asyncHandler(async (req, res) => {
-  const article = await articleService.saveExistingArticleForPreview(
-    req.params.id,
-    req.user.id,
-    req.body,
-  );
-
-  sendSuccess(res, {
-    message: "Article preview saved.",
-    data: article,
-  });
-});
-
-/*
- Finalizes the editing session, updates the main article row, and clears the backup.
- */
-const saveEditExistingAsDraft = asyncHandler(async (req, res) => {
-  const article = await articleService.saveExistingArticleAsDraft(
-    req.params.id,
-    req.user.id,
-    req.body,
-  );
-
-  sendSuccess(res, {
-    message: "Edited article saved as draft successfully.",
-    data: article,
-  });
-});
-
-/*
- Discards all current session changes and restores the article from the original backup.
- */
-const discardEditExisting = asyncHandler(async (req, res) => {
-  const article = await articleService.discardExistingArticleEdits(
-    req.params.id,
-    req.user.id,
-  );
-
-  sendSuccess(res, {
-    message: "Article changes discarded successfully.",
-    data: article,
-  });
-});
-
-/*
- Explicitly cleans up backup metadata once a session is successfully concluded.
- */
-const clearEditExistingBackup = asyncHandler(async (req, res) => {
-  const article = await articleService.clearEditExistingBackup(
-    req.params.id,
-    req.user.id,
-  );
-
-  sendSuccess(res, {
-    message: "Edit-existing backup cleared successfully.",
-    data: article,
-  });
-});
-
-//  EDIT AS NEW FLOW 
-
-/*
- Creates a temporary clone of an existing article to be edited as a fresh piece.
- */
-const startEditAsNew = asyncHandler(async (req, res) => {
-  const article = await articleService.startEditAsNewArticle(
-    req.params.id,
-    req.user.id,
-  );
-
-  sendSuccess(res, {
-    statusCode: 201,
-    message: "Edit-as-new article created successfully.",
-    data: article,
-  });
-});
-
-/*
- Background save for cloned articles.
- */
-const autosaveEditAsNew = asyncHandler(async (req, res) => {
-  const article = await articleService.autosaveEditAsNewArticle(
-    req.params.id,
-    req.user.id,
-    req.body,
-  );
-
-  sendSuccess(res, {
-    message: "Edit-as-new article autosaved successfully.",
-    data: article,
-  });
-});
-
-/*
- Finalizes a clone into a real, independent draft article.
- */
-const saveEditAsNewAsDraft = asyncHandler(async (req, res) => {
-  const article = await articleService.saveEditAsNewArticleAsDraft(
-    req.params.id,
-    req.user.id,
-    req.body,
-  );
-
-  sendSuccess(res, {
-    message: "Edit-as-new article saved as draft successfully.",
-    data: article,
-  });
-});
-
-/*
- Deletes the temporary clone if the user cancels the session.
- */
-const discardEditAsNew = asyncHandler(async (req, res) => {
-  await articleService.discardEditAsNewArticle(
-    req.params.id,
-    req.user.id,
-  );
-
-  sendSuccess(res, {
-    message: "Edit-as-new article discarded successfully.",
-  });
-});
-
-const deleteArticle = asyncHandler(async (req, res) => {
-  await articleService.deleteArticle(req.params.id, req.user.id, req.user.role);
-
-  // Auto-sync to LinkedIn if requested in payload
-  if (req.body.linkedinSync) {
-    const scheduledAt = req.body.timing === "schedule" ? req.body.scheduledAt : null;
-    linkedinService
-      .scheduleLinkedInPublish(article.id, req.user.id, scheduledAt, req.body.linkedinCaption)
-      .catch((err) => console.error("[LinkedIn Auto-Sync Error]", err.message));
-  }
-
-  sendSuccess(res, {
-    message:
-      article.status === "SCHEDULED"
-        ? "Article scheduled successfully."
-        : "Article published successfully.",
-    data: article,
-  });
-});
-
-/*
- Increments the readCount and tracks history for analytics.
- */
-const recordRead = asyncHandler(async (req, res) => {
-  await articleService.recordRead(req.params.id, req.user.id);
-
-  sendSuccess(res, { message: "Read recorded." });
-});
-
-//  HELPERS 
-
-/*
- Normalizes optional boolean query parameters (like 'true'/'false' strings) 
- into actual Javascript booleans for the service layer.
- */
-function parseBooleanQuery(value) {
-  if (value === "true") return true;
-  if (value === "false") return false;
-  return undefined;
-}
-
-=======
->>>>>>> main
 module.exports = {
   createArticle,
   getArticle,
