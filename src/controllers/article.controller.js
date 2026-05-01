@@ -82,6 +82,7 @@ const updateArticle = asyncHandler(async (req, res) => {
 });
 
 // The response message depends on whether the article was published now or scheduled.
+// LinkedIn auto-sync is correctly placed here.
 const publishArticle = asyncHandler(async (req, res) => {
   const article = await articleService.publishArticle(
     req.app,
@@ -89,6 +90,14 @@ const publishArticle = asyncHandler(async (req, res) => {
     req.user.id,
     req.body,
   );
+
+  // Auto-sync to LinkedIn if requested in payload
+  if (req.body.linkedinSync) {
+    const scheduledAt = req.body.timing === "schedule" ? req.body.scheduledAt : null;
+    linkedinService
+      .scheduleLinkedInPublish(article.id, req.user.id, scheduledAt, req.body.linkedinCaption)
+      .catch((err) => console.error("[LinkedIn Auto-Sync Error]", err.message));
+  }
 
   sendSuccess(res, {
     message:
@@ -152,6 +161,8 @@ const getScheduledByUser = asyncHandler(async (req, res) => {
     message: "Scheduled articles retrieved.",
   });
 });
+
+// --- EDIT EXISTING FLOW ---
 
 const startEditExisting = asyncHandler(async (req, res) => {
   const article = await articleService.startExistingArticleEditing(
@@ -230,6 +241,8 @@ const clearEditExistingBackup = asyncHandler(async (req, res) => {
   });
 });
 
+// --- EDIT AS NEW FLOW ---
+
 const startEditAsNew = asyncHandler(async (req, res) => {
   const article = await articleService.startEditAsNewArticle(
     req.params.id,
@@ -294,10 +307,8 @@ const recordRead = asyncHandler(async (req, res) => {
 
 // Convert optional boolean query params into real booleans for service filters.
 function parseBooleanQuery(value) {
-  if (value === "true")
-    return true;
-  if (value === "false")
-    return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
   return undefined;
 }
 
@@ -321,6 +332,7 @@ const getDrafts = asyncHandler(async (req, res) => {
     message: "Drafts retrieved.",
   });
 });
+
 // Trending articles are used by the article suggestion/slider UI.
 const getTrendingArticles = asyncHandler(async (req, res) => {
   const articles = await articleService.getTrendingArticles();
