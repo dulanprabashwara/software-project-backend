@@ -8,7 +8,12 @@ const fetchUserInteractions = async (userId) => {
       article: {
         include: {
           author: {
-            select: { id: true, displayName: true, avatarUrl: true, isPremium: true }
+            select: {
+               id: true, 
+               displayName: true, 
+               avatarUrl: true, 
+               isPremium: true,
+              username: true }
           },
           _count: {
             select: { comments: true }

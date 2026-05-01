@@ -24,6 +24,7 @@ const getUserReadHistory = async (userId) => {
             select: { 
                 displayName: true,
                 isPremium: true,
+                username: true
 
                  
             }
