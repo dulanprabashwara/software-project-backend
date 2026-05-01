@@ -3,6 +3,7 @@
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendPaginated } = require("../utils/response");
 const articleService = require("../services/article.service");
+const linkedinService = require("../services/linkedin.service");
 const { parsePagination } = require("../utils/helpers");
 
 //  PUBLIC VIEWS & DISCOVERY
@@ -385,6 +386,14 @@ const publishArticle = asyncHandler(async (req, res) => {
     req.user.id,
     req.body,
   );
+
+  // Auto-sync to LinkedIn if requested in payload
+  if (req.body.linkedinSync) {
+    const scheduledAt = req.body.timing === "schedule" ? req.body.scheduledAt : null;
+    linkedinService
+      .scheduleLinkedInPublish(article.id, req.user.id, scheduledAt, req.body.linkedinCaption)
+      .catch((err) => console.error("[LinkedIn Auto-Sync Error]", err.message));
+  }
 
   sendSuccess(res, {
     message:
