@@ -382,6 +382,7 @@ const discardEditAsNew = asyncHandler(async (req, res) => {
  */
 const publishArticle = asyncHandler(async (req, res) => {
   const article = await articleService.publishArticle(
+    req.app,
     req.params.id,
     req.user.id,
     req.body,

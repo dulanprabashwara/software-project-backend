@@ -20,10 +20,12 @@ const {
   shouldUpdateArticleTimestamp,
 } = require("./article.helpers");
 
+const { notifyFollowersOfNewArticle } = require("../notification.service");
+
 /*
  Publishes or schedules an article.
  */
-async function publishArticle(articleId, userId, payload) {
+async function publishArticle(app, articleId, userId, payload) {
   const article = await getOwnedArticleOrThrow(articleId, userId);
 
   if (article.status === ARTICLE_STATUS.PUBLISHED) {
@@ -75,7 +77,9 @@ async function publishArticle(articleId, userId, payload) {
     updatedArticle.status === ARTICLE_STATUS.PUBLISHED
   ) {
     await incrementPublishedArticleCount(userId);
-  }
+}
+
+notifyFollowersOfNewArticle(app, userId, updatedArticle.id).catch(console.error);
 
   return updatedArticle;
 }
