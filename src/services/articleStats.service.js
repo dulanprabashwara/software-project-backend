@@ -31,33 +31,58 @@ const updateCommentCount = async (articleId) => {
  */
 const updateRatingStats = async (articleId) => {
   try {
-    // 1. Ask Prisma to calculate the Average and the Count of all scores for this article
-    const aggregations = await prisma.articleRating.aggregate({
+    // 1. Calculate the Average and the Count of all scores for this specific article
+    const articleAggregations = await prisma.articleRating.aggregate({
       where: { articleId: articleId },
       _avg: { score: true },
       _count: { score: true }
     });
 
-    // 2. Extract the numbers (fallback to 0 if there are no ratings somehow)
-    const newAverage = aggregations._avg.score || 0;
-    const newCount = aggregations._count.score || 0;
+    const newArticleAverage = articleAggregations._avg.score || 0;
+    const newArticleCount = articleAggregations._count.score || 0;
 
-    // 3. Update the Article table with the freshly calculated stats
+    // 2. Update the Article table with the freshly calculated stats
+    // Prisma returns the updated record, which gives us the authorId we need next
     const updatedArticle = await prisma.article.update({
       where: { id: articleId },
       data: {
-        averageRating: newAverage,
-        ratingCount: newCount
+        averageRating: newArticleAverage,
+        ratingCount: newArticleCount
       }
+    });
+
+    const authorId = updatedArticle.authorId;
+
+    // 3. Calculate the new overall average rating for the author across ALL their articles
+    const userAggregations = await prisma.articleRating.aggregate({
+      where: {
+        article: {
+          authorId: authorId,
+        },
+      },
+      _avg: { score: true },
+    });
+
+    const newUserAverage = userAggregations._avg.score || 0;
+
+    // Update the UserStats table using upsert
+    await prisma.userStats.upsert({
+      where: { userId: authorId },
+      update: {
+        averageRating: newUserAverage,
+      },
+      create: {
+        userId: authorId,
+        averageRating: newUserAverage,
+      },
     });
 
     return updatedArticle;
   } catch (error) {
     console.error("Failed to update rating stats:", error.message);
-    throw error; // Throwing allows the controller to catch and handle it if needed
+    throw error;
   }
 };
-
 const updateInteractionsTable = async (userId, articleId, type) => {
   try {
     const dataToUpdate = {};
