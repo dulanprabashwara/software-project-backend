@@ -6,8 +6,39 @@ const getPublishedMainFeed = async (page = 1, limit = 10) => {
   return await prisma.article.findMany({
     where: { status: "PUBLISHED" }, 
     orderBy: { publishedAt: "desc" },
-    take: limit, // Only fetch 10
-    skip: skip,  // Skip previous pages
+    take: limit, 
+    skip: skip,  
+    include: {
+      author: {
+        select: {
+          displayName: true,
+          username: true,
+          avatarUrl: true,
+          isPremium: true
+        },
+      },
+    },
+  });
+};
+
+// UPDATED: Now requires userId and filters by followed authors
+const getFollowingFeed = async (userId, page = 1, limit = 10) => {
+  const skip = (page - 1) * limit;
+
+  return await prisma.article.findMany({
+    where: { 
+      status: "PUBLISHED",
+      author: {
+        followers: {
+          some: {
+            followerId: userId // Only articles where the current user is a follower
+          }
+        }
+      }
+    }, 
+    orderBy: { publishedAt: "desc" },
+    take: limit, 
+    skip: skip,  
     include: {
       author: {
         select: {
@@ -23,4 +54,5 @@ const getPublishedMainFeed = async (page = 1, limit = 10) => {
 
 module.exports = {
   getPublishedMainFeed,
+  getFollowingFeed // Make sure to export it
 };

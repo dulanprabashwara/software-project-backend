@@ -41,19 +41,35 @@ const getUserReadHistory = async (userId) => {
  * it updates the timestamp and increments the count.
  */
 const recordArticleRead = async (userId, articleId) => {
-  return await prisma.readHistory.upsert({
-    where: {
-      userId_articleId: { userId, articleId },
-    },
-    update: {
-      lastReadAt: new Date(),
-      readCount: { increment: 1 },
-    },
-    create: {
-      userId,
-      articleId,
-    },
-  });
+  // Use a transaction to ensure both operations succeed or fail together
+  return await prisma.$transaction([
+    
+    // 1. Upsert the user's personal read history
+    prisma.readHistory.upsert({
+      where: {
+        userId_articleId: { userId, articleId },
+      },
+      update: {
+        lastReadAt: new Date(),
+        readCount: { increment: 1 },
+      },
+      create: {
+        userId,
+        articleId,
+      },
+    }),
+
+    // 2. Increment the global read count on the article itself
+    prisma.article.update({
+      where: {
+        id: articleId,
+      },
+      data: {
+        readCount: { increment: 1 },
+      },
+    }),
+    
+  ]);
 };
 
 module.exports = {
