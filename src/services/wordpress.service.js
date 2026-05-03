@@ -44,15 +44,21 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
       const buffer   = Buffer.from(match[2], "base64");
       const ext      = mimeType.split("/")[1] || "jpg";
 
-      const res = await axios.post(mediaEndpoint, buffer, {
+      // WordPress.com media API requires multipart/form-data, not raw binary
+      const FormData = require("form-data");
+      const form     = new FormData();
+      form.append("media[]", buffer, { filename: `cover.${ext}`, contentType: mimeType });
+
+      const res = await axios.post(mediaEndpoint, form, {
         headers: {
-          Authorization:       `Bearer ${connection.accessToken}`,
-          "Content-Type":      mimeType,
-          "Content-Disposition": `attachment; filename="cover.${ext}"`,
+          Authorization: `Bearer ${connection.accessToken}`,
+          ...form.getHeaders(),
         },
-        timeout: MEDIA_UPLOAD_TIMEOUT_MS,
+        timeout: 30000,
       });
-      return res.data?.ID || null;
+
+      // Response is { media: [{ ID: ... }] }
+      return res.data?.media?.[0]?.ID || null;
     }
 
     // Absolute public URL — ask WordPress to sideload it
@@ -68,12 +74,12 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
           timeout: MEDIA_UPLOAD_TIMEOUT_MS,
         }
       );
-      return res.data?.ID || null;
+      return res.data?.media?.[0]?.ID || res.data?.ID || null;
     }
 
-    return null; // relative or unrecognised format — skip
+    return null;
   } catch {
-    return null; // image upload failed — post without featured image
+    return null;
   }
 };
 
@@ -108,7 +114,7 @@ const initiateWordPressAuth = (userId) => {
     client_id:     clientId,
     redirect_uri:  redirectUri,
     response_type: "code",
-    scope:         "posts auth",
+    scope:         "posts auth media",
     state,
   });
 
@@ -278,7 +284,8 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
       });
       return { success: true, message: "Article published to WordPress successfully.", wpPostId, wpPostUrl };
     } catch (publishErr) {
-      const draftUrl = await attemptDraftSave(article, connection);
+      const draftUrl = await attemptDraftSave(article, connection)
+        || `https://wordpress.com/posts/${connection.siteUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
       await prisma.wordPressPublishJob.create({
         data: { ...jobBase, scheduledAt: new Date(), status: "FAILED", errorMsg: publishErr.message, draftUrl },
       });
