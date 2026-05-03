@@ -3,7 +3,7 @@ const homefeedService = require("../services/homefeed.service");
 exports.getMainFeed = async (req, res) => {
   try {
     const page = parseInt(req.query.page, 10) || 1;
-    const limit = 10; 
+    const limit = 5; 
 
     const articles = await homefeedService.getPublishedMainFeed(page, limit);
     res.status(200).json(articles); 
@@ -24,7 +24,7 @@ exports.getFollowingFeed = async (req, res) => {
     }
 
     const page = parseInt(req.query.page, 10) || 1;
-    const limit = 10; 
+    const limit = 5; 
 
     const articles = await homefeedService.getFollowingFeed(userId, page, limit);
     res.status(200).json(articles); 

@@ -1,6 +1,6 @@
 const prisma = require("../config/prisma");
 
-const getPublishedMainFeed = async (page = 1, limit = 10) => {
+const getPublishedMainFeed = async (page = 1, limit = 5) => {
   const skip = (page - 1) * limit;
 
   return await prisma.article.findMany({
@@ -22,7 +22,7 @@ const getPublishedMainFeed = async (page = 1, limit = 10) => {
 };
 
 // UPDATED: Now requires userId and filters by followed authors
-const getFollowingFeed = async (userId, page = 1, limit = 10) => {
+const getFollowingFeed = async (userId, page = 1, limit = 5) => {
   const skip = (page - 1) * limit;
 
   return await prisma.article.findMany({
