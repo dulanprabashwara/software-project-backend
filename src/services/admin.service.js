@@ -21,6 +21,50 @@ const getLast30Days = () => {
   return { labels: dates, rawDates: startDates };
 };
 
+const calculateEngagement = async (days) => {
+  // 1. Figure out the cutoff date (e.g., 7 days ago)
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  // 2. Query Postgres via Prisma for records since that date
+  const records = await prisma.user.findMany({
+    where: {
+      createdAt: {
+        gte: startDate,
+      },
+    },
+    select: {
+      createdAt: true,
+    },
+  });
+  // 3. Create a blank calendar for the last X days
+  // This ensures days with "0" engagement still show up on the graph!
+  const engagementMap = {};
+  for (let i = days - 1; i >= 0; i--) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    // Format as "Mon DD" (e.g., "Apr 26")
+    const dateString = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    engagementMap[dateString] = 0;
+  }
+
+  // 4. Fill the calendar with the real database data
+  records.forEach((record) => {
+    const dateString = record.createdAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    if (engagementMap[dateString] !== undefined) {
+      engagementMap[dateString] += 1; // Increment the count for that day
+    }
+  });
+  // 5. Separate into the exact arrays Chart.js asked for
+  const labels = Object.keys(engagementMap);
+  const values = Object.values(engagementMap);
+
+  return {
+    labels: labels, 
+    values: values 
+  };
+};
+
 /**
  * Get or create the admin dashboard singleton.
  */
@@ -564,6 +608,7 @@ const deleteScrapingSource = async (id, adminId) => {
 };
 
 module.exports = {
+  calculateEngagement,
   getDashboard,
   refreshDashboard,
   listUsers,
