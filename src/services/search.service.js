@@ -1,31 +1,33 @@
 // @ts-nocheck
+// @ts-nocheck
 const prisma = require("../config/prisma");
 
 // ── CONSTANTS ───────────────────────────────────────────────────────
 
-// Search limits
-const DEFAULT_SEARCH_LIMIT = 10;
-const TITLE_MATCH_LIMIT = 50;
-const SUMMARY_MATCH_LIMIT = 50;
-const AUTOCOMPLETE_ARTICLES_LIMIT = 5;
-const AUTOCOMPLETE_USERS_LIMIT = 3;
-const AUTOCOMPLETE_MIN_QUERY_LENGTH = 2;
+const DEFAULT_SEARCH_LIMIT           = 10;
+const TITLE_MATCH_LIMIT              = 50;
+const TAG_MATCH_LIMIT                = 50;
+const AUTOCOMPLETE_ARTICLES_LIMIT    = 5;
+const AUTOCOMPLETE_USERS_LIMIT       = 3;
+const AUTOCOMPLETE_MIN_QUERY_LENGTH  = 2;
+const ENGAGEMENT_RATING_MULTIPLIER   = 10;
+const ENGAGEMENT_COMMENT_MULTIPLIER  = 2;
+const FOLLOWER_ARTICLE_MULTIPLIER    = 10;
+const SEARCH_RESULTS_MULTIPLIER      = 5;
 
-// Engagement scoring
-const ENGAGEMENT_RATING_MULTIPLIER = 10;
-const ENGAGEMENT_COMMENT_MULTIPLIER = 2;
-const FOLLOWER_ARTICLE_MULTIPLIER = 10;
+// ── HELPERS ─────────────────────────────────────────────────────────
 
-// Pagination
-const SEARCH_RESULTS_MULTIPLIER = 5;
+// Escapes special regex characters so user input is safe for RegExp constructor.
+const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// Computes an engagement score for ranking article search results.
-// Uses averageRating × ratingCount as the primary signal (reflects both
-// quality and popularity), supplemented by read count and comment count.
+// Engagement score: quality × volume (rating), depth (comments), reach (reads).
 const computeEngagement = (article) =>
   (article.averageRating || 0) * (article.ratingCount || 0) * ENGAGEMENT_RATING_MULTIPLIER +
   (article.readCount     || 0) +
   (article.commentCount  || 0) * ENGAGEMENT_COMMENT_MULTIPLIER;
+
+const sortByEngagement = (articles) =>
+  [...articles].sort((a, b) => computeEngagement(b) - computeEngagement(a));
 
 const ARTICLE_AUTHOR_SELECT = {
   author: {
@@ -40,60 +42,92 @@ const ARTICLE_AUTHOR_SELECT = {
   _count: { select: { comments: true } },
 };
 
-// Sorts an array of articles by engagement score descending.
-const sortByEngagement = (articles) =>
-  [...articles].sort((a, b) => computeEngagement(b) - computeEngagement(a));
+// Prisma does not support case-insensitive array-element matching natively,
+// so tag queries use $queryRaw with PostgreSQL's unnest + lower().
+// Two overloads handle the empty-exclusion-list edge case to avoid passing
+// an empty array to ANY(), which some PostgreSQL drivers reject.
+const fetchTagMatchIds = (excludeIds, q) =>
+  excludeIds.length > 0
+    ? prisma.$queryRaw`
+        SELECT id FROM articles
+        WHERE status = 'PUBLISHED'
+        AND id != ALL(${excludeIds})
+        AND EXISTS (SELECT 1 FROM unnest(tags) AS t WHERE lower(t) = lower(${q}))
+        LIMIT ${TAG_MATCH_LIMIT}`
+    : prisma.$queryRaw`
+        SELECT id FROM articles
+        WHERE status = 'PUBLISHED'
+        AND EXISTS (SELECT 1 FROM unnest(tags) AS t WHERE lower(t) = lower(${q}))
+        LIMIT ${TAG_MATCH_LIMIT}`;
 
-// Searches published articles by title then summary.
-// Title matches are always ranked above summary matches.
-// Within each group, results are ordered by engagement score.
-// When currentUserId is provided, stamps isSaved on each result.
+const countTagOnly = (excludeIds, q) =>
+  excludeIds.length > 0
+    ? prisma.$queryRaw`
+        SELECT COUNT(*)::int AS count FROM articles
+        WHERE status = 'PUBLISHED'
+        AND id != ALL(${excludeIds})
+        AND EXISTS (SELECT 1 FROM unnest(tags) AS t WHERE lower(t) = lower(${q}))`
+    : prisma.$queryRaw`
+        SELECT COUNT(*)::int AS count FROM articles
+        WHERE status = 'PUBLISHED'
+        AND EXISTS (SELECT 1 FROM unnest(tags) AS t WHERE lower(t) = lower(${q}))`;
+
+// ── SEARCH ARTICLES ─────────────────────────────────────────────────
+
+// Three-tier ranking for article search:
+//   Tier 1 — title contains the query as an exact whole word (\bquery\b)
+//   Tier 2 — any tag exactly equals the query (case-insensitive), not in tier 1
+//   Tier 3 — title contains query as a substring/extension (e.g. "princess" for "prince")
+// Each tier is independently sorted by engagement score before merging.
+// Replaces the previous title + summary approach: summary was causing false
+// positives (unrelated content boosting irrelevant articles into top results).
 const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, currentUserId = null }) => {
   const q = (query || "").trim();
   if (!q) return { articles: [], total: 0, page, limit, totalPages: 0 };
 
   const publishedFilter = { status: "PUBLISHED" };
-  const caseInsensitive = (field) => ({ [field]: { contains: q, mode: "insensitive" } });
 
+  // Fetch all title-containing matches first (covers both tier 1 and tier 3).
   const titleMatches = await prisma.article.findMany({
-    where: { ...publishedFilter, ...caseInsensitive("title") },
+    where: { ...publishedFilter, title: { contains: q, mode: "insensitive" } },
     include: ARTICLE_AUTHOR_SELECT,
-    orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }, { readCount: "desc" }],
     take: TITLE_MATCH_LIMIT,
   });
 
   const titleIds = titleMatches.map((a) => a.id);
 
-  const summaryMatches = await prisma.article.findMany({
-    where: {
-      ...publishedFilter,
-      ...(titleIds.length > 0 && { NOT: { id: { in: titleIds } } }),
-      ...caseInsensitive("summary"),
-    },
-    include: ARTICLE_AUTHOR_SELECT,
-    orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }, { readCount: "desc" }],
-    take: SUMMARY_MATCH_LIMIT,
-  });
+  // Fetch tag-matched articles not already captured by the title query.
+  const tagMatchRows = await fetchTagMatchIds(titleIds, q);
+  const tagMatchIds  = tagMatchRows.map((r) => r.id);
 
-  const total = await prisma.article.count({
-    where: {
-      ...publishedFilter,
-      OR: [
-        { title:   { contains: q, mode: "insensitive" } },
-        { summary: { contains: q, mode: "insensitive" } },
-      ],
-    },
-  });
+  const tagMatches = tagMatchIds.length > 0
+    ? await prisma.article.findMany({
+        where:   { id: { in: tagMatchIds } },
+        include: ARTICLE_AUTHOR_SELECT,
+      })
+    : [];
 
-  const merged    = [...sortByEngagement(titleMatches), ...sortByEngagement(summaryMatches)];
+  // Total = title matches + tag-only matches (no double-counting).
+  const [titleTotal, tagOnlyTotalRows] = await Promise.all([
+    prisma.article.count({ where: { ...publishedFilter, title: { contains: q, mode: "insensitive" } } }),
+    countTagOnly(titleIds, q),
+  ]);
+  const total = titleTotal + Number(tagOnlyTotalRows[0]?.count ?? 0);
+
+  // Split title matches into tier 1 (exact word) and tier 3 (partial/extension).
+  const exactWordRegex  = new RegExp(`\\b${escapeRegex(q)}\\b`, "i");
+  const tier1 = titleMatches.filter((a) =>  exactWordRegex.test(a.title));
+  const tier3 = titleMatches.filter((a) => !exactWordRegex.test(a.title));
+
+  const merged    = [...sortByEngagement(tier1), ...sortByEngagement(tagMatches), ...sortByEngagement(tier3)];
   const skip      = (page - 1) * limit;
   const paginated = merged.slice(skip, skip + limit);
 
-  // Bulk-check which articles the current user has already saved (one query).
+  // Bulk-check saved state for the logged-in user in a single query.
   let savedSet = new Set();
   if (currentUserId && paginated.length > 0) {
     const saved = await prisma.savedArticle.findMany({
-      where: { userId: currentUserId, articleId: { in: paginated.map((a) => a.id) } },
+      where:  { userId: currentUserId, articleId: { in: paginated.map((a) => a.id) } },
       select: { articleId: true },
     });
     savedSet = new Set(saved.map((s) => s.articleId));
@@ -106,6 +140,8 @@ const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, c
 
   return { articles, total, page, limit, totalPages: Math.ceil(total / limit) };
 };
+
+// ── SEARCH USERS ────────────────────────────────────────────────────
 
 // Searches users by username or displayName.
 // Results are ranked by follower_score = totalFollowers + (articleCount × 10).
@@ -123,7 +159,7 @@ const searchUsers = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, curr
 
   const [rawUsers, total] = await Promise.all([
     prisma.user.findMany({
-      where: nameFilter,
+      where:  nameFilter,
       select: {
         id:          true,
         username:    true,
@@ -147,13 +183,13 @@ const searchUsers = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, curr
   const skip      = (page - 1) * limit;
   const paginated = sorted.slice(skip, skip + limit);
 
-  // Bulk-check which users the current user already follows (one query).
+  // Bulk-check follow state for the logged-in user in a single query.
   let followingSet = new Set();
   if (currentUserId && paginated.length > 0) {
     const checkIds = paginated.map((u) => u.id).filter((id) => id !== currentUserId);
     if (checkIds.length > 0) {
       const follows = await prisma.follow.findMany({
-        where: { followerId: currentUserId, followingId: { in: checkIds } },
+        where:  { followerId: currentUserId, followingId: { in: checkIds } },
         select: { followingId: true },
       });
       followingSet = new Set(follows.map((f) => f.followingId));
@@ -168,32 +204,50 @@ const searchUsers = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, curr
   return { users, total, page, limit, totalPages: Math.ceil(total / limit) };
 };
 
-// Returns lightweight autocomplete data for a partial query.
-// Returns up to 5 article titles and 3 user names. Minimum query length: 2.
+// ── AUTOCOMPLETE SUGGESTIONS ────────────────────────────────────────
+
+// Returns lightweight autocomplete data: up to 5 articles and 3 users.
+// Articles are sourced from title matches first, then tag matches to fill
+// any remaining slots up to the limit. Minimum query length: 2 characters.
 const getSearchSuggestions = async (query) => {
   const q = (query || "").trim();
   if (q.length < AUTOCOMPLETE_MIN_QUERY_LENGTH) return { articles: [], users: [] };
 
-  const [articles, users] = await Promise.all([
-    prisma.article.findMany({
-      where: { status: "PUBLISHED", title: { contains: q, mode: "insensitive" } },
-      select:  { id: true, title: true, slug: true },
-      orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }],
-      take: AUTOCOMPLETE_ARTICLES_LIMIT,
-    }),
-    prisma.user.findMany({
-      where: {
-        OR: [
-          { username:    { contains: q, mode: "insensitive" } },
-          { displayName: { contains: q, mode: "insensitive" } },
-        ],
-      },
-      select: { id: true, username: true, displayName: true, avatarUrl: true },
-      take: AUTOCOMPLETE_USERS_LIMIT,
-    }),
-  ]);
+  const titleSuggestions = await prisma.article.findMany({
+    where:   { status: "PUBLISHED", title: { contains: q, mode: "insensitive" } },
+    select:  { id: true, title: true, slug: true },
+    orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }],
+    take:    AUTOCOMPLETE_ARTICLES_LIMIT,
+  });
 
-  return { articles, users };
+  // Fill remaining slots with tag-matched articles not already shown.
+  let tagSuggestions = [];
+  const remaining = AUTOCOMPLETE_ARTICLES_LIMIT - titleSuggestions.length;
+  if (remaining > 0) {
+    const titleSuggestionIds = titleSuggestions.map((a) => a.id);
+    const tagRows = await fetchTagMatchIds(titleSuggestionIds, q);
+    const tagIds  = tagRows.map((r) => r.id).slice(0, remaining);
+    if (tagIds.length > 0) {
+      tagSuggestions = await prisma.article.findMany({
+        where:   { id: { in: tagIds } },
+        select:  { id: true, title: true, slug: true },
+        orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }],
+      });
+    }
+  }
+
+  const users = await prisma.user.findMany({
+    where: {
+      OR: [
+        { username:    { contains: q, mode: "insensitive" } },
+        { displayName: { contains: q, mode: "insensitive" } },
+      ],
+    },
+    select: { id: true, username: true, displayName: true, avatarUrl: true },
+    take:   AUTOCOMPLETE_USERS_LIMIT,
+  });
+
+  return { articles: [...titleSuggestions, ...tagSuggestions], users };
 };
 
 module.exports = { searchArticles, searchUsers, getSearchSuggestions };
