@@ -57,8 +57,8 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
         timeout: 30000,
       });
 
-      // Response is { media: [{ ID: ... }] }
-      return res.data?.media?.[0]?.ID || null;
+      // Return the public URL — WordPress.com v1.1 featured_image expects a URL, not an integer ID
+      return res.data?.media?.[0]?.URL || null;
     }
 
     // Absolute public URL — ask WordPress to sideload it
@@ -74,7 +74,7 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
           timeout: MEDIA_UPLOAD_TIMEOUT_MS,
         }
       );
-      return res.data?.media?.[0]?.ID || res.data?.ID || null;
+      return res.data?.media?.[0]?.URL || null;
     }
 
     return null;
@@ -83,17 +83,17 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
   }
 };
 
-// Builds the post body sent to the WordPress REST API.
-// Accepts an optional featuredMediaId from uploadCoverImageToWordPress.
-// Used by both pushArticleToWordPress and attemptDraftSave.
-const buildWpPostBody = (article, status, featuredMediaId = null) => {
+// Builds the post body for the WordPress REST API.
+// featuredImageUrl: the WordPress-hosted URL returned by uploadCoverImageToWordPress.
+// WordPress.com REST API v1.1 uses featured_image (URL), not featured_media (integer ID).
+const buildWpPostBody = (article, status, featuredImageUrl = null) => {
   const canonical = buildCanonicalSnippet(article);
   return {
     title:   article.title,
     content: canonical + (article.content || ""),
     status,
-    ...(article.tags?.length  && { tags: article.tags.join(",") }),
-    ...(featuredMediaId       && { featured_media: featuredMediaId }),
+    ...(article.tags?.length && { tags: article.tags.join(",") }),
+    ...(featuredImageUrl     && { featured_image: featuredImageUrl }),
   };
 };
 
@@ -206,17 +206,22 @@ const disconnectWordPress = async (userId) => {
   return { disconnected: true };
 };
 
-// Sends the article to the WordPress REST API as a published post.
-// Uploads the cover image to WordPress media first so it appears as the featured image.
-// Throws a plain Error on failure so the caller can attempt a draft fallback.
+// Sends the article to WordPress as a published post.
+// Tries to set the cover image as featured image via media upload.
+// If upload fails, falls back to passing the original URL directly (works for public URLs after hosting).
 const pushArticleToWordPress = async (article, connection) => {
-  const featuredMediaId = await uploadCoverImageToWordPress(article.coverImage, connection);
+  let featuredImageUrl = await uploadCoverImageToWordPress(article.coverImage, connection);
+
+  // Fallback: if media upload failed but coverImage is already a public URL, use it directly
+  if (!featuredImageUrl && article.coverImage?.startsWith("http")) {
+    featuredImageUrl = article.coverImage;
+  }
 
   let wpRes;
   try {
     const res = await axios.post(
       `${WP_API_BASE}/sites/${connection.siteId}/posts/new`,
-      buildWpPostBody(article, "publish", featuredMediaId),
+      buildWpPostBody(article, "publish", featuredImageUrl),
       {
         headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
         timeout: POST_PUBLISH_TIMEOUT_MS,
@@ -232,16 +237,18 @@ const pushArticleToWordPress = async (article, connection) => {
   return { wpPostId: String(wpRes.ID), wpPostUrl: wpRes.URL };
 };
 
-// Saves the article as a draft on WordPress when a publish attempt fails.
-// Also uploads the cover image so the draft has the featured image ready.
-// Returns the WordPress drafts dashboard URL on success, or null if the draft save fails.
+// Saves the article as a draft on WordPress when publish fails.
+// Returns the WordPress posts dashboard URL so the user can manually publish it.
 const attemptDraftSave = async (article, connection) => {
   try {
-    const featuredMediaId = await uploadCoverImageToWordPress(article.coverImage, connection);
+    let featuredImageUrl = await uploadCoverImageToWordPress(article.coverImage, connection);
+    if (!featuredImageUrl && article.coverImage?.startsWith("http")) {
+      featuredImageUrl = article.coverImage;
+    }
 
     await axios.post(
       `${WP_API_BASE}/sites/${connection.siteId}/posts/new`,
-      buildWpPostBody(article, "draft", featuredMediaId),
+      buildWpPostBody(article, "draft", featuredImageUrl),
       {
         headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
         timeout: POST_PUBLISH_TIMEOUT_MS,
