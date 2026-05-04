@@ -1,5 +1,4 @@
 // @ts-nocheck
-// @ts-nocheck
 const prisma = require("../config/prisma");
 
 // ── CONSTANTS ───────────────────────────────────────────────────────
@@ -7,6 +6,7 @@ const prisma = require("../config/prisma");
 const DEFAULT_SEARCH_LIMIT           = 10;
 const TITLE_MATCH_LIMIT              = 50;
 const TAG_MATCH_LIMIT                = 50;
+const SUMMARY_MATCH_LIMIT            = 50;
 const AUTOCOMPLETE_ARTICLES_LIMIT    = 5;
 const AUTOCOMPLETE_USERS_LIMIT       = 3;
 const AUTOCOMPLETE_MIN_QUERY_LENGTH  = 2;
@@ -74,52 +74,86 @@ const countTagOnly = (excludeIds, q) =>
 
 // ── SEARCH ARTICLES ─────────────────────────────────────────────────
 
-// Three-tier ranking for article search:
+// Four-tier ranking for article search:
 //   Tier 1 — title contains the query as an exact whole word (\bquery\b)
-//   Tier 2 — any tag exactly equals the query (case-insensitive), not in tier 1
-//   Tier 3 — title contains query as a substring/extension (e.g. "princess" for "prince")
+//   Tier 2 — any tag exactly equals the query (case-insensitive)
+//   Tier 3 — summary contains the query as an exact whole word
+//   Tier 4 — title contains the query as a substring/extension (e.g. "princess" for "prince")
 // Each tier is independently sorted by engagement score before merging.
-// Replaces the previous title + summary approach: summary was causing false
-// positives (unrelated content boosting irrelevant articles into top results).
 const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, currentUserId = null }) => {
   const q = (query || "").trim();
   if (!q) return { articles: [], total: 0, page, limit, totalPages: 0 };
 
   const publishedFilter = { status: "PUBLISHED" };
+  const exactWordRegex  = new RegExp(`\\b${escapeRegex(q)}\\b`, "i");
 
-  // Fetch all title-containing matches first (covers both tier 1 and tier 3).
+  // Fetch all title-containing matches (covers tier 1 and tier 4).
   const titleMatches = await prisma.article.findMany({
-    where: { ...publishedFilter, title: { contains: q, mode: "insensitive" } },
+    where:   { ...publishedFilter, title: { contains: q, mode: "insensitive" } },
     include: ARTICLE_AUTHOR_SELECT,
-    take: TITLE_MATCH_LIMIT,
+    take:    TITLE_MATCH_LIMIT,
   });
 
   const titleIds = titleMatches.map((a) => a.id);
 
-  // Fetch tag-matched articles not already captured by the title query.
+  // Fetch tag-matched articles not already in title results.
   const tagMatchRows = await fetchTagMatchIds(titleIds, q);
   const tagMatchIds  = tagMatchRows.map((r) => r.id);
 
   const tagMatches = tagMatchIds.length > 0
-    ? await prisma.article.findMany({
-        where:   { id: { in: tagMatchIds } },
-        include: ARTICLE_AUTHOR_SELECT,
-      })
+    ? await prisma.article.findMany({ where: { id: { in: tagMatchIds } }, include: ARTICLE_AUTHOR_SELECT })
     : [];
 
-  // Total = title matches + tag-only matches (no double-counting).
+  // Fetch summary-containing articles not already captured by title or tag queries.
+  const allExcludedIds   = [...titleIds, ...tagMatchIds];
+  const summaryMatches   = await prisma.article.findMany({
+    where: {
+      ...publishedFilter,
+      summary: { contains: q, mode: "insensitive" },
+      ...(allExcludedIds.length > 0 && { NOT: { id: { in: allExcludedIds } } }),
+    },
+    include: ARTICLE_AUTHOR_SELECT,
+    take:    SUMMARY_MATCH_LIMIT,
+  });
+
+  // Only promote summary matches where the query appears as an exact word.
+  const summaryExactMatches = summaryMatches.filter((a) => a.summary && exactWordRegex.test(a.summary));
+
+  // Total count: title + tag-only + summary-only (summary count may slightly overcount
+  // partial word matches, but is an acceptable approximation for pagination).
+  const summaryOnlyCount = await prisma.article.count({
+    where: {
+      ...publishedFilter,
+      summary: { contains: q, mode: "insensitive" },
+      ...(allExcludedIds.length > 0 && { NOT: { id: { in: allExcludedIds } } }),
+    },
+  });
+
   const [titleTotal, tagOnlyTotalRows] = await Promise.all([
     prisma.article.count({ where: { ...publishedFilter, title: { contains: q, mode: "insensitive" } } }),
     countTagOnly(titleIds, q),
   ]);
-  const total = titleTotal + Number(tagOnlyTotalRows[0]?.count ?? 0);
+  const total = titleTotal + Number(tagOnlyTotalRows[0]?.count ?? 0) + summaryOnlyCount;
 
-  // Split title matches into tier 1 (exact word) and tier 3 (partial/extension).
-  const exactWordRegex  = new RegExp(`\\b${escapeRegex(q)}\\b`, "i");
-  const tier1 = titleMatches.filter((a) =>  exactWordRegex.test(a.title));
-  const tier3 = titleMatches.filter((a) => !exactWordRegex.test(a.title));
+  // tier1: exact word in title | tier2: tag | tier3: exact word in summary | tier4: title extensions
+  //
+  // A title-matched article whose title only contains the query as a substring
+  // (e.g. "Brain" for query "ai") is initially a tier4 candidate. However if
+  // its summary contains the query as an exact word it should be promoted to
+  // tier3, because the article IS genuinely about the topic even though the
+  // title match was incidental. Without this promotion, those articles stay in
+  // allExcludedIds and never reach the summary query, leaving them in tier4.
+  const tier1           = titleMatches.filter((a) =>  exactWordRegex.test(a.title));
+  const tier4Candidates = titleMatches.filter((a) => !exactWordRegex.test(a.title));
+  const promotedToTier3 = tier4Candidates.filter((a) => a.summary && exactWordRegex.test(a.summary));
+  const tier4           = tier4Candidates.filter((a) => !a.summary || !exactWordRegex.test(a.summary));
 
-  const merged    = [...sortByEngagement(tier1), ...sortByEngagement(tagMatches), ...sortByEngagement(tier3)];
+  const merged    = [
+    ...sortByEngagement(tier1),
+    ...sortByEngagement(tagMatches),
+    ...sortByEngagement([...summaryExactMatches, ...promotedToTier3]),
+    ...sortByEngagement(tier4),
+  ];
   const skip      = (page - 1) * limit;
   const paginated = merged.slice(skip, skip + limit);
 
