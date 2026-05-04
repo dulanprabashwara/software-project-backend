@@ -29,6 +29,7 @@ const initiateLinkedInAuth = (userId) => {
     redirect_uri: redirectUri,
     state,
     scope: "openid profile email w_member_social", // w_member_social is for posting
+    prompt: "login", // Force login screen to allow account switching
   });
 
   return `${LI_OAUTH_BASE}/authorization?${params.toString()}`;
@@ -141,15 +142,40 @@ const disconnectLinkedIn = async (userId) => {
 /**
  * Posts the article to LinkedIn.
  */
-const pushArticleToLinkedIn = async (article, connection, caption) => {
+const pushArticleToLinkedIn = async (article, connection, caption, job = null) => {
   const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
-  const articleUrl = `${clientUrl}/article/${article.slug}`;
+  
+  // Use snapshot from job if available, otherwise fallback to current article state
+  const title = job?.title || article.title;
+  const coverImage = job?.coverImage || article.coverImage;
+  // 1. Ensure absolute Article URL
+  const articleUrl = article.slug.startsWith("http") 
+    ? article.slug 
+    : `${clientUrl}/article/${article.slug}`;
+
+  // 2. Normalize and Validate Thumbnail URL
+  let thumbnail = coverImage || undefined;
+  if (thumbnail) {
+    // If it's a relative path, prepend clientUrl
+    if (thumbnail.startsWith("/")) {
+      thumbnail = `${clientUrl}${thumbnail}`;
+    }
+    // If it's a base64 string, LinkedIn will reject it, so we remove it
+    if (thumbnail.startsWith("data:")) {
+      console.warn("[LinkedIn] Removing base64 thumbnail (LinkedIn only supports public URLs)");
+      thumbnail = undefined;
+    }
+  }
+
+  // 3. Warn about localhost
+  if (articleUrl.includes("localhost")) {
+    console.warn("[LinkedIn] Warning: Using localhost URL. LinkedIn's crawler will not be able to fetch article metadata.");
+  }
 
   // We use the modern 'v2/posts' API
-  // Documentation: https://learn.microsoft.com/en-us/linkedin/marketing/integrations/community-management/shares/posts-api
   const postBody = {
     author: `urn:li:person:${connection.liMemberId}`,
-    commentary: caption || article.title,
+    commentary: caption || title,
     visibility: "PUBLIC",
     distribution: {
       feedDistribution: "MAIN_FEED",
@@ -159,9 +185,9 @@ const pushArticleToLinkedIn = async (article, connection, caption) => {
     content: {
       article: {
         source: articleUrl,
-        title: article.title,
+        title: title,
         description: article.summary || "",
-        thumbnail: article.coverImage || undefined,
+        thumbnail: thumbnail,
       },
     },
     lifecycleState: "PUBLISHED",
@@ -177,15 +203,16 @@ const pushArticleToLinkedIn = async (article, connection, caption) => {
       timeout: POST_PUBLISH_TIMEOUT_MS,
     });
 
-    // LinkedIn returns the post URN in the 'x-restli-id' header or the body
     const postId = res.headers["x-restli-id"] || res.data?.id;
     return {
       liPostId: postId,
       liPostUrl: `https://www.linkedin.com/feed/update/${postId}`,
     };
   } catch (err) {
-    const errorDetail = err.response?.data?.message || err.message;
-    console.error("LinkedIn Post Error:", err.response?.data || err.message);
+    const apiError = err.response?.data;
+    console.error("LinkedIn Post Error Detail:", JSON.stringify(apiError, null, 2));
+    
+    const errorDetail = apiError?.message || err.message;
     throw new Error(`LinkedIn API failed: ${errorDetail}`);
   }
 };
@@ -202,7 +229,14 @@ const scheduleLinkedInPublish = async (articleId, userId, scheduledAt, caption) 
     throw ApiError.badRequest("LinkedIn is not connected.");
   }
 
-  const jobBase = { articleId, userId, liConnId: connection.id, caption };
+  const jobBase = {
+    articleId,
+    userId,
+    liConnId: connection.id,
+    caption,
+    title: article.title,
+    coverImage: article.coverImage,
+  };
 
   if (!scheduledAt) {
     // Immediate Publish
@@ -234,7 +268,14 @@ const scheduleLinkedInPublish = async (articleId, userId, scheduledAt, caption) 
   if (existingJob) {
     const updatedJob = await prisma.linkedInPublishJob.update({
       where: { id: existingJob.id },
-      data: { scheduledAt: new Date(scheduledAt), caption, status: "PENDING", errorMsg: null },
+      data: {
+        scheduledAt: new Date(scheduledAt),
+        caption,
+        status: "PENDING",
+        errorMsg: null,
+        title: article.title,
+        coverImage: article.coverImage,
+      },
     });
     cancelLinkedInJob(updatedJob.id);
     registerLinkedInJob(updatedJob.id, updatedJob.scheduledAt);
