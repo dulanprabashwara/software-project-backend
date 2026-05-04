@@ -38,7 +38,7 @@ const createNotification = async (app, { type, destUserId, sourceUserId, sourceA
  * Notify all followers when an author publishes a new article.
  */
 const notifyFollowersOfNewArticle = async (app, authorId, articleId) => {
-  console.log(`📢 Broadcasting new article (${articleId}) to followers of user (${authorId})`);
+  console.log(`  Broadcasting new article (${articleId}) to followers of user (${authorId})`);
   
   try {
     // 1. Fetch all users who are following this author
