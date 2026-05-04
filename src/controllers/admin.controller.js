@@ -12,6 +12,23 @@ const getDashboard = asyncHandler(async (req, res) => {
   sendSuccess(res, { data: dashboard });
 });
 
+const getEngagementAnalytics = async (req, res, next) => {
+  try {
+    // Grab the '?days=' from the URL (default to 30 if not provided)
+    const days = parseInt(req.query.days) || 30; 
+
+    // Call the service
+    const chartData = await adminService.calculateEngagement(days);
+
+    res.status(200).json({
+      success: true,
+      data: chartData 
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ─── Users ──────────────────────────────────
 
 const listUsers = asyncHandler(async (req, res) => {
@@ -249,6 +266,7 @@ const validateUrl = asyncHandler(async (req, res, next) => {
 
 module.exports = {
   getDashboard,
+  getEngagementAnalytics,
   listUsers,
   updateUserRole,
   togglePremium,
