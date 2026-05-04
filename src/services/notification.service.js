@@ -1,7 +1,7 @@
 const prisma = require("../config/prisma");
 
 const createNotification = async (app, { type, destUserId, sourceUserId, sourceArticleId }) => {
-  console.log(`🔔 Notif Triggered: Type=${type}, To=${destUserId}, From=${sourceUserId}, Article=${sourceArticleId}`);
+  console.log(`  Notification Triggered: Type=${type}, To=${destUserId}, From=${sourceUserId}, Article=${sourceArticleId}`);
   try {
     // Don't notify the user of their own actions
     if (destUserId === sourceUserId) return null;
@@ -129,9 +129,43 @@ const deleteNotifications = async (userId, notificationId) => {
   }
 };
 
+const publishNotification = async (app, { type, destUserId, sourceUserId, sourceArticleId }) => {
+  console.log(`  Notification Triggered: Type=${type}, To=${destUserId}, From=${sourceUserId}, Article=${sourceArticleId}`);
+  try {
+    
+
+    // 1. Save to Database  
+    const notification = await prisma.notification.create({
+      data: { 
+        type, 
+        destUserId,
+        sourceUserId,
+        sourceArticleId,
+      },
+      include: {
+        // Fetch the related data so the frontend 
+        sourceUser: { select: { username: true, displayName: true, avatarUrl: true } },
+        sourceArticle: { select: { title: true, slug: true } }
+      }
+    });
+
+    // 2. Emit instantly via Socket.io
+    const io = app.get("io");
+    if (io) {
+      io.to(`user:${destUserId}`).emit("notification:receive", notification);
+    }
+
+    return notification;
+  } catch (error) {
+    console.error("Failed to save notification:", error.message);
+    return null; 
+  }
+};
+
 module.exports = { 
   createNotification, 
   notifyFollowersOfNewArticle, // <-- Export the new function
   fetchUserNotifications,
-  deleteNotifications 
+  deleteNotifications ,
+  publishNotification
 };
