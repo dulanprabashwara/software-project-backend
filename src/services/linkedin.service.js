@@ -144,14 +144,12 @@ const disconnectLinkedIn = async (userId) => {
  */
 const pushArticleToLinkedIn = async (article, connection, caption, job = null) => {
   const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
-  
+
   // Use snapshot from job if available, otherwise fallback to current article state
   const title = job?.title || article.title;
   const coverImage = job?.coverImage || article.coverImage;
   // 1. Ensure absolute Article URL
-  const articleUrl = article.slug.startsWith("http") 
-    ? article.slug 
-    : `${clientUrl}/article/${article.slug}`;
+  const articleUrl = `${clientUrl}/home/read?id=${article.id}`;
 
   // 2. Normalize and Validate Thumbnail URL
   let thumbnail = coverImage || undefined;
@@ -211,7 +209,7 @@ const pushArticleToLinkedIn = async (article, connection, caption, job = null) =
   } catch (err) {
     const apiError = err.response?.data;
     console.error("LinkedIn Post Error Detail:", JSON.stringify(apiError, null, 2));
-    
+
     const errorDetail = apiError?.message || err.message;
     throw new Error(`LinkedIn API failed: ${errorDetail}`);
   }
