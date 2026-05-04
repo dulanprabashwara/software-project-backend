@@ -599,6 +599,8 @@ model LinkedInPublishJob {
   status       WpJobStatus        @default(PENDING)
   liPostId     String?
   liPostUrl    String?
+  title        String?            // Snapshot of article title at scheduling time
+  coverImage   String?            // Snapshot of article cover image at scheduling time
   caption      String?
   errorMsg     String?
   createdAt    DateTime           @default(now())
