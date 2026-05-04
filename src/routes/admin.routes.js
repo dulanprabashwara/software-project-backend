@@ -5,10 +5,12 @@ const { authenticate, authorize } = require("../middlewares/auth");
 const router = Router();
 
 // All admin routes require authentication + ADMIN role
+// @ts-ignore
 router.use(authenticate, authorize("ADMIN"));
 
 // Dashboard
 router.get("/dashboard", adminController.getDashboard);
+router.get('/engagement', authenticate, adminController.getEngagementAnalytics);
 
 // User management
 router.get("/users", adminController.listUsers);
