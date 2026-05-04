@@ -1,11 +1,14 @@
-// backend/routes/article.route.js
+//imports
 const express = require("express");
 const router = express.Router();
-const homefeedController = require("../controllers/homefeed.controller");
+const homefeedController = require("../controllers/homefeed.controller"); //impprt controller
+const { authenticate } = require("../middlewares/auth"); //user authentication import
 
-// GET /api/articles/main
+router.use(authenticate); //check if user is logged in
+
+// homefeed routes
 router.get("/main", homefeedController.getMainFeed);
-
+router.get("/following", homefeedController.getFollowingFeed);
  
 
 module.exports = router;

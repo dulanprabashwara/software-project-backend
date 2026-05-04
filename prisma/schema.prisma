@@ -565,6 +565,8 @@ enum NotificationType {
   FOLLOW
   COMMENT
   NEW_ARTICLE
+  LINKEDIN_SHARE
+  WORDPRESS_SHARE
 }
 
 enum WpJobStatus {

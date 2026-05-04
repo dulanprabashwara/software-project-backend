@@ -12,7 +12,7 @@ const createNotification = async (app, { type, destUserId, sourceUserId, sourceA
         type, 
         destUserId,
         sourceUserId,
-        sourceArticleId
+        sourceArticleId,
       },
       include: {
         // Fetch the related data so the frontend can build the message
