@@ -21,7 +21,7 @@ const {
 } = require("./article.helpers");
 
 const { notifyFollowersOfNewArticle } = require("../notification.service");
-
+const {generateSummary}= require ("../articleSummary.service");
 /*
  Publishes or schedules an article.
  */
@@ -78,8 +78,9 @@ async function publishArticle(app, articleId, userId, payload) {
   ) {
     await incrementPublishedArticleCount(userId);
 }
-
+generateSummary (updatedArticle.id,userId).catch(console.error);
 notifyFollowersOfNewArticle(app, userId, updatedArticle.id).catch(console.error);
+
 
   return updatedArticle;
 }

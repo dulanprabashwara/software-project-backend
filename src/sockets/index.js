@@ -18,7 +18,7 @@ const prisma = require("../config/prisma");
 const initializeSocket = (httpServer) => {
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.CLIENT_URL || "http://localhost:3000",
+      origin: [process.env.CLIENT_URL, "http://localhost:3000", "http://127.0.0.1:3000"].filter(Boolean),
       methods: ["GET", "POST"],
       credentials: true,
     },

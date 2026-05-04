@@ -41,7 +41,8 @@ const _runPublish = async (jobId, article, liConnection, caption) => {
   }
 
   try {
-    const { liPostId, liPostUrl } = await pushArticleToLinkedIn(article, liConnection, caption);
+    const job = await prisma.linkedInPublishJob.findUnique({ where: { id: jobId } });
+    const { liPostId, liPostUrl } = await pushArticleToLinkedIn(article, liConnection, caption, job);
     await prisma.linkedInPublishJob.update({
       where: { id: jobId },
       data: { status: "PUBLISHED", liPostId, liPostUrl, errorMsg: null },

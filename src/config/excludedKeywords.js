@@ -1,7 +1,7 @@
 const excludedKeywords = {
   "Global": [
-    "porn", "nsfw", "xxx", "onlyfans", "dark web", "hitman", "buy drugs online", 
-    "white supremacist", "neo-nazi", "suicide methods", "sponsored post", "casino online"
+    "onlyfans", "dark web", "hitman", "buy drugs online", 
+    "white supremacist", "neo-nazi", "suicide methods", "sponsored post", "casino online","porn", "xxx","nsfw"
   ],
   "Technology & Digital Life": [
     "ddos tutorial", "how to hack", "malware download", "ransomware source code", 

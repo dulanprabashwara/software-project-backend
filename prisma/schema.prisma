@@ -375,7 +375,7 @@ model ai_article_logs {
   aiInputTokens     Int       @default(0)
   aiOutputTokens    Int       @default(0)
   deletedAt         DateTime?
-  userResponse      String?     
+  userResponse      String?
   users             User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
   articles          Article?  @relation(fields: [linkedArticleId], references: [id])
 
@@ -565,6 +565,8 @@ enum NotificationType {
   FOLLOW
   COMMENT
   NEW_ARTICLE
+  LINKEDIN_SHARE
+  WORDPRESS_SHARE
 }
 
 enum WpJobStatus {
@@ -599,6 +601,8 @@ model LinkedInPublishJob {
   status       WpJobStatus        @default(PENDING)
   liPostId     String?
   liPostUrl    String?
+  title        String?            // Snapshot of article title at scheduling time
+  coverImage   String?            // Snapshot of article cover image at scheduling time
   caption      String?
   errorMsg     String?
   createdAt    DateTime           @default(now())

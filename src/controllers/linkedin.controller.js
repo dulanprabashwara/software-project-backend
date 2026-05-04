@@ -24,7 +24,7 @@ const handleCallback = asyncHandler(async (req, res) => {
 
   // Redirect back to frontend with success status
   res.redirect(
-    `${process.env.CLIENT_URL}/profile/edit?li_status=connected&li_username=${encodeURIComponent(connection.liDisplayName)}`
+    `${process.env.CLIENT_URL}/profile/edit?li_status=connected&li_username=${encodeURIComponent(connection.liDisplayName)}&li_picture=${encodeURIComponent(connection.liProfilePicture || "")}`
   );
 });
 
@@ -33,7 +33,14 @@ const handleCallback = asyncHandler(async (req, res) => {
  */
 const getStatus = asyncHandler(async (req, res) => {
   const connection = await linkedinService.getLinkedInConnection(req.user.id);
-  res.json({ success: true, data: { connected: !!connection, liUsername: connection?.liDisplayName || null } });
+  res.json({
+    success: true,
+    data: {
+      connected: !!connection,
+      liUsername: connection?.liDisplayName || null,
+      liPicture: connection?.liProfilePicture || null,
+    },
+  });
 });
 
 /**
