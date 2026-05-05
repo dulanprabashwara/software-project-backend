@@ -46,4 +46,7 @@ router.put("/scraping-sources/:id", adminController.updateScrapingSource);
 router.delete("/scraping-sources/:id", adminController.deleteScrapingSource);
 router.get('/scraping/default-keywords', adminController.getDefaultKeywords);
 
+//profile
+router.get('/metrics', authenticate, adminController.getAdminMetrics);
+
 module.exports = router;
