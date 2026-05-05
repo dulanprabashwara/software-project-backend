@@ -264,6 +264,38 @@ const validateUrl = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getAdminMetrics = async (req, res) => {
+  try {
+    const currentUserId = req.user.id; 
+
+    const totalActions = await prisma.auditLog.count({
+      where: { 
+        adminId: currentUserId 
+      }
+    });
+
+    const totalResolved = await prisma.auditLog.count({
+      where: {
+        adminId: currentUserId,
+        action: {
+          contains: 'RESOLVE', 
+          mode: 'insensitive'
+        }
+      }
+    });
+
+    // Send back just the two tiny numbers
+    return res.status(200).json({ 
+      success: true, 
+      data: { totalActions, totalResolved } 
+    });
+
+  } catch (error) {
+    console.error("Error fetching admin metrics:", error);
+    return res.status(500).json({ success: false, message: "Failed to load metrics" });
+  }
+};
+
 module.exports = {
   getDashboard,
   getEngagementAnalytics,
@@ -288,4 +320,5 @@ module.exports = {
   updateScrapingSource,
   deleteScrapingSource,
   getDefaultKeywords,
+  getAdminMetrics,
 };
