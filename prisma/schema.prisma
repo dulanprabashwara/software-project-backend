@@ -38,6 +38,8 @@ model User {
   comments               Comment[]
   following              Follow[]              @relation("Followers")
   followers              Follow[]              @relation("Following")
+  linkedinConnection     LinkedInConnection?
+  liPublishJobs          LinkedInPublishJob[]
   receivedMessages       Message[]             @relation("ReceivedMessages")
   sentMessages           Message[]             @relation("SentMessages")
   notifications          Notification[]        @relation("NotificationDest")
@@ -50,8 +52,6 @@ model User {
   stats                  UserStats?
   wordpressConnection    WordPressConnection?
   wpPublishJobs          WordPressPublishJob[]
-  linkedinConnection     LinkedInConnection?
-  liPublishJobs          LinkedInPublishJob[]
 
   @@map("users")
 }
@@ -91,12 +91,12 @@ model Article {
   shares                  ArticleShare[]
   author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
   comments                Comment[]
+  liPublishJobs           LinkedInPublishJob[]
   notifications           Notification[]
   readHistory             ReadHistory[]
   reports                 ReportedArticle[]
   savedBy                 SavedArticle[]
   wpPublishJobs           WordPressPublishJob[]
-  liPublishJobs           LinkedInPublishJob[]
 
   @@index([authorId])
   @@index([status])
@@ -541,6 +541,45 @@ model ArticleInteractions {
   @@map("article_interactions")
 }
 
+model LinkedInConnection {
+  id               String               @id @default(cuid())
+  userId           String               @unique
+  accessToken      String
+  liMemberId       String               @unique
+  liDisplayName    String?
+  liProfilePicture String?
+  connectedAt      DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publishJobs      LinkedInPublishJob[]
+
+  @@map("linkedin_connections")
+}
+
+model LinkedInPublishJob {
+  id           String             @id @default(cuid())
+  articleId    String
+  userId       String
+  liConnId     String
+  scheduledAt  DateTime
+  status       WpJobStatus        @default(PENDING)
+  liPostId     String?
+  liPostUrl    String?
+  caption      String?
+  errorMsg     String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  coverImage   String?
+  title        String?
+  article      Article            @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  liConnection LinkedInConnection @relation(fields: [liConnId], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("linkedin_publish_jobs")
+}
+
 enum Role {
   USER
   ADMIN
@@ -575,43 +614,4 @@ enum WpJobStatus {
   PUBLISHED
   FAILED
   CANCELLED
-}
-
-model LinkedInConnection {
-  id               String               @id @default(cuid())
-  userId           String               @unique
-  accessToken      String
-  liMemberId       String               @unique
-  liDisplayName    String?
-  liProfilePicture String?
-  connectedAt      DateTime             @default(now())
-  updatedAt        DateTime             @updatedAt
-  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  publishJobs      LinkedInPublishJob[]
-
-  @@map("linkedin_connections")
-}
-
-model LinkedInPublishJob {
-  id           String             @id @default(cuid())
-  articleId    String
-  userId       String
-  liConnId     String
-  scheduledAt  DateTime
-  status       WpJobStatus        @default(PENDING)
-  liPostId     String?
-  liPostUrl    String?
-  title        String?            // Snapshot of article title at scheduling time
-  coverImage   String?            // Snapshot of article cover image at scheduling time
-  caption      String?
-  errorMsg     String?
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
-  article      Article            @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  liConnection LinkedInConnection @relation(fields: [liConnId], references: [id], onDelete: Cascade)
-
-  @@index([status])
-  @@index([scheduledAt])
-  @@map("linkedin_publish_jobs")
 }
