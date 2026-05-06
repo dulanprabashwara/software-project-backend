@@ -207,11 +207,26 @@ const pushArticleToLinkedIn = async (article, connection, caption, job = null) =
       liPostUrl: `https://www.linkedin.com/feed/update/${postId}`,
     };
   } catch (err) {
+    const isTimeout = err.code === "ECONNABORTED" || err.code === "ETIMEDOUT";
+    const isNetworkError = !err.response && !isTimeout;
+    
     const apiError = err.response?.data;
-    console.error("LinkedIn Post Error Detail:", JSON.stringify(apiError, null, 2));
-
     const errorDetail = apiError?.message || err.message;
-    throw new Error(`LinkedIn API failed: ${errorDetail}`);
+
+    // Create a structured error that the job processor can use to decide on retries
+    const enhancedError = new Error(`LinkedIn API failed: ${errorDetail}`);
+    enhancedError.isNetworkError = isNetworkError || isTimeout;
+    enhancedError.apiStatus = err.response?.status;
+    enhancedError.apiData = apiError;
+    
+    console.error("LinkedIn Post Error Detail:", JSON.stringify({
+      message: errorDetail,
+      isNetworkError: enhancedError.isNetworkError,
+      status: enhancedError.apiStatus,
+      data: apiError
+    }, null, 2));
+
+    throw enhancedError;
   }
 };
 
@@ -249,10 +264,15 @@ const scheduleLinkedInPublish = async (articleId, userId, scheduledAt, caption) 
       });
       return { success: true, message: "Published to LinkedIn!", liPostId, liPostUrl };
     } catch (err) {
+      const isNetworkError = err.isNetworkError;
+      const errorMsg = isNetworkError 
+        ? `Network/Timeout Error: Post state is UNKNOWN. (Original: ${err.message})`
+        : err.message;
+
       await prisma.linkedInPublishJob.create({
-        data: { ...jobBase, scheduledAt: new Date(), status: "FAILED", errorMsg: err.message },
+        data: { ...jobBase, scheduledAt: new Date(), status: "FAILED", errorMsg: errorMsg },
       });
-      return { success: false, message: err.message };
+      return { success: false, message: errorMsg, isUnknownState: isNetworkError };
     }
   }
 
