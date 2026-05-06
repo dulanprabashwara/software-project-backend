@@ -44,15 +44,21 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
       const buffer   = Buffer.from(match[2], "base64");
       const ext      = mimeType.split("/")[1] || "jpg";
 
-      const res = await axios.post(mediaEndpoint, buffer, {
+      // WordPress.com media API requires multipart/form-data, not raw binary
+      const FormData = require("form-data");
+      const form     = new FormData();
+      form.append("media[]", buffer, { filename: `cover.${ext}`, contentType: mimeType });
+
+      const res = await axios.post(mediaEndpoint, form, {
         headers: {
-          Authorization:       `Bearer ${connection.accessToken}`,
-          "Content-Type":      mimeType,
-          "Content-Disposition": `attachment; filename="cover.${ext}"`,
+          Authorization: `Bearer ${connection.accessToken}`,
+          ...form.getHeaders(),
         },
-        timeout: MEDIA_UPLOAD_TIMEOUT_MS,
+        timeout: 30000,
       });
-      return res.data?.ID || null;
+
+      // Return the public URL — WordPress.com v1.1 featured_image expects a URL, not an integer ID
+      return res.data?.media?.[0]?.URL || null;
     }
 
     // Absolute public URL — ask WordPress to sideload it
@@ -68,26 +74,26 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
           timeout: MEDIA_UPLOAD_TIMEOUT_MS,
         }
       );
-      return res.data?.ID || null;
+      return res.data?.media?.[0]?.URL || null;
     }
 
-    return null; // relative or unrecognised format — skip
+    return null;
   } catch {
-    return null; // image upload failed — post without featured image
+    return null;
   }
 };
 
-// Builds the post body sent to the WordPress REST API.
-// Accepts an optional featuredMediaId from uploadCoverImageToWordPress.
-// Used by both pushArticleToWordPress and attemptDraftSave.
-const buildWpPostBody = (article, status, featuredMediaId = null) => {
+// Builds the post body for the WordPress REST API.
+// featuredImageUrl: the WordPress-hosted URL returned by uploadCoverImageToWordPress.
+// WordPress.com REST API v1.1 uses featured_image (URL), not featured_media (integer ID).
+const buildWpPostBody = (article, status, featuredImageUrl = null) => {
   const canonical = buildCanonicalSnippet(article);
   return {
     title:   article.title,
     content: canonical + (article.content || ""),
     status,
-    ...(article.tags?.length  && { tags: article.tags.join(",") }),
-    ...(featuredMediaId       && { featured_media: featuredMediaId }),
+    ...(article.tags?.length && { tags: article.tags.join(",") }),
+    ...(featuredImageUrl     && { featured_image: featuredImageUrl }),
   };
 };
 
@@ -108,7 +114,7 @@ const initiateWordPressAuth = (userId) => {
     client_id:     clientId,
     redirect_uri:  redirectUri,
     response_type: "code",
-    scope:         "posts auth",
+    scope:         "posts auth media",
     state,
   });
 
@@ -159,11 +165,12 @@ const handleWordPressCallback = async (code, stateParam) => {
   }
 
   const connectionData = {
-    siteUrl:    wpBlogUrl,
-    siteId:     wpBlogId,
+    siteUrl:           wpBlogUrl,
+    siteId:            wpBlogId,
     accessToken,
-    wpUsername: wpUser.display_name || wpUser.username,
-    wpEmail:    wpUser.email || null,
+    wpUsername:        wpUser.display_name || wpUser.username,
+    wpEmail:           wpUser.email || null,
+    wpProfilePicture:  wpUser.avatar_URL   || null,
   };
 
   const connection = await prisma.wordPressConnection.upsert({
@@ -185,7 +192,7 @@ const handleWordPressCallback = async (code, stateParam) => {
 const getWordPressConnection = async (userId) => {
   return prisma.wordPressConnection.findUnique({
     where:  { userId },
-    select: { id: true, siteUrl: true, siteId: true, wpUsername: true, wpEmail: true, connectedAt: true },
+    select: { id: true, siteUrl: true, siteId: true, wpUsername: true, wpEmail: true, wpProfilePicture: true, connectedAt: true },
   });
 };
 
@@ -200,17 +207,22 @@ const disconnectWordPress = async (userId) => {
   return { disconnected: true };
 };
 
-// Sends the article to the WordPress REST API as a published post.
-// Uploads the cover image to WordPress media first so it appears as the featured image.
-// Throws a plain Error on failure so the caller can attempt a draft fallback.
+// Sends the article to WordPress as a published post.
+// Tries to set the cover image as featured image via media upload.
+// If upload fails, falls back to passing the original URL directly (works for public URLs after hosting).
 const pushArticleToWordPress = async (article, connection) => {
-  const featuredMediaId = await uploadCoverImageToWordPress(article.coverImage, connection);
+  let featuredImageUrl = await uploadCoverImageToWordPress(article.coverImage, connection);
+
+  // Fallback: if media upload failed but coverImage is already a public URL, use it directly
+  if (!featuredImageUrl && article.coverImage?.startsWith("http")) {
+    featuredImageUrl = article.coverImage;
+  }
 
   let wpRes;
   try {
     const res = await axios.post(
       `${WP_API_BASE}/sites/${connection.siteId}/posts/new`,
-      buildWpPostBody(article, "publish", featuredMediaId),
+      buildWpPostBody(article, "publish", featuredImageUrl),
       {
         headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
         timeout: POST_PUBLISH_TIMEOUT_MS,
@@ -226,16 +238,18 @@ const pushArticleToWordPress = async (article, connection) => {
   return { wpPostId: String(wpRes.ID), wpPostUrl: wpRes.URL };
 };
 
-// Saves the article as a draft on WordPress when a publish attempt fails.
-// Also uploads the cover image so the draft has the featured image ready.
-// Returns the WordPress drafts dashboard URL on success, or null if the draft save fails.
+// Saves the article as a draft on WordPress when publish fails.
+// Returns the WordPress posts dashboard URL so the user can manually publish it.
 const attemptDraftSave = async (article, connection) => {
   try {
-    const featuredMediaId = await uploadCoverImageToWordPress(article.coverImage, connection);
+    let featuredImageUrl = await uploadCoverImageToWordPress(article.coverImage, connection);
+    if (!featuredImageUrl && article.coverImage?.startsWith("http")) {
+      featuredImageUrl = article.coverImage;
+    }
 
     await axios.post(
       `${WP_API_BASE}/sites/${connection.siteId}/posts/new`,
-      buildWpPostBody(article, "draft", featuredMediaId),
+      buildWpPostBody(article, "draft", featuredImageUrl),
       {
         headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
         timeout: POST_PUBLISH_TIMEOUT_MS,
@@ -278,7 +292,8 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
       });
       return { success: true, message: "Article published to WordPress successfully.", wpPostId, wpPostUrl };
     } catch (publishErr) {
-      const draftUrl = await attemptDraftSave(article, connection);
+      const draftUrl = await attemptDraftSave(article, connection)
+        || `https://wordpress.com/posts/${connection.siteUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
       await prisma.wordPressPublishJob.create({
         data: { ...jobBase, scheduledAt: new Date(), status: "FAILED", errorMsg: publishErr.message, draftUrl },
       });

@@ -1007,7 +1007,7 @@ async function runScrapingSession() {
 
   let cleanupCalled = false;
 
-  const cleanup = (signal) => {
+  const cleanup = async (signal) => {
     if (cleanupCalled) return;
     cleanupCalled = true;
 
@@ -1017,7 +1017,22 @@ async function runScrapingSession() {
       process.exit(0);
     }
 
-    // Sum in-memory counters accumulated so far
+    // Check current session status before doing anything — the session may have
+    // already completed normally. A completed or failed session must never be reverted.
+    try {
+      const current = await prisma.scrapingSession.findUnique({
+        where:  { id: sessionId },
+        select: { status: true },
+      });
+
+      if (current?.status === "completed" || current?.status === "failed") {
+        console.log(`[Scraper] Session ${sessionId} already ${current.status} — signal ignored.`);
+        process.exit(0);
+      }
+    } catch {
+      // If the DB check itself fails, proceed with cancel to be safe
+    }
+
     const totalSuccess   = Object.values(counters).reduce((s, c) => s + c.successCount,   0);
     const totalDuplicate = Object.values(counters).reduce((s, c) => s + c.duplicateCount, 0);
     const totalFailure   = Object.values(counters).reduce((s, c) => s + c.failureCount,   0);
@@ -1026,11 +1041,6 @@ async function runScrapingSession() {
       totalSuccess, totalDuplicate, totalFailure
     );
 
-    // Mark canceled immediately with whatever stats are in memory.
-    // reportSentAt is left null — cleanupStaleSessions() picks this up on
-    // next server start, recovers any enrichment stats from ScrapedArticle,
-    // and sends the email then. This avoids trying to send email from a
-    // dying process on a tight timeout.
     prisma.scrapingSession.update({
       where: { id: sessionId },
       data: {
@@ -1220,7 +1230,7 @@ async function runScrapingSession() {
     await prisma.scrapingSession.update({
       where: { id: sessionId },
       data:  { reportSentAt: new Date() },
-    }).catch(() => {});
+    }).catch((e) => console.error("[Phase 3] Failed to set reportSentAt:", e.message));
 
     process.removeListener("SIGTERM", cleanup);
     process.removeListener("SIGINT",  cleanup);
