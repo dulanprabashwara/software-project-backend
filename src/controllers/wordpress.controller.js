@@ -38,7 +38,10 @@ const handleCallback = asyncHandler(async (req, res) => {
   try {
     const connection = await wordpressService.handleWordPressCallback(code, state);
     return res.redirect(
-      `${FRONTEND_URL}/profile/edit?wp_status=connected&wp_username=${encodeURIComponent(connection.wpUsername || "")}&wp_site=${encodeURIComponent(connection.siteUrl || "")}`
+      `${FRONTEND_URL}/profile/edit?wp_status=connected` +
+      `&wp_username=${encodeURIComponent(connection.wpUsername || "")}` +
+      `&wp_site=${encodeURIComponent(connection.siteUrl || "")}` +
+      `&wp_picture=${encodeURIComponent(connection.wpProfilePicture || "")}`
     );
   } catch (err) {
     return res.redirect(
@@ -64,11 +67,12 @@ const getStatus = asyncHandler(async (req, res) => {
   return res.json({
     success: true,
     data: {
-      connected:   true,
-      siteUrl:     connection.siteUrl,
-      wpUsername:  connection.wpUsername,
-      connectedAt: connection.connectedAt,
-      avatarUrl:   user?.avatarUrl || null,
+      connected:        true,
+      siteUrl:          connection.siteUrl,
+      wpUsername:       connection.wpUsername,
+      wpProfilePicture: connection.wpProfilePicture || null,
+      connectedAt:      connection.connectedAt,
+      avatarUrl:        user?.avatarUrl || null,
     },
   });
 });
