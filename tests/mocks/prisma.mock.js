@@ -33,7 +33,45 @@ const mockPrisma = {
     findMany: jest.fn(),
   },
   user: {
-    findMany: jest.fn(),
+    findMany:   jest.fn(),
+    findFirst:  jest.fn(),
+    findUnique: jest.fn(),
+    create:     jest.fn(),
+    update:     jest.fn(),
+    delete:     jest.fn(),
+    count:      jest.fn(),
+  },
+  message: {
+    findMany:   jest.fn(),
+    findFirst:  jest.fn(),
+    findUnique: jest.fn(),
+    create:     jest.fn(),
+    updateMany: jest.fn(),
+    count:      jest.fn(),
+  },
+  conversation: {
+    findMany:   jest.fn(),
+    findUnique: jest.fn(),
+    create:     jest.fn(),
+    update:     jest.fn(),
+  },
+  subscription: {
+    findUnique: jest.fn(),
+    findFirst:  jest.fn(),
+    create:     jest.fn(),
+    update:     jest.fn(),
+    deleteMany: jest.fn(),
+  },
+  payment: {
+    create:     jest.fn(),
+    findMany:   jest.fn(),
+  },
+  offer: {
+    findMany:   jest.fn(),
+    findUnique: jest.fn(),
+  },
+  auditLog: {
+    deleteMany: jest.fn(),
   },
   $queryRaw: jest.fn(),
 };
