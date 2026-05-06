@@ -165,11 +165,12 @@ const handleWordPressCallback = async (code, stateParam) => {
   }
 
   const connectionData = {
-    siteUrl:    wpBlogUrl,
-    siteId:     wpBlogId,
+    siteUrl:           wpBlogUrl,
+    siteId:            wpBlogId,
     accessToken,
-    wpUsername: wpUser.display_name || wpUser.username,
-    wpEmail:    wpUser.email || null,
+    wpUsername:        wpUser.display_name || wpUser.username,
+    wpEmail:           wpUser.email || null,
+    wpProfilePicture:  wpUser.avatar_URL   || null,
   };
 
   const connection = await prisma.wordPressConnection.upsert({
@@ -191,7 +192,7 @@ const handleWordPressCallback = async (code, stateParam) => {
 const getWordPressConnection = async (userId) => {
   return prisma.wordPressConnection.findUnique({
     where:  { userId },
-    select: { id: true, siteUrl: true, siteId: true, wpUsername: true, wpEmail: true, connectedAt: true },
+    select: { id: true, siteUrl: true, siteId: true, wpUsername: true, wpEmail: true, wpProfilePicture: true, connectedAt: true },
   });
 };
 
