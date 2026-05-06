@@ -34,6 +34,21 @@ const _runPublish = async (jobId, article, liConnection, caption) => {
     return false; // Not ready yet, retry later
   }
 
+  // Fetch latest job state to check for idempotency (Ghost Success recovery)
+  const job = await prisma.linkedInPublishJob.findUnique({ where: { id: jobId } });
+  if (!job || job.status === "PUBLISHED" || job.status === "CANCELLED") return true;
+
+  // If we already have a liPostId, it means a previous attempt succeeded on LinkedIn 
+  // but failed to update our database. We just fix the database status and move on.
+  if (job.liPostId) {
+    console.log(`[LinkedIn Scheduler] Recovered Ghost Success for job ${jobId}. Marking as PUBLISHED.`);
+    await prisma.linkedInPublishJob.update({
+      where: { id: jobId },
+      data: { status: "PUBLISHED", errorMsg: null },
+    });
+    return true;
+  }
+
   try {
     await prisma.linkedInPublishJob.update({ where: { id: jobId }, data: { status: "IN_PROGRESS" } });
   } catch {
@@ -41,7 +56,6 @@ const _runPublish = async (jobId, article, liConnection, caption) => {
   }
 
   try {
-    const job = await prisma.linkedInPublishJob.findUnique({ where: { id: jobId } });
     const { liPostId, liPostUrl } = await pushArticleToLinkedIn(article, liConnection, caption, job);
     await prisma.linkedInPublishJob.update({
       where: { id: jobId },
@@ -49,11 +63,23 @@ const _runPublish = async (jobId, article, liConnection, caption) => {
     });
     console.log(`[LinkedIn Scheduler] ✅ Published "${article.title}" → ${liPostUrl}`);
   } catch (err) {
+    // Check if the error was a network timeout/disconnect
+    const isNetworkError = err.isNetworkError;
+    
+    const errorMsg = isNetworkError 
+      ? `Network/Timeout Error: Post state is UNKNOWN. It might have reached LinkedIn. (Original error: ${err.message})`
+      : err.message;
+
     await prisma.linkedInPublishJob.update({
       where: { id: jobId },
-      data: { status: "FAILED", errorMsg: err.message },
+      data: { status: "FAILED", errorMsg: errorMsg },
     });
-    console.error(`[LinkedIn Scheduler] ❌ "${article.title}" failed: ${err.message}`);
+
+    if (isNetworkError) {
+      console.error(`[LinkedIn Scheduler] ⚠️ Unknown state for "${article.title}": Network issue occurred AFTER sending request.`);
+    } else {
+      console.error(`[LinkedIn Scheduler] ❌ "${article.title}" failed: ${err.message}`);
+    }
   }
 
   return true;
