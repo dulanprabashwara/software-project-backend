@@ -219,30 +219,6 @@ const updateUserRole = async (adminId, targetUserId, newRole) => {
   return user;
 };
 
-/**
- * Toggle premium status for a user.
- */
-const togglePremium = async (adminId, targetUserId) => {
-  const user = await prisma.user.findUnique({ where: { id: targetUserId } });
-  if (!user) throw ApiError.notFound("User not found.");
-
-  const updated = await prisma.user.update({
-    where: { id: targetUserId },
-    data: { isPremium: !user.isPremium },
-  });
-
-  await prisma.auditLog.create({
-    data: {
-      adminId,
-      action: updated.isPremium ? "GRANT_PREMIUM" : "REVOKE_PREMIUM",
-      targetId: targetUserId,
-      targetType: "User",
-    },
-  });
-
-  return updated;
-};
-
 // ─── Ban Management ─────────────────────────
 
 /**
@@ -613,7 +589,6 @@ module.exports = {
   refreshDashboard,
   listUsers,
   updateUserRole,
-  togglePremium,
   banUser,
   unbanUser,
   getReports,
