@@ -96,10 +96,15 @@ const handleLinkedInCallback = async (code, stateParam) => {
     liProfilePicture: liUser.picture || null,
   };
 
+  await prisma.linkedInConnection.updateMany({
+    where: { userId, isActive: true },
+    data: { isActive: false },
+  });
+
   const connection = await prisma.linkedInConnection.upsert({
-    where: { userId },
-    update: connectionData,
-    create: { userId, ...connectionData },
+    where: { liMemberId },
+    update: { ...connectionData, userId, isActive: true },
+    create: { userId, isActive: true, ...connectionData },
   });
 
   // Also update the main user record for quick reference
@@ -115,8 +120,8 @@ const handleLinkedInCallback = async (code, stateParam) => {
  * Returns connection details (excluding the access token).
  */
 const getLinkedInConnection = async (userId) => {
-  return prisma.linkedInConnection.findUnique({
-    where: { userId },
+  return prisma.linkedInConnection.findFirst({
+    where: { userId, isActive: true },
     select: {
       id: true,
       liMemberId: true,
@@ -131,7 +136,10 @@ const getLinkedInConnection = async (userId) => {
  * Disconnects LinkedIn.
  */
 const disconnectLinkedIn = async (userId) => {
-  await prisma.linkedInConnection.deleteMany({ where: { userId } });
+  await prisma.linkedInConnection.updateMany({
+    where: { userId, isActive: true },
+    data: { isActive: false },
+  });
   await prisma.user.update({
     where: { id: userId },
     data: { linkedInAccountId: null },
@@ -237,7 +245,7 @@ const scheduleLinkedInPublish = async (articleId, userId, scheduledAt, caption) 
   const article = await prisma.article.findUnique({ where: { id: articleId } });
   if (!article) throw ApiError.notFound("Article not found.");
 
-  const connection = await prisma.linkedInConnection.findUnique({ where: { userId } });
+  const connection = await prisma.linkedInConnection.findFirst({ where: { userId, isActive: true } });
   if (!connection) {
     throw ApiError.badRequest("LinkedIn is not connected.");
   }

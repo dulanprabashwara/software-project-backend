@@ -50,7 +50,7 @@ model User {
   stats                  UserStats?
   wordpressConnection    WordPressConnection?
   wpPublishJobs          WordPressPublishJob[]
-  linkedinConnection     LinkedInConnection?
+  linkedinConnections    LinkedInConnection[]
   liPublishJobs          LinkedInPublishJob[]
 
   @@map("users")
@@ -495,6 +495,7 @@ model WordPressConnection {
   accessToken String
   wpUsername  String?
   wpEmail     String?
+  wpProfilePicture String?
   connectedAt DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
   user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -579,16 +580,18 @@ enum WpJobStatus {
 
 model LinkedInConnection {
   id               String               @id @default(cuid())
-  userId           String               @unique
+  userId           String
   accessToken      String
   liMemberId       String               @unique
   liDisplayName    String?
   liProfilePicture String?
+  isActive         Boolean              @default(true)
   connectedAt      DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
   user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   publishJobs      LinkedInPublishJob[]
 
+  @@index([userId])
   @@map("linkedin_connections")
 }
 
@@ -596,7 +599,7 @@ model LinkedInPublishJob {
   id           String             @id @default(cuid())
   articleId    String
   userId       String
-  liConnId     String
+  liConnId     String?
   scheduledAt  DateTime
   status       WpJobStatus        @default(PENDING)
   liPostId     String?
@@ -607,9 +610,9 @@ model LinkedInPublishJob {
   errorMsg     String?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
-  article      Article            @relation(fields: [articleId], references: [id], onDelete: Cascade)
-  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  liConnection LinkedInConnection @relation(fields: [liConnId], references: [id], onDelete: Cascade)
+  article      Article             @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  liConnection LinkedInConnection? @relation(fields: [liConnId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([scheduledAt])
