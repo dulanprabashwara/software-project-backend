@@ -96,10 +96,15 @@ const handleLinkedInCallback = async (code, stateParam) => {
     liProfilePicture: liUser.picture || null,
   };
 
+  await prisma.linkedInConnection.updateMany({
+    where: { userId, isActive: true },
+    data: { isActive: false },
+  });
+
   const connection = await prisma.linkedInConnection.upsert({
-    where: { userId },
-    update: connectionData,
-    create: { userId, ...connectionData },
+    where: { liMemberId },
+    update: { ...connectionData, userId, isActive: true },
+    create: { userId, isActive: true, ...connectionData },
   });
 
   // Also update the main user record for quick reference
@@ -115,8 +120,8 @@ const handleLinkedInCallback = async (code, stateParam) => {
  * Returns connection details (excluding the access token).
  */
 const getLinkedInConnection = async (userId) => {
-  return prisma.linkedInConnection.findUnique({
-    where: { userId },
+  return prisma.linkedInConnection.findFirst({
+    where: { userId, isActive: true },
     select: {
       id: true,
       liMemberId: true,
@@ -131,7 +136,10 @@ const getLinkedInConnection = async (userId) => {
  * Disconnects LinkedIn.
  */
 const disconnectLinkedIn = async (userId) => {
-  await prisma.linkedInConnection.deleteMany({ where: { userId } });
+  await prisma.linkedInConnection.updateMany({
+    where: { userId, isActive: true },
+    data: { isActive: false },
+  });
   await prisma.user.update({
     where: { id: userId },
     data: { linkedInAccountId: null },
@@ -207,11 +215,26 @@ const pushArticleToLinkedIn = async (article, connection, caption, job = null) =
       liPostUrl: `https://www.linkedin.com/feed/update/${postId}`,
     };
   } catch (err) {
+    const isTimeout = err.code === "ECONNABORTED" || err.code === "ETIMEDOUT";
+    const isNetworkError = !err.response && !isTimeout;
+    
     const apiError = err.response?.data;
-    console.error("LinkedIn Post Error Detail:", JSON.stringify(apiError, null, 2));
-
     const errorDetail = apiError?.message || err.message;
-    throw new Error(`LinkedIn API failed: ${errorDetail}`);
+
+    // Create a structured error that the job processor can use to decide on retries
+    const enhancedError = new Error(`LinkedIn API failed: ${errorDetail}`);
+    enhancedError.isNetworkError = isNetworkError || isTimeout;
+    enhancedError.apiStatus = err.response?.status;
+    enhancedError.apiData = apiError;
+    
+    console.error("LinkedIn Post Error Detail:", JSON.stringify({
+      message: errorDetail,
+      isNetworkError: enhancedError.isNetworkError,
+      status: enhancedError.apiStatus,
+      data: apiError
+    }, null, 2));
+
+    throw enhancedError;
   }
 };
 
@@ -222,7 +245,7 @@ const scheduleLinkedInPublish = async (articleId, userId, scheduledAt, caption) 
   const article = await prisma.article.findUnique({ where: { id: articleId } });
   if (!article) throw ApiError.notFound("Article not found.");
 
-  const connection = await prisma.linkedInConnection.findUnique({ where: { userId } });
+  const connection = await prisma.linkedInConnection.findFirst({ where: { userId, isActive: true } });
   if (!connection) {
     throw ApiError.badRequest("LinkedIn is not connected.");
   }
@@ -249,10 +272,15 @@ const scheduleLinkedInPublish = async (articleId, userId, scheduledAt, caption) 
       });
       return { success: true, message: "Published to LinkedIn!", liPostId, liPostUrl };
     } catch (err) {
+      const isNetworkError = err.isNetworkError;
+      const errorMsg = isNetworkError 
+        ? `Network/Timeout Error: Post state is UNKNOWN. (Original: ${err.message})`
+        : err.message;
+
       await prisma.linkedInPublishJob.create({
-        data: { ...jobBase, scheduledAt: new Date(), status: "FAILED", errorMsg: err.message },
+        data: { ...jobBase, scheduledAt: new Date(), status: "FAILED", errorMsg: errorMsg },
       });
-      return { success: false, message: err.message };
+      return { success: false, message: errorMsg, isUnknownState: isNetworkError };
     }
   }
 
