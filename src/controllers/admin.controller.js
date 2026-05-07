@@ -56,13 +56,6 @@ const updateUserRole = asyncHandler(async (/** @type {any} */ req, res) => {
   sendSuccess(res, { message: "User role updated.", data: user });
 });
 
-const togglePremium = asyncHandler(async (/** @type {any} */ req, res) => {
-  const user = await adminService.togglePremium(req.user.id, req.params.userId);
-  sendSuccess(res, {
-    message: user.isPremium ? "Premium granted." : "Premium revoked.",
-    data: user,
-  });
-});
 
 // ─── Bans ───────────────────────────────────
 
@@ -301,7 +294,6 @@ module.exports = {
   getEngagementAnalytics,
   listUsers,
   updateUserRole,
-  togglePremium,
   banUser,
   unbanUser,
   getReports,
