@@ -3,29 +3,31 @@ const prisma = require("../config/prisma");
 
 // ── CONSTANTS ───────────────────────────────────────────────────────
 
-const DEFAULT_SEARCH_LIMIT           = 10;
-const TITLE_MATCH_LIMIT              = 50;
-const TAG_MATCH_LIMIT                = 50;
-const SUMMARY_MATCH_LIMIT            = 50;
-const AUTOCOMPLETE_ARTICLES_LIMIT    = 5;
-const AUTOCOMPLETE_USERS_LIMIT       = 3;
-const AUTOCOMPLETE_MIN_QUERY_LENGTH  = 2;
-const ENGAGEMENT_RATING_MULTIPLIER   = 10;
-const ENGAGEMENT_COMMENT_MULTIPLIER  = 2;
-const FOLLOWER_ARTICLE_MULTIPLIER    = 10;
-const SEARCH_RESULTS_MULTIPLIER      = 5;
+const DEFAULT_SEARCH_LIMIT          = 10;
+const TITLE_MATCH_LIMIT             = 50;
+const TAG_MATCH_LIMIT               = 50;
+const SUMMARY_MATCH_LIMIT           = 50;
+const AUTOCOMPLETE_ARTICLES_LIMIT   = 5;
+const AUTOCOMPLETE_USERS_LIMIT      = 3;
+const AUTOCOMPLETE_MIN_QUERY_LENGTH = 2;
+const ENGAGEMENT_RATING_MULTIPLIER  = 10;
+const ENGAGEMENT_COMMENT_MULTIPLIER = 2;
+const FOLLOWER_ARTICLE_MULTIPLIER   = 10;
+const SEARCH_RESULTS_MULTIPLIER     = 5;
+const MIN_SEARCH_RESULTS_FETCH      = 50;
 
 // ── HELPERS ─────────────────────────────────────────────────────────
 
-// Escapes special regex characters so user input is safe for RegExp constructor.
+// Escapes special regex characters so user input is safe for use in RegExp constructor.
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// Engagement score: quality × volume (rating), depth (comments), reach (reads).
+// Computes a weighted engagement score from ratings, reads, and comments.
 const computeEngagement = (article) =>
   (article.averageRating || 0) * (article.ratingCount || 0) * ENGAGEMENT_RATING_MULTIPLIER +
   (article.readCount     || 0) +
   (article.commentCount  || 0) * ENGAGEMENT_COMMENT_MULTIPLIER;
 
+// Returns a copy of the articles array sorted by descending engagement score.
 const sortByEngagement = (articles) =>
   [...articles].sort((a, b) => computeEngagement(b) - computeEngagement(a));
 
@@ -42,10 +44,9 @@ const ARTICLE_AUTHOR_SELECT = {
   _count: { select: { comments: true } },
 };
 
-// Prisma does not support case-insensitive array-element matching natively,
-// so tag queries use $queryRaw with PostgreSQL's unnest + lower().
-// Two overloads handle the empty-exclusion-list edge case to avoid passing
-// an empty array to ANY(), which some PostgreSQL drivers reject.
+// Fetches IDs of published articles whose tags exactly match the query (case-insensitive),
+// excluding any already-seen IDs. Two overloads handle the empty-exclusion-list edge case
+// to avoid passing an empty array to ANY(), which some PostgreSQL drivers reject.
 const fetchTagMatchIds = (excludeIds, q) =>
   excludeIds.length > 0
     ? prisma.$queryRaw`
@@ -60,6 +61,7 @@ const fetchTagMatchIds = (excludeIds, q) =>
         AND EXISTS (SELECT 1 FROM unnest(tags) AS t WHERE lower(t) = lower(${q}))
         LIMIT ${TAG_MATCH_LIMIT}`;
 
+// Counts published articles matched by tag only, excluding already-seen IDs.
 const countTagOnly = (excludeIds, q) =>
   excludeIds.length > 0
     ? prisma.$queryRaw`
@@ -74,12 +76,7 @@ const countTagOnly = (excludeIds, q) =>
 
 // ── SEARCH ARTICLES ─────────────────────────────────────────────────
 
-// Four-tier ranking for article search:
-//   Tier 1 — title contains the query as an exact whole word (\bquery\b)
-//   Tier 2 — any tag exactly equals the query (case-insensitive)
-//   Tier 3 — summary contains the query as an exact whole word
-//   Tier 4 — title contains the query as a substring/extension (e.g. "princess" for "prince")
-// Each tier is independently sorted by engagement score before merging.
+// Searches published articles using a four-tier ranking:paginated result
 const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, currentUserId = null }) => {
   const q = (query || "").trim();
   if (!q) return { articles: [], total: 0, page, limit, totalPages: 0 };
@@ -87,16 +84,13 @@ const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, c
   const publishedFilter = { status: "PUBLISHED" };
   const exactWordRegex  = new RegExp(`\\b${escapeRegex(q)}\\b`, "i");
 
-  // Fetch all title-containing matches (covers tier 1 and tier 4).
   const titleMatches = await prisma.article.findMany({
     where:   { ...publishedFilter, title: { contains: q, mode: "insensitive" } },
     include: ARTICLE_AUTHOR_SELECT,
     take:    TITLE_MATCH_LIMIT,
   });
 
-  const titleIds = titleMatches.map((a) => a.id);
-
-  // Fetch tag-matched articles not already in title results.
+  const titleIds     = titleMatches.map((a) => a.id);
   const tagMatchRows = await fetchTagMatchIds(titleIds, q);
   const tagMatchIds  = tagMatchRows.map((r) => r.id);
 
@@ -104,9 +98,8 @@ const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, c
     ? await prisma.article.findMany({ where: { id: { in: tagMatchIds } }, include: ARTICLE_AUTHOR_SELECT })
     : [];
 
-  // Fetch summary-containing articles not already captured by title or tag queries.
-  const allExcludedIds   = [...titleIds, ...tagMatchIds];
-  const summaryMatches   = await prisma.article.findMany({
+  const allExcludedIds = [...titleIds, ...tagMatchIds];
+  const summaryMatches = await prisma.article.findMany({
     where: {
       ...publishedFilter,
       summary: { contains: q, mode: "insensitive" },
@@ -116,11 +109,8 @@ const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, c
     take:    SUMMARY_MATCH_LIMIT,
   });
 
-  // Only promote summary matches where the query appears as an exact word.
   const summaryExactMatches = summaryMatches.filter((a) => a.summary && exactWordRegex.test(a.summary));
 
-  // Total count: title + tag-only + summary-only (summary count may slightly overcount
-  // partial word matches, but is an acceptable approximation for pagination).
   const summaryOnlyCount = await prisma.article.count({
     where: {
       ...publishedFilter,
@@ -135,14 +125,7 @@ const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, c
   ]);
   const total = titleTotal + Number(tagOnlyTotalRows[0]?.count ?? 0) + summaryOnlyCount;
 
-  // tier1: exact word in title | tier2: tag | tier3: exact word in summary | tier4: title extensions
-  //
-  // A title-matched article whose title only contains the query as a substring
-  // (e.g. "Brain" for query "ai") is initially a tier4 candidate. However if
-  // its summary contains the query as an exact word it should be promoted to
-  // tier3, because the article IS genuinely about the topic even though the
-  // title match was incidental. Without this promotion, those articles stay in
-  // allExcludedIds and never reach the summary query, leaving them in tier4.
+  // Tier 4 candidates whose summary also contains an exact word match are promoted to tier 3.
   const tier1           = titleMatches.filter((a) =>  exactWordRegex.test(a.title));
   const tier4Candidates = titleMatches.filter((a) => !exactWordRegex.test(a.title));
   const promotedToTier3 = tier4Candidates.filter((a) => a.summary && exactWordRegex.test(a.summary));
@@ -157,7 +140,7 @@ const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, c
   const skip      = (page - 1) * limit;
   const paginated = merged.slice(skip, skip + limit);
 
-  // Bulk-check saved state for the logged-in user in a single query.
+  // Bulk-checks saved state for the logged-in user in a single query.
   let savedSet = new Set();
   if (currentUserId && paginated.length > 0) {
     const saved = await prisma.savedArticle.findMany({
@@ -177,9 +160,9 @@ const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, c
 
 // ── SEARCH USERS ────────────────────────────────────────────────────
 
-// Searches users by username or displayName.
-// Results are ranked by follower_score = totalFollowers + (articleCount × 10).
-// When currentUserId is provided, stamps isFollowing on each result.
+// Searches users by username or displayName, ranked by follower score
+// (totalFollowers + articleCount × FOLLOWER_ARTICLE_MULTIPLIER).
+// Stamps isFollowing on each result when currentUserId is provided.
 const searchUsers = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, currentUserId = null }) => {
   const q = (query || "").trim();
   if (!q) return { users: [], total: 0, page, limit, totalPages: 0 };
@@ -204,11 +187,12 @@ const searchUsers = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, curr
         stats:  { select: { totalFollowers: true, articleCount: true } },
         _count: { select: { articles: true, followers: true } },
       },
-      take: Math.max(limit * SEARCH_RESULTS_MULTIPLIER, 50),
+      take: Math.max(limit * SEARCH_RESULTS_MULTIPLIER, MIN_SEARCH_RESULTS_FETCH),
     }),
     prisma.user.count({ where: nameFilter }),
   ]);
 
+  // Ranks users by a combined follower + article score.
   const followerScore = (u) =>
     (u.stats?.totalFollowers ?? u._count?.followers ?? 0) +
     (u.stats?.articleCount   ?? u._count?.articles  ?? 0) * FOLLOWER_ARTICLE_MULTIPLIER;
@@ -217,7 +201,7 @@ const searchUsers = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, curr
   const skip      = (page - 1) * limit;
   const paginated = sorted.slice(skip, skip + limit);
 
-  // Bulk-check follow state for the logged-in user in a single query.
+  // Bulk-checks follow state for the logged-in user in a single query.
   let followingSet = new Set();
   if (currentUserId && paginated.length > 0) {
     const checkIds = paginated.map((u) => u.id).filter((id) => id !== currentUserId);
@@ -240,9 +224,9 @@ const searchUsers = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, curr
 
 // ── AUTOCOMPLETE SUGGESTIONS ────────────────────────────────────────
 
-// Returns lightweight autocomplete data: up to 5 articles and 3 users.
-// Articles are sourced from title matches first, then tag matches to fill
-// any remaining slots up to the limit. Minimum query length: 2 characters.
+// Returns up to AUTOCOMPLETE_ARTICLES_LIMIT article suggestions (title-first, then tag-fills)
+// and up to AUTOCOMPLETE_USERS_LIMIT user suggestions for a partial query.
+// Requires a minimum query length of AUTOCOMPLETE_MIN_QUERY_LENGTH characters.
 const getSearchSuggestions = async (query) => {
   const q = (query || "").trim();
   if (q.length < AUTOCOMPLETE_MIN_QUERY_LENGTH) return { articles: [], users: [] };
@@ -254,7 +238,7 @@ const getSearchSuggestions = async (query) => {
     take:    AUTOCOMPLETE_ARTICLES_LIMIT,
   });
 
-  // Fill remaining slots with tag-matched articles not already shown.
+  // Fills remaining article slots with tag-matched articles not already shown.
   let tagSuggestions = [];
   const remaining = AUTOCOMPLETE_ARTICLES_LIMIT - titleSuggestions.length;
   if (remaining > 0) {
