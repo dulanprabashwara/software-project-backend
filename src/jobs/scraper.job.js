@@ -36,34 +36,33 @@ async function recoverSessionStats(sessionId) {
   };
 }
 
-// Finds and resolves all abandoned sessions — canceled ones with no email sent yet,
-// and running ones older than 3 hours (force-killed with no signal handler).
+// Finds abandoned sessions and resolves them: cancels stuck-running ones, sends emails
+// for canceled ones that haven't been reported yet. Completed/failed sessions are never touched.
 async function cleanupStaleSessions() {
   const staleRunningCutoff = new Date(Date.now() - STALE_SESSION_TIMEOUT_MS);
 
-  // Fetch both types of abandoned sessions in one query using OR
   const abandonedSessions = await prisma.scrapingSession.findMany({
     where: {
       reportSentAt: null,
+      status: { notIn: ["completed", "failed"] }, // completed/failed sessions are never touched
       OR: [
-        // Signal was caught → DB already says "canceled" but email never sent
         { status: "canceled" },
-        // Force-killed (SIGKILL) → stayed "running", no handler fired
         { status: "running", startedAt: { lt: staleRunningCutoff } },
       ],
     },
     select: {
-      id:                  true,
-      status:              true,
-      startedAt:           true,
-      totalSources:        true,
-      successCount:        true,
-      duplicateCount:      true,
-      failureCount:        true,
-      enrichedCount:       true,
+      id:                   true,
+      status:               true,
+      startedAt:            true,
+      completedAt:          true,  // used for accurate duration calculation
+      totalSources:         true,
+      successCount:         true,
+      duplicateCount:       true,
+      failureCount:         true,
+      enrichedCount:        true,
       keywordsCoveredCount: true,
-      aiInputTokens:       true,
-      aiOutputTokens:      true,
+      aiInputTokens:        true,
+      aiOutputTokens:       true,
     },
   });
 
@@ -72,7 +71,9 @@ async function cleanupStaleSessions() {
   console.warn(`[Cron] ⚠️  Found ${abandonedSessions.length} abandoned session(s). Processing...`);
 
   for (const session of abandonedSessions) {
-    const durationMinutes = (Date.now() - new Date(session.startedAt).getTime()) / 60000;
+    // Use completedAt set by signal handler when available — avoids inflated duration
+    const endTime         = session.completedAt ? new Date(session.completedAt).getTime() : Date.now();
+    const durationMinutes = (endTime - new Date(session.startedAt).getTime()) / 60000;
 
     // Recover stats from ScrapedArticle if session row counters are all zero
     let successCount   = session.successCount   || 0;
@@ -108,13 +109,13 @@ async function cleanupStaleSessions() {
       ? parseFloat(((successCount / attempted) * 100).toFixed(2))
       : null;
 
-    // Write final stats and mark canceled (handles both "canceled" and stuck "running" sessions)
     await prisma.scrapingSession.update({
       where: { id: session.id },
       data: {
-        status:               "canceled",
-        completedAt:          session.status === "canceled" ? undefined : new Date(),
-        criticalErrors:       true,
+        status:                "canceled",
+        // Only set completedAt if not already set by the signal handler
+        ...(session.completedAt ? {} : { completedAt: new Date() }),
+        criticalErrors:        true,
         totalUrlsFound,
         successCount,
         duplicateCount,
@@ -122,7 +123,7 @@ async function cleanupStaleSessions() {
         enrichedCount,
         enrichmentFailedCount: enrichmentFailed,
         successRate,
-        durationMinutes:      parseFloat(durationMinutes.toFixed(2)),
+        durationMinutes:       parseFloat(durationMinutes.toFixed(2)),
         aiInputTokens,
         aiOutputTokens,
       },
