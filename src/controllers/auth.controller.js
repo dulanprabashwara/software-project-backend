@@ -79,6 +79,15 @@ const sync = asyncHandler(async (req, res) => {
 
   const user = await authService.syncUser(firebaseUid);
 
+  // If the user has an active ban record, reject the login. return 403
+  if (user.bannedRecord) {
+    throw new ApiError(
+      403,
+      user.bannedRecord.reason ||
+        "Your account has been suspended. Please contact support.",
+    );
+  }
+
   sendSuccess(res, {
     message: "User synced successfully.",
     data: user,

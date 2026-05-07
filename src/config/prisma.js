@@ -9,9 +9,7 @@ const { PrismaClient } = require("@prisma/client");
  */
 
 function buildUrl() {
-  const base = process.env.DATABASE_URL || "";
-  const sep = base.includes("?") ? "&" : "?";
-  return `${base}${sep}connection_limit=20&pool_timeout=30`;
+  return process.env.DATABASE_URL || "";
 }
 
 /** @type {PrismaClient} */
