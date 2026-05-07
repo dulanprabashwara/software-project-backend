@@ -38,6 +38,8 @@ model User {
   comments               Comment[]
   following              Follow[]              @relation("Followers")
   followers              Follow[]              @relation("Following")
+  linkedinConnections    LinkedInConnection[]
+  liPublishJobs          LinkedInPublishJob[]
   receivedMessages       Message[]             @relation("ReceivedMessages")
   sentMessages           Message[]             @relation("SentMessages")
   notifications          Notification[]        @relation("NotificationDest")
@@ -50,8 +52,7 @@ model User {
   stats                  UserStats?
   wordpressConnection    WordPressConnection?
   wpPublishJobs          WordPressPublishJob[]
-  linkedinConnections    LinkedInConnection[]
-  liPublishJobs          LinkedInPublishJob[]
+
 
   @@map("users")
 }
@@ -91,12 +92,12 @@ model Article {
   shares                  ArticleShare[]
   author                  User                  @relation(fields: [authorId], references: [id], onDelete: Cascade)
   comments                Comment[]
+  liPublishJobs           LinkedInPublishJob[]
   notifications           Notification[]
   readHistory             ReadHistory[]
   reports                 ReportedArticle[]
   savedBy                 SavedArticle[]
   wpPublishJobs           WordPressPublishJob[]
-  liPublishJobs           LinkedInPublishJob[]
 
   @@index([authorId])
   @@index([status])
@@ -541,6 +542,7 @@ model ArticleInteractions {
   @@index([dateUpdated])
   @@map("article_interactions")
 }
+
 
 enum Role {
   USER
