@@ -1,6 +1,6 @@
 const prisma = require("../config/prisma");
 const { createNotification } = require("./notification.service");
-const { updateCommentCount, updateRatingStats, updateInteractionsTable } = require("./articleStats.service");
+const { updateCommentCount, updateRatingStats } = require("./articleStats.service"); // Removed updateInteractionsTable from here
 
 const fetchArticleComments = async (articleId) => {
   return await prisma.comment.findMany({
@@ -15,69 +15,129 @@ const fetchArticleComments = async (articleId) => {
 };
 
 const addCommentToArticle = async (userId, articleId, content, parentId, appInstance) => {
-  const article = await prisma.article.findUnique({
-    where: { id: articleId },
-    select: { authorId: true, slug: true, id: true }
-  });
+  let catchError = null;
+  let finalData = null;
 
-  if (!article) throw new Error("Article not found");
+  // 1. THE DATABASE TRANSACTION
+  try {
+    finalData = await prisma.$transaction(async (tx) => {
+      const article = await tx.article.findUnique({
+        where: { id: articleId },
+        select: { authorId: true, slug: true, id: true }
+      });
 
-  const newComment = await prisma.comment.create({
-    data: { content, articleId, authorId: userId, parentId: parentId || null },
-    include: { 
-      author: { select: { id: true, displayName: true } } 
-    }
-  });
+      if (!article) throw new Error("Article not found");
 
-  await createNotification(appInstance, {
-    type: "COMMENT",
-    destUserId: article.authorId, 
-    sourceUserId: userId,    
-    sourceArticleId: article.id   
-  });
+      const newComment = await tx.comment.create({
+        data: { content, articleId, authorId: userId, parentId: parentId || null },
+        include: { author: { select: { id: true, displayName: true } } }
+      });
 
-  await updateCommentCount(articleId);
-  await updateInteractionsTable(userId, articleId, 'COMMENT');
+      // Inserted your upsert logic directly into the transaction using 'tx'
+      await tx.articleInteractions.upsert({
+        where: { userId_articleId: { userId, articleId } },
+        update: { commentStatus: true },
+        create: { userId, articleId, commentStatus: true }
+      });
 
-  return newComment;
+      return { newComment, article }; 
+    });
+  } catch (error) {
+    catchError = error;
+  }
+
+  // 2. HANDLE ERRORS
+  if (catchError) {
+    console.error("Transaction failed:", catchError.message);
+    throw new Error(catchError.message || "Failed to post comment");
+  }
+
+  // 3. EXTERNAL FUNCTIONS (Runs only if there are no errors)
+  try {
+    await createNotification(appInstance, {
+      type: "COMMENT",
+      destUserId: finalData.article.authorId, 
+      sourceUserId: userId,    
+      sourceArticleId: finalData.article.id   
+    });
+
+    await updateCommentCount(articleId);
+  } catch (sideEffectError) {
+    console.error("Comment saved, but external updates failed:", sideEffectError);
+  }
+
+  return finalData.newComment;
 };
 
 const submitArticleRating = async (userId, articleId, rating, appInstance) => {
-  const article = await prisma.article.findUnique({
-    where: { id: articleId },
-    select: { id: true, authorId: true } 
-  });
+  let catchError = null;
+  let finalData = null;
 
-  if (!article) throw new Error("Article not found");
+  // 1. THE DATABASE TRANSACTION
+  try {
+    finalData = await prisma.$transaction(async (tx) => {
+      const article = await tx.article.findUnique({
+        where: { id: articleId },
+        select: { id: true, authorId: true } 
+      });
 
-  const existingRating = await prisma.articleRating.findUnique({
-    where: { userId_articleId: { userId, articleId } }
-  });
+      if (!article) throw new Error("Article not found");
 
-  let userRating;
+      const existingRating = await tx.articleRating.findUnique({
+        where: { userId_articleId: { userId, articleId } }
+      });
 
-  if (existingRating) {
-    userRating = await prisma.articleRating.update({
-      where: { userId_articleId: { userId, articleId } },
-      data: { score: rating }
+      let userRating;
+      let isNew = false; 
+
+      if (existingRating) {
+        userRating = await tx.articleRating.update({
+          where: { userId_articleId: { userId, articleId } },
+          data: { score: rating }
+        });
+      } else { 
+        userRating = await tx.articleRating.create({
+          data: { userId, articleId, score: rating }
+        });
+        isNew = true;
+      }
+
+      // Inserted your upsert logic directly into the transaction using 'tx'
+      await tx.articleInteractions.upsert({
+        where: { userId_articleId: { userId, articleId } },
+        update: { rateStatus: true },
+        create: { userId, articleId, rateStatus: true }
+      });
+
+      return { userRating, article, isNew };
     });
-  } else { 
-    userRating = await prisma.articleRating.create({
-      data: { userId, articleId, score: rating }
-    });
-
-    await createNotification(appInstance, {
-      type: "RATE",
-      destUserId: article.authorId, 
-      sourceUserId: userId,    
-      sourceArticleId: articleId 
-    });
+  } catch (error) {
+    catchError = error;
   }
 
-  await updateRatingStats(articleId);
-  await updateInteractionsTable(userId, articleId, 'RATE');
+  // 2. HANDLE ERRORS
+  if (catchError) {
+    console.error("Transaction failed:", catchError.message);
+    throw new Error(catchError.message || "Failed to submit rating");
+  }
 
-  return userRating;
+  // 3. EXTERNAL FUNCTIONS (Runs only if there are no errors)
+  try {
+    if (finalData.isNew) {
+      await createNotification(appInstance, {
+        type: "RATE",
+        destUserId: finalData.article.authorId, 
+        sourceUserId: userId,    
+        sourceArticleId: articleId 
+      });
+    }
+
+    await updateRatingStats(articleId);
+  } catch (sideEffectError) {
+    console.error("Rating saved, but external updates failed:", sideEffectError);
+  }
+
+  return finalData.userRating;
 };
 
 module.exports = {

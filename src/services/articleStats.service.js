@@ -14,7 +14,7 @@ const updateCommentCount = async (articleId) => {
     const updatedArticle = await prisma.article.update({
       where: { id: articleId },
       data: {
-        commentCount:commentcount ._count.articleId// Safely adds 1 to the current count
+        commentCount:commentcount ._count.articleId
       }
     });
     
@@ -83,30 +83,9 @@ const updateRatingStats = async (articleId) => {
     throw error;
   }
 };
-const updateInteractionsTable = async (userId, articleId, type) => {
-  try {
-    const dataToUpdate = {};
-    if (type === 'COMMENT') dataToUpdate.commentStatus = true;
-    if (type === 'RATE') dataToUpdate.rateStatus = true;
-
-    await prisma.articleInteractions.upsert({
-      where: {
-        userId_articleId: { userId, articleId }
-      },
-      update: dataToUpdate,
-      create: {
-        userId: userId,
-        articleId: articleId,
-        ...dataToUpdate
-      }
-    });
-  } catch (error) {
-    console.error(`Failed to update interaction for ${type}:`, error.message);
-  }
-};
+ 
 
 module.exports = { 
   updateCommentCount, 
   updateRatingStats,
-  updateInteractionsTable
 };
