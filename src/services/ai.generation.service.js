@@ -208,9 +208,7 @@ function buildReferenceBlock(referenceItems) {
 //   - session resolution, length/tone config, reference fetching
 //   - AI call + word-count correction loop
 //   - log persistence
-//
-// The only differences are the system prompt wording (fresh angle for regen)
-// and the initial token accumulation (generate carries over analyze tokens).
+
 
 async function _buildAndSaveArticle({
   sessionId,
