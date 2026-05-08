@@ -1,12 +1,13 @@
 const prisma = require("../config/prisma");
 
-const getUserRatings = async (userId) => {
-  return await prisma.articleRating.findMany({
-    where: { userId: userId },
+//get a users rating sfor a certain article
+const getUserRating = async (userId, articleId) => {
+  return await prisma.articleRating.findFirst({
+    where: { userId, articleId },
     orderBy: { createdAt: 'desc' }
   });
 };
 
 module.exports = {
-  getUserRatings,
+  getUserRating,
 };

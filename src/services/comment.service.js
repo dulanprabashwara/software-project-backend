@@ -1,7 +1,8 @@
 const prisma = require("../config/prisma");
 const { createNotification } = require("./notification.service");
-const { updateCommentCount, updateRatingStats, updateInteractionsTable } = require("./articleStats.service");
+const { updateCommentCount, updateRatingStats } = require("./articleStats.service"); // Removed updateInteractionsTable from here
 
+//get all the comments
 const fetchArticleComments = async (articleId) => {
   return await prisma.comment.findMany({
     where: { articleId },
@@ -14,70 +15,129 @@ const fetchArticleComments = async (articleId) => {
   });
 };
 
+//add a comment
 const addCommentToArticle = async (userId, articleId, content, parentId, appInstance) => {
-  const article = await prisma.article.findUnique({
-    where: { id: articleId },
-    select: { authorId: true, slug: true, id: true }
-  });
+  let catchError = null;
+  let finalData = null;
 
-  if (!article) throw new Error("Article not found");
+  //THE DATABASE TRANSACTION
+  try {
+    finalData = await prisma.$transaction(async (tx) => {
+      const article = await tx.article.findUnique({
+        where: { id: articleId },
+        select: { authorId: true, slug: true, id: true }
+      });
 
-  const newComment = await prisma.comment.create({
-    data: { content, articleId, authorId: userId, parentId: parentId || null },
-    include: { 
-      author: { select: { id: true, displayName: true } } 
-    }
-  });
+      if (!article) throw new Error("Article not found");
 
-  await createNotification(appInstance, {
-    type: "COMMENT",
-    destUserId: article.authorId, 
-    sourceUserId: userId,    
-    sourceArticleId: article.id   
-  });
+      const newComment = await tx.comment.create({
+        data: { content, articleId, authorId: userId, parentId: parentId || null },
+        include: { author: { select: { id: true, displayName: true } } }
+      });
 
-  await updateCommentCount(articleId);
-  await updateInteractionsTable(userId, articleId, 'COMMENT');
+      //add the somment status into interactions table
+       await tx.articleInteractions.upsert({
+        where: { userId_articleId: { userId, articleId } },
+        update: { commentStatus: true },
+        create: { userId, articleId, commentStatus: true }
+      });
 
-  return newComment;
-};
-
-const submitArticleRating = async (userId, articleId, rating, appInstance) => {
-  const article = await prisma.article.findUnique({
-    where: { id: articleId },
-    select: { id: true, authorId: true } 
-  });
-
-  if (!article) throw new Error("Article not found");
-
-  const existingRating = await prisma.articleRating.findUnique({
-    where: { userId_articleId: { userId, articleId } }
-  });
-
-  let userRating;
-
-  if (existingRating) {
-    userRating = await prisma.articleRating.update({
-      where: { userId_articleId: { userId, articleId } },
-      data: { score: rating }
+      return { newComment, article }; 
     });
-  } else { 
-    userRating = await prisma.articleRating.create({
-      data: { userId, articleId, score: rating }
-    });
-
-    await createNotification(appInstance, {
-      type: "RATE",
-      destUserId: article.authorId, 
-      sourceUserId: userId,    
-      sourceArticleId: articleId 
-    });
+  } catch (error) {
+    catchError = error;
   }
 
-  await updateRatingStats(articleId);
-  await updateInteractionsTable(userId, articleId, 'RATE');
+  // 2. HANDLE ERRORS
+  if (catchError) {
+    console.error("Transaction failed:", catchError.message);
+    throw new Error(catchError.message || "Failed to post comment");
+  }
 
-  return userRating;
+  // 3. EXTERNAL FUNCTIONS (Runs only if there are no errors)
+  try {
+    await createNotification(appInstance, {
+      type: "COMMENT",
+      destUserId: finalData.article.authorId, 
+      sourceUserId: userId,    
+      sourceArticleId: finalData.article.id   
+    });
+
+    await updateCommentCount(articleId);
+  } catch (sideEffectError) {
+    console.error("Comment saved, but external updates failed:", sideEffectError);
+  }
+
+  return finalData.newComment;
+};
+
+//give a rating
+const submitArticleRating = async (userId, articleId, rating, appInstance) => {
+  let catchError = null;
+  let finalData = null;
+
+  //   THE DATABASE TRANSACTION
+ try {
+    finalData = await prisma.$transaction(async (tx) => {
+      const article = await tx.article.findUnique({
+        where: { id: articleId },
+        select: { id: true, authorId: true } 
+      });
+
+      if (!article) throw new Error("Article not found");
+
+      //check if a rating already exists
+      const existingRating = await tx.articleRating.findUnique({
+        where: { userId_articleId: { userId, articleId } },
+        select: { id: true } 
+      });
+
+      const isNew = !existingRating;
+
+      //add the rating to articleRating table
+      const userRating = await tx.articleRating.upsert({
+        where: { userId_articleId: { userId, articleId } },
+        update: { score: rating },
+        create: { userId, articleId, score: rating }
+      });
+
+      // insert into interactions table
+      await tx.articleInteractions.upsert({
+        where: { userId_articleId: { userId, articleId } },
+        update: { rateStatus: true },
+        create: { userId, articleId, rateStatus: true }
+      });
+
+      return { userRating, article, isNew };
+    });
+  } catch (error) {
+    catchError = error;
+  }
+
+  // HANDLE ERRORS
+  if (catchError) {
+    console.error("Transaction failed:", catchError.message);
+    throw new Error(catchError.message || "Failed to submit rating");
+  }
+
+  // External Functions (Runs only if there are no errors)
+  try {
+    //will create the notification if the rating is new 
+    if (finalData.isNew) {
+      await createNotification(appInstance, {
+        type: "RATE",
+        destUserId: finalData.article.authorId, 
+        sourceUserId: userId,    
+        sourceArticleId: articleId 
+      });
+    }
+
+    await updateRatingStats(articleId);
+  } catch (sideEffectError) {
+    console.error("Rating saved, but external updates failed:", sideEffectError);
+  }
+
+  return finalData.userRating;
 };
 
 module.exports = {

@@ -1,17 +1,14 @@
+//comments, rating related routes
 const express = require('express');
 const router = express.Router();
-// Import the new middleware file
-const { authenticate } = require('../middlewares/auth'); 
+ const { authenticate } = require('../middlewares/auth'); 
 const commentController = require('../controllers/comment.controller');
 
-// GET comments is usually public
-router.get('/:articleId', commentController.getComments);
+ router.get('/:articleId', commentController.getComments); //get all the comments
 
-// POST comments REQUIRES authentication
-// Using 'authenticate' here populates req.user with your Postgres user
-router.post('/', authenticate, commentController.createComment);
+ 
+router.post('/', authenticate, commentController.createComment); //post a comment
 
-// POST rating REQUIRES authentication
-router.post('/:articleId/rate', authenticate, commentController.rateArticle);
+ router.post('/:articleId/rate', authenticate, commentController.rateArticle); //give a rating
 
 module.exports = router;

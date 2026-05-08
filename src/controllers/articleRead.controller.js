@@ -1,3 +1,4 @@
+//get article details for the reading page
 const articleReadService = require("../services/articleRead.service");
 
 exports.getArticleById = async (req, res) => {
