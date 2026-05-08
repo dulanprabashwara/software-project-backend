@@ -159,6 +159,7 @@ const handleWebhookEvent = async (event) => {
     case "customer.subscription.deleted": {
       const subscription = event.data.object;
       const stripeSubscriptionId = subscription.id;
+      const customerId = subscription.customer;
 
       // Find the subscription in our DB
       const dbSubscription = await prisma.subscription.findUnique({
@@ -179,6 +180,19 @@ const handleWebhookEvent = async (event) => {
         });
 
         console.log(`❌ User ${dbSubscription.userId} subscription canceled`);
+      } else if (customerId) {
+        // Fallback: If we missed the checkout webhook, the subscription row won't exist.
+        // Downgrade the user anyway by looking up their stripeCustomerId.
+        const user = await prisma.user.findUnique({
+          where: { stripeCustomerId: customerId },
+        });
+        if (user) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { isPremium: false },
+          });
+          console.log(`❌ User ${user.id} subscription canceled (fallback via customerId)`);
+        }
       }
       break;
     }
