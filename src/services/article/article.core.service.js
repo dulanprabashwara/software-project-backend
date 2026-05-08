@@ -1,12 +1,15 @@
 /* src/services/article/article.core.service.js */
 
+/*This file is a backend service file for article core features: create, read, update, delete, and record reads. 
+It uses Prisma to talk to the database.*/
+
 const prisma = require("../../config/prisma");
 const ApiError = require("../../utils/ApiError");
 const { generateUniqueSlug } = require("../../utils/helpers");
-const {	
+const {
   ARTICLE_STATUS,
-  BASIC_AUTHOR_SELECT,
-  ARTICLE_AUTHOR_INCLUDE,
+  BASIC_AUTHOR_SELECT, //Decides which author fields are returned
+  ARTICLE_AUTHOR_INCLUDE, //Use when fetching articles with author details
 } = require("./article.constants");
 const {
   getOwnedArticleOrThrow,
