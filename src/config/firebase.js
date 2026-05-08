@@ -1,12 +1,7 @@
 const admin = require("firebase-admin");
 
 /**
- * @fileoverview Firebase Admin SDK Configuration
- * @description
- * Initializes the Firebase Admin SDK using environment variables.
- 
- * @module config/firebase
- * @returns {Object} The initialized firebase-admin instance.
+ * Initializes the Firebase Admin SDK
  */
 if (!admin.apps.length) {
   admin.initializeApp({

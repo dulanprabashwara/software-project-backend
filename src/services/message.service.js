@@ -43,7 +43,7 @@ const getConversation = async (userId, otherUserId, page = 1, limit = 50) => {
 };
 
 /**
- * Get list of conversations (latest message from each unique user).
+ * Get list of conversations for sidebar  (latest message from each unique user).
  */
 const getConversationList = async (userId) => {
   // Get all unique users the current user has exchanged messages with
