@@ -1,25 +1,28 @@
 // @ts-nocheck
-const asyncHandler = require("../utils/asyncHandler");
-const prisma = require("../config/prisma");
+// src/controllers/wordpress.controller.js
+// Handles HTTP requests for WordPress OAuth, connection status, and article publishing.
+
+const asyncHandler    = require("../utils/asyncHandler");
+const prisma          = require("../config/prisma");
 const wordpressService = require("../services/wordpress.service");
 
 // ── CONSTANTS ───────────────────────────────────────────────────────
 
-// HTTP status codes
-const HTTP_STATUS_OK = 200;
+const HTTP_STATUS_OK          = 200;
 const HTTP_STATUS_BAD_REQUEST = 400;
 const HTTP_STATUS_BAD_GATEWAY = 502;
 
 const FRONTEND_URL = process.env.CLIENT_URL || "http://localhost:3000";
 
-// Returns the WordPress.com OAuth URL for the frontend to redirect the user to.
+// ── AUTH ─────────────────────────────────────────────────────────────
+
+// Returns the WordPress.com OAuth URL the frontend uses to start the connection flow.
 const initiateAuth = asyncHandler(async (req, res) => {
   const authUrl = wordpressService.initiateWordPressAuth(req.user.id);
   res.json({ success: true, data: { authUrl } });
 });
 
-// Receives the OAuth callback from WordPress.com, saves the connection,
-// and redirects the browser back to the frontend with the result as query params.
+// Receives the OAuth callback from WordPress.com, saves the connection, and redirects the browser back to the frontend.
 const handleCallback = asyncHandler(async (req, res) => {
   const { code, state, error } = req.query;
 
@@ -50,8 +53,9 @@ const handleCallback = asyncHandler(async (req, res) => {
   }
 });
 
-// Returns the user's current WordPress connection status.
-// Also includes the user's avatar URL from our database for display in the frontend.
+// ── CONNECTION ────────────────────────────────────────────────────────
+
+// Returns whether the user has a WordPress site connected, along with site and profile details.
 const getStatus = asyncHandler(async (req, res) => {
   const connection = await wordpressService.getWordPressConnection(req.user.id);
 
@@ -59,6 +63,7 @@ const getStatus = asyncHandler(async (req, res) => {
     return res.json({ success: true, data: { connected: false } });
   }
 
+  // Fetch the user's Easy Blogger avatar separately for display alongside the WP profile
   const user = await prisma.user.findUnique({
     where:  { id: req.user.id },
     select: { avatarUrl: true },
@@ -83,8 +88,9 @@ const disconnect = asyncHandler(async (req, res) => {
   res.json({ success: true, data: { disconnected: true } });
 });
 
-// Publishes an article to WordPress immediately or schedules it for a future time.
-// Body: { articleId, scheduledAt? } — omit scheduledAt for immediate publish.
+// ── PUBLISHING ────────────────────────────────────────────────────────
+
+// Publishes an article to WordPress now, or schedules it if scheduledAt is provided.
 const publishToWordPress = asyncHandler(async (req, res) => {
   const { articleId, scheduledAt } = req.body;
 
@@ -98,10 +104,13 @@ const publishToWordPress = asyncHandler(async (req, res) => {
     scheduledAt ? new Date(scheduledAt) : null
   );
 
-  res.status(result.success ? HTTP_STATUS_OK : HTTP_STATUS_BAD_GATEWAY).json({ success: result.success, data: result });
+  res.status(result.success ? HTTP_STATUS_OK : HTTP_STATUS_BAD_GATEWAY).json({
+    success: result.success,
+    data:    result,
+  });
 });
 
-// Returns the latest WordPress publish job status for a given article.
+// Returns the latest WordPress publish job record for the given article.
 const getPublishStatus = asyncHandler(async (req, res) => {
   const job = await wordpressService.getWordPressPublishStatus(req.params.articleId, req.user.id);
 

@@ -1,3 +1,4 @@
+//@ts-nocheck
 // src/services/email.service.js
 // Phase 3b — Sends session completion and critical error emails to all admin users.
 

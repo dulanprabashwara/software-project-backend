@@ -4,6 +4,13 @@
 // This is the main entry point called by the controller.
 // Tests cover: immediate publish (success + all failure paths),
 //              scheduled publish, input validation, and edge cases.
+//
+// IMPORTANT — axios.post call order when article has a coverImage:
+//   The full failure path (publish fails → draft attempted) makes 4 axios.post calls:
+//     [0] media upload inside pushArticleToWordPress
+//     [1] posts/new → publish (this is the one that should fail)
+//     [2] media upload inside attemptDraftSave
+//     [3] posts/new → draft save
 // ─────────────────────────────────────────────────────────────────────────────
 
 jest.mock("../../src/config/prisma", () => require("../mocks/prisma.mock.wp"));
@@ -27,7 +34,6 @@ const {
   MOCK_PUBLISH_JOB_PUBLISHED,
 } = require("./fixtures");
 
-// Article that belongs to a DIFFERENT user (for auth tests)
 const MOCK_ARTICLE_OTHER_AUTHOR = {
   ...MOCK_ARTICLE,
   id:       "article_other001",
@@ -50,7 +56,11 @@ describe("scheduleWordPressPublish — immediate publish success", () => {
   beforeEach(() => {
     prisma.article.findUnique.mockResolvedValue(MOCK_ARTICLE);
     prisma.wordPressConnection.findUnique.mockResolvedValue(MOCK_WP_CONNECTION);
-    axios.post.mockResolvedValue({ data: MOCK_WP_POST_RESPONSE });
+    // [0] media upload (returns no media[] → null → fallback URL used)
+    // [1] posts/new publish → succeeds
+    axios.post
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: MOCK_WP_POST_RESPONSE });
     prisma.wordPressPublishJob.create.mockResolvedValue(MOCK_PUBLISH_JOB_PUBLISHED);
   });
 
@@ -115,9 +125,15 @@ describe("scheduleWordPressPublish — publish fails, draft saves successfully",
     prisma.wordPressConnection.findUnique.mockResolvedValue(MOCK_WP_CONNECTION);
     prisma.wordPressPublishJob.create.mockResolvedValue({});
 
-    // First axios.post = publish fails, second axios.post = draft save succeeds
+    // Full 4-call chain when coverImage is an https URL:
+    // [0] media upload inside pushArticleToWordPress  → succeeds (ignored, returns null URL)
+    // [1] posts/new publish                           → FAILS
+    // [2] media upload inside attemptDraftSave        → succeeds (ignored, returns null URL)
+    // [3] posts/new draft save                        → SUCCEEDS
     axios.post
+      .mockResolvedValueOnce({ data: {} })
       .mockRejectedValueOnce({ response: { data: { message: "Server error" } } })
+      .mockResolvedValueOnce({ data: {} })
       .mockResolvedValueOnce({ data: { ID: 999, status: "draft" } });
   });
 
@@ -157,20 +173,19 @@ describe("scheduleWordPressPublish — publish fails, draft saves successfully",
     expect(jobData.errorMsg.length).toBeGreaterThan(0);
   });
 
-  // TC-SCHED-012
+  // TC-SCHED-012 — draft save is the 4th call (index 3)
   test("TC-SCHED-012 | draft save uses status=draft in its POST body", async () => {
     await scheduleWordPressPublish(MOCK_ARTICLE.id, MOCK_USER.id, null);
 
-    // Second axios.post call is the draft save
-    const [, draftBody] = axios.post.mock.calls[1];
+    const [, draftBody] = axios.post.mock.calls[3];
     expect(draftBody.status).toBe("draft");
   });
 
-  // TC-SCHED-013
+  // TC-SCHED-013 — draft save is the 4th call (index 3)
   test("TC-SCHED-013 | draft save includes article content", async () => {
     await scheduleWordPressPublish(MOCK_ARTICLE.id, MOCK_USER.id, null);
 
-    const [, draftBody] = axios.post.mock.calls[1];
+    const [, draftBody] = axios.post.mock.calls[3];
     expect(draftBody.content).toContain(MOCK_ARTICLE.content);
   });
 });
@@ -186,9 +201,15 @@ describe("scheduleWordPressPublish — both publish and draft save fail", () => 
     prisma.wordPressConnection.findUnique.mockResolvedValue(MOCK_WP_CONNECTION);
     prisma.wordPressPublishJob.create.mockResolvedValue({});
 
-    // Both calls fail
+    // Full 4-call chain — both the publish and the draft save fail:
+    // [0] media upload inside pushArticleToWordPress  → succeeds (ignored)
+    // [1] posts/new publish                           → FAILS
+    // [2] media upload inside attemptDraftSave        → succeeds (ignored)
+    // [3] posts/new draft save                        → FAILS
     axios.post
+      .mockResolvedValueOnce({ data: {} })
       .mockRejectedValueOnce({ response: { data: { message: "Publish error" } } })
+      .mockResolvedValueOnce({ data: {} })
       .mockRejectedValueOnce(new Error("Draft save network error"));
   });
 
@@ -237,7 +258,7 @@ describe("scheduleWordPressPublish — scheduled for a future time", () => {
   beforeEach(() => {
     prisma.article.findUnique.mockResolvedValue(MOCK_ARTICLE);
     prisma.wordPressConnection.findUnique.mockResolvedValue(MOCK_WP_CONNECTION);
-    prisma.wordPressPublishJob.findFirst.mockResolvedValue(null); // no existing job
+    prisma.wordPressPublishJob.findFirst.mockResolvedValue(null);
     prisma.wordPressPublishJob.create.mockResolvedValue({
       ...MOCK_PUBLISH_JOB_PENDING,
       scheduledAt: FUTURE_DATE,
@@ -286,7 +307,7 @@ describe("scheduleWordPressPublish — scheduled for a future time", () => {
 
   // TC-SCHED-025
   test("TC-SCHED-025 | reschedules existing PENDING job instead of creating duplicate", async () => {
-    const NEW_FUTURE = new Date(FUTURE_DATE.getTime() + 1000 * 60 * 60); // 1 hour later
+    const NEW_FUTURE = new Date(FUTURE_DATE.getTime() + 1000 * 60 * 60);
     prisma.wordPressPublishJob.findFirst.mockResolvedValue(MOCK_PUBLISH_JOB_PENDING);
     prisma.wordPressPublishJob.update.mockResolvedValue({
       ...MOCK_PUBLISH_JOB_PENDING,
