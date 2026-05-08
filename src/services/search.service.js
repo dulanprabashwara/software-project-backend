@@ -76,7 +76,13 @@ const countTagOnly = (excludeIds, q) =>
 
 // ── SEARCH ARTICLES ─────────────────────────────────────────────────
 
-// Searches published articles using a four-tier ranking:paginated result
+// Searches published articles using a four-tier ranking:
+//   Tier 1 — title contains the query as an exact whole word
+//   Tier 2 — any tag exactly equals the query (case-insensitive)
+//   Tier 3 — summary contains the query as an exact whole word
+//   Tier 4 — title contains the query as a substring
+// Each tier is sorted by engagement before merging. Returns a paginated result
+// with isSaved flags stamped on each article when currentUserId is provided.
 const searchArticles = async ({ query, page = 1, limit = DEFAULT_SEARCH_LIMIT, currentUserId = null }) => {
   const q = (query || "").trim();
   if (!q) return { articles: [], total: 0, page, limit, totalPages: 0 };
@@ -231,14 +237,28 @@ const getSearchSuggestions = async (query) => {
   const q = (query || "").trim();
   if (q.length < AUTOCOMPLETE_MIN_QUERY_LENGTH) return { articles: [], users: [] };
 
-  const titleSuggestions = await prisma.article.findMany({
-    where:   { status: "PUBLISHED", title: { contains: q, mode: "insensitive" } },
-    select:  { id: true, title: true, slug: true },
-    orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }],
-    take:    AUTOCOMPLETE_ARTICLES_LIMIT,
-  });
+  // Fire both queries in parallel — users result is independent of article results.
+  const [titleSuggestions, users] = await Promise.all([
+    prisma.article.findMany({
+      where:   { status: "PUBLISHED", title: { contains: q, mode: "insensitive" } },
+      select:  { id: true, title: true, slug: true },
+      orderBy: [{ averageRating: "desc" }, { ratingCount: "desc" }],
+      take:    AUTOCOMPLETE_ARTICLES_LIMIT,
+    }),
+    prisma.user.findMany({
+      where: {
+        OR: [
+          { username:    { contains: q, mode: "insensitive" } },
+          { displayName: { contains: q, mode: "insensitive" } },
+        ],
+      },
+      select: { id: true, username: true, displayName: true, avatarUrl: true },
+      take:   AUTOCOMPLETE_USERS_LIMIT,
+    }),
+  ]);
 
   // Fills remaining article slots with tag-matched articles not already shown.
+  // This step depends on titleSuggestions so it must run after the parallel step.
   let tagSuggestions = [];
   const remaining = AUTOCOMPLETE_ARTICLES_LIMIT - titleSuggestions.length;
   if (remaining > 0) {
@@ -253,17 +273,6 @@ const getSearchSuggestions = async (query) => {
       });
     }
   }
-
-  const users = await prisma.user.findMany({
-    where: {
-      OR: [
-        { username:    { contains: q, mode: "insensitive" } },
-        { displayName: { contains: q, mode: "insensitive" } },
-      ],
-    },
-    select: { id: true, username: true, displayName: true, avatarUrl: true },
-    take:   AUTOCOMPLETE_USERS_LIMIT,
-  });
 
   return { articles: [...titleSuggestions, ...tagSuggestions], users };
 };
