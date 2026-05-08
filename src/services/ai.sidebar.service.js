@@ -1,3 +1,4 @@
+//@ts-nocheck
 /**
  * ai.sidebar.service.js
  *

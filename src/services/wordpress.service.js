@@ -56,8 +56,6 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
         },
         timeout: 30000,
       });
-
-      // WordPress.com v1.1 featured_image expects a URL, not an integer ID
       return res.data?.media?.[0]?.URL || null;
     }
 
