@@ -14,7 +14,8 @@ const getPublishedMainFeed = async (page = 1, limit = 5) => {
           displayName: true,
           username: true,
           avatarUrl: true,
-          isPremium: true
+          isPremium: true,
+          id: true,
         },
       },
     },

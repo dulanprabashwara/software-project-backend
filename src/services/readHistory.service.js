@@ -13,7 +13,7 @@ const getUserReadHistory = async (userId) => {
           id: true,
           title: true,
           coverImage: true,
-          content: true,
+          summary: true,
           publishedAt: true,
           commentCount:true,
           ratingCount:true,
@@ -24,7 +24,8 @@ const getUserReadHistory = async (userId) => {
             select: { 
                 displayName: true,
                 isPremium: true,
-                username: true
+                username: true,
+                avatarUrl: true,
 
                  
             }
