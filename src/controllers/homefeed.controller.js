@@ -1,9 +1,11 @@
+//main home page feeds
 const homefeedService = require("../services/homefeed.service");
 
+//New articles feed
 exports.getMainFeed = async (req, res) => {
   try {
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = 5; 
+    const page = parseInt(req.query.page, 10) || 1; //which page 
+    const limit = 5;  //5 articles at a time
 
     const articles = await homefeedService.getPublishedMainFeed(page, limit);
     res.status(200).json(articles); 
@@ -13,11 +15,10 @@ exports.getMainFeed = async (req, res) => {
   }
 };
 
-// ADDED: Following Feed Controller
-exports.getFollowingFeed = async (req, res) => {
+//following feed
+ exports.getFollowingFeed = async (req, res) => {
   try {
-    // Note: This assumes your auth middleware attaches the user to `req.user`
-    const userId = req.user?.id; 
+     const userId = req.user?.id; 
     
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized. Please log in." });

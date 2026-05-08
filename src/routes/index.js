@@ -4,8 +4,8 @@ const authRoutes = require("./auth.routes");
 const userRoutes = require("./user.routes");
 const articleRoutes = require("./article.routes");
 const commentRoutes = require("./comment.routes");
- const messageRoutes = require("./message.routes");
-  const feedRoutes = require("./feed.routes");
+const messageRoutes = require("./message.routes");
+const feedRoutes = require("./feed.routes");
 const notificationRoutes = require("./notification.routes");
 const adminRoutes = require("./admin.routes");
 const aiRoutes = require("./ai.routes");
@@ -24,7 +24,8 @@ const articleRatingRoutes = require("./articleRatings.routes");
 const readHistoryRoutes = require("./readHistory.routes");
 const popularTopicsRoutes = require("./popularTopics.routes");
 const articleReportsRoutes = require("./articleReports.routes");
-const articleDeleteRoutes = require("./articleDelete.routes");
+const articleStatsRoutes = require("./articleStats.routes");
+
 
 
 
@@ -57,7 +58,7 @@ router.use("/articleRatings", articleRatingRoutes);
 router.use("/readHistory", readHistoryRoutes);
 router.use("/popularTopics", popularTopicsRoutes);
 router.use("/articleReports", articleReportsRoutes);
-router.use("/articleDelete", articleDeleteRoutes);
+router.use("/articleStats", articleStatsRoutes);
 
 
 

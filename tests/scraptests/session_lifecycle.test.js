@@ -293,3 +293,111 @@ describe("partial vs crash report distinction", () => {
     expect(crash.criticalErrors).toBe(true);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// Crash report with enrichment stats overlay
+// The crash catch block now reads enrichment stats from DB and overlays them
+// onto the crash report so the email shows partial enrichment work done.
+// ════════════════════════════════════════════════════════════════════════════
+
+describe("crash report — enrichment stats overlay from DB", () => {
+
+  // Simulate the overlay logic from the crash catch block in runScrapingSession
+  function overlayEnrichmentStats(crashReport, dbStats) {
+    return {
+      ...crashReport,
+      enrichedCount:    dbStats.enrichedCount         || 0,
+      enrichmentFailed: dbStats.enrichmentFailedCount || 0,
+      aiTokenUsage: {
+        inputTokens:      dbStats.aiInputTokens  || 0,
+        outputTokens:     dbStats.aiOutputTokens || 0,
+        estimatedCostUSD: 0,
+      },
+    };
+  }
+
+  test("enrichedCount in crash report reflects partial enrichment done before crash", () => {
+    const base   = buildCrashReport("sess", Date.now(), { totalSources: 4 }, makeCounters(), "DB down");
+    const result = overlayEnrichmentStats(base, {
+      enrichedCount: 47, enrichmentFailedCount: 3, aiInputTokens: 22000, aiOutputTokens: 4000,
+    });
+    expect(result.enrichedCount).toBe(47);
+    expect(result.enrichmentFailed).toBe(3);
+  });
+
+  test("aiTokenUsage in crash report reflects tokens consumed before crash", () => {
+    const base   = buildCrashReport("sess", Date.now(), { totalSources: 4 }, makeCounters(), "err");
+    const result = overlayEnrichmentStats(base, {
+      enrichedCount: 10, enrichmentFailedCount: 0, aiInputTokens: 44678, aiOutputTokens: 7639,
+    });
+    expect(result.aiTokenUsage.inputTokens).toBe(44678);
+    expect(result.aiTokenUsage.outputTokens).toBe(7639);
+  });
+
+  test("overlay defaults to 0 when DB stats are missing — DB was unreachable during crash", () => {
+    const base   = buildCrashReport("sess", Date.now(), { totalSources: 4 }, makeCounters(), "err");
+    const result = overlayEnrichmentStats(base, {});
+    expect(result.enrichedCount).toBe(0);
+    expect(result.enrichmentFailed).toBe(0);
+    expect(result.aiTokenUsage.inputTokens).toBe(0);
+  });
+
+  test("overlay does not change isCrashed, criticalErrors or scraping counters", () => {
+    const counters = {
+      "Cat A": { successCount: 8, duplicateCount: 1, failureCount: 2, urlsProcessed: 11 },
+    };
+    const base   = buildCrashReport("sess", Date.now(), { totalSources: 2 }, counters, "boom");
+    const result = overlayEnrichmentStats(base, { enrichedCount: 5, aiInputTokens: 1000, aiOutputTokens: 200 });
+
+    expect(result.isCrashed).toBe(true);
+    expect(result.criticalErrors).toBe(true);
+    expect(result.successCount).toBe(8);
+    expect(result.failureCount).toBe(2);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// buildPartialReport — signal handler counter accuracy
+// ════════════════════════════════════════════════════════════════════════════
+
+describe("buildPartialReport — in-memory counter accuracy at signal time", () => {
+
+  test("counters mid-Phase-2 reflect only categories processed so far", () => {
+    // 3 categories configured, signal fires after category 1 finishes
+    const partialCounters = {
+      "Technology & Digital Life": { successCount: 5, duplicateCount: 1, failureCount: 2, urlsProcessed: 8 },
+      "Health & Medicine":         { successCount: 0, duplicateCount: 0, failureCount: 0, urlsProcessed: 0 },
+      "Finance & Money":           { successCount: 0, duplicateCount: 0, failureCount: 0, urlsProcessed: 0 },
+    };
+    const report = buildPartialReport("sess", Date.now() - 5000, { totalSources: 6 }, partialCounters);
+    expect(report.successCount).toBe(5);
+    expect(report.duplicateCount).toBe(1);
+    expect(report.failureCount).toBe(2);
+    expect(report.totalUrlsFound).toBe(8);
+  });
+
+  test("successRate calculation reflects partial progress accurately", () => {
+    const counters = {
+      "Cat A": { successCount: 5, duplicateCount: 0, failureCount: 5, urlsProcessed: 10 },
+    };
+    const report = buildPartialReport("sess", Date.now(), { totalSources: 4 }, counters);
+    expect(report.successRate).toBe(50); // 5 / (5+5) = 50%
+  });
+
+  test("signal mid-category gives lower successCount than DB — DB is more accurate", () => {
+    // This documents why cleanupStaleSessions uses recoverSessionStats (DB count)
+    // instead of trusting the session row written by the signal handler.
+    // The signal handler increments counters AFTER the DB write (saveScrapedArticle),
+    // so articles saved between the last counter increment and the kill are in DB
+    // but not in the in-memory counter.
+    const inMemoryCounters = {
+      "Cat A": { successCount: 8, duplicateCount: 0, failureCount: 2, urlsProcessed: 10 },
+    };
+    const report = buildPartialReport("sess", Date.now(), { totalSources: 2 }, inMemoryCounters);
+
+    // DB might have 9 saved articles (one saved but counter not yet incremented)
+    // The report from the signal handler shows 8 — less accurate than DB query
+    expect(report.successCount).toBe(8); // what the signal handler saw
+    // Cleanup will override this with ScrapedArticle.count() which returns 9
+  });
+});

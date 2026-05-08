@@ -1,12 +1,12 @@
 const prisma = require("../config/prisma");
 
 const createNotification = async (app, { type, destUserId, sourceUserId, sourceArticleId }) => {
-  console.log(`🔔 Notif Triggered: Type=${type}, To=${destUserId}, From=${sourceUserId}, Article=${sourceArticleId}`);
+  console.log(`  Notification Triggered: Type=${type}, To=${destUserId}, From=${sourceUserId}, Article=${sourceArticleId}`);
   try {
     // Don't notify the user of their own actions
     if (destUserId === sourceUserId) return null;
 
-    // 1. Save to Database using ONLY your schema's fields
+    // Save to Database 
     const notification = await prisma.notification.create({
       data: { 
         type, 
@@ -21,7 +21,7 @@ const createNotification = async (app, { type, destUserId, sourceUserId, sourceA
       }
     });
 
-    // 2. Emit instantly via Socket.io
+    // Emit via Socket.io
     const io = app.get("io");
     if (io) {
       io.to(`user:${destUserId}`).emit("notification:receive", notification);
@@ -38,10 +38,10 @@ const createNotification = async (app, { type, destUserId, sourceUserId, sourceA
  * Notify all followers when an author publishes a new article.
  */
 const notifyFollowersOfNewArticle = async (app, authorId, articleId) => {
-  console.log(`📢 Broadcasting new article (${articleId}) to followers of user (${authorId})`);
+  console.log(`  Broadcasting new article (${articleId}) to followers of user (${authorId})`);
   
-  try {
-    // 1. Fetch all users who are following this author
+  try { 
+    // get all users who are following this author
     const followers = await prisma.follow.findMany({
       where: { followingId: authorId },
       select: { followerId: true }
@@ -49,7 +49,7 @@ const notifyFollowersOfNewArticle = async (app, authorId, articleId) => {
 
     if (!followers || followers.length === 0) return 0; // No followers to notify
 
-    // 2. Prepare the bulk insert payload
+    //  Prepare the bulk insert payload
     const notificationPayloads = followers.map((follower) => ({
       type: "NEW_ARTICLE",
       destUserId: follower.followerId,
@@ -57,14 +57,13 @@ const notifyFollowersOfNewArticle = async (app, authorId, articleId) => {
       sourceArticleId: articleId
     }));
 
-    // 3. Perform a highly efficient bulk insert
+    //  Perform a bulk insert
     await prisma.notification.createMany({
       data: notificationPayloads,
       skipDuplicates: true
     });
 
-    // 4. Fetch the author and article details ONCE to attach to the socket payload
-    // (createMany does not return the included relations, so we fetch it manually)
+    
     const authorDetails = await prisma.user.findUnique({
       where: { id: authorId },
       select: { username: true, displayName: true, avatarUrl: true }
@@ -75,7 +74,7 @@ const notifyFollowersOfNewArticle = async (app, authorId, articleId) => {
       select: { title: true, slug: true }
     });
 
-    // 5. Emit instantly to all followers via Socket.io
+    //  Emit  to all followers via Socket.io
     const io = app.get("io");
     if (io) {
       followers.forEach((follower) => {
@@ -95,7 +94,7 @@ const notifyFollowersOfNewArticle = async (app, authorId, articleId) => {
       });
     }
 
-    console.log(`✅ Successfully notified ${followers.length} followers.`);
+    console.log(`Successfully notified ${followers.length} followers.`);
     return followers.length;
 
   } catch (error) {
@@ -129,9 +128,44 @@ const deleteNotifications = async (userId, notificationId) => {
   }
 };
 
+///
+const publishNotification = async (app, { type, destUserId, sourceUserId, sourceArticleId }) => {
+  console.log(`  Notification Triggered: Type=${type}, To=${destUserId}, From=${sourceUserId}, Article=${sourceArticleId}`);
+  try {
+    
+
+    // 1. Save to Database  
+    const notification = await prisma.notification.create({
+      data: { 
+        type, 
+        destUserId,
+        sourceUserId,
+        sourceArticleId,
+      },
+      include: {
+        // Fetch the related data so the frontend 
+        sourceUser: { select: { username: true, displayName: true, avatarUrl: true } },
+        sourceArticle: { select: { title: true, slug: true } }
+      }
+    });
+
+    // 2. Emit instantly via Socket.io
+    const io = app.get("io");
+    if (io) {
+      io.to(`user:${destUserId}`).emit("notification:receive", notification);
+    }
+
+    return notification;
+  } catch (error) {
+    console.error("Failed to save notification:", error.message);
+    return null; 
+  }
+};
+
 module.exports = { 
   createNotification, 
   notifyFollowersOfNewArticle, // <-- Export the new function
   fetchUserNotifications,
-  deleteNotifications 
+  deleteNotifications ,
+  publishNotification
 };

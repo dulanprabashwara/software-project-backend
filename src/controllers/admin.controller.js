@@ -15,17 +15,49 @@ const getDashboard = asyncHandler(async (req, res) => {
 const getEngagementAnalytics = async (req, res, next) => {
   try {
     // Grab the '?days=' from the URL (default to 30 if not provided)
-    const days = parseInt(req.query.days) || 30; 
+    const days = parseInt(req.query.days) || 30;
 
     // Call the service
     const chartData = await adminService.calculateEngagement(days);
 
     res.status(200).json({
       success: true,
-      data: chartData 
+      data: chartData
     });
   } catch (error) {
     next(error);
+  }
+};
+
+const getAdminMetrics = async (req, res) => {
+  try {
+    const currentUserId = req.user.id;
+
+    const totalActions = await prisma.auditLog.count({
+      where: {
+        adminId: currentUserId
+      }
+    });
+
+    const totalResolved = await prisma.auditLog.count({
+      where: {
+        adminId: currentUserId,
+        action: {
+          contains: 'RESOLVE',
+          mode: 'insensitive'
+        }
+      }
+    });
+
+    // Send back just the two tiny numbers
+    return res.status(200).json({
+      success: true,
+      data: { totalActions, totalResolved }
+    });
+
+  } catch (error) {
+    console.error("Error fetching admin metrics:", error);
+    return res.status(500).json({ success: false, message: "Failed to load metrics" });
   }
 };
 
@@ -56,13 +88,6 @@ const updateUserRole = asyncHandler(async (/** @type {any} */ req, res) => {
   sendSuccess(res, { message: "User role updated.", data: user });
 });
 
-const togglePremium = asyncHandler(async (/** @type {any} */ req, res) => {
-  const user = await adminService.togglePremium(req.user.id, req.params.userId);
-  sendSuccess(res, {
-    message: user.isPremium ? "Premium granted." : "Premium revoked.",
-    data: user,
-  });
-});
 
 // ─── Bans ───────────────────────────────────
 
@@ -178,7 +203,7 @@ const updateOffer = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params; // Grabs the ID from the URL
     const adminId = req.user.id;
-    const updatedOffer = await adminService.updateOffer(id, req.body,adminId);
+    const updatedOffer = await adminService.updateOffer(id, req.body, adminId);
     res.status(200).json({ success: true, data: updatedOffer });
   } catch (error) {
     next(error);
@@ -198,7 +223,7 @@ const getScrapingSources = asyncHandler(async (req, res, next) => {
 const createScrapingSource = asyncHandler(async (req, res, next) => {
   try {
     const adminId = req.user.id;
-    const newSource = await adminService.createScrapingSource(req.body,adminId);
+    const newSource = await adminService.createScrapingSource(req.body, adminId);
     res.status(201).json({ success: true, data: newSource });
   } catch (error) {
     next(error);
@@ -209,7 +234,7 @@ const updateScrapingSource = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
     const adminId = req.user.id;
-    const updatedSource = await adminService.updateScrapingSource(id, req.body,adminId);
+    const updatedSource = await adminService.updateScrapingSource(id, req.body, adminId);
     res.status(200).json({ success: true, data: updatedSource });
   } catch (error) {
     next(error);
@@ -239,16 +264,16 @@ const getDefaultKeywords = asyncHandler(async (req, res, next) => {
 const validateUrl = asyncHandler(async (req, res, next) => {
   try {
     const { url } = req.body;
-    
+
     // Ensure it has https:// so the fetch doesn't crash
     const formattedUrl = url.startsWith('http') ? url : `https://${url}`;
 
     // Ping the website- Pretending to be a normal web browser
-    const response = await fetch(formattedUrl, { 
+    const response = await fetch(formattedUrl, {
       method: 'GET',
-      headers: { 
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' 
-      } 
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
     });
 
     // If the website returns a 200 OK status, it is real and scrapable!
@@ -264,44 +289,11 @@ const validateUrl = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getAdminMetrics = async (req, res) => {
-  try {
-    const currentUserId = req.user.id; 
-
-    const totalActions = await prisma.auditLog.count({
-      where: { 
-        adminId: currentUserId 
-      }
-    });
-
-    const totalResolved = await prisma.auditLog.count({
-      where: {
-        adminId: currentUserId,
-        action: {
-          contains: 'RESOLVE', 
-          mode: 'insensitive'
-        }
-      }
-    });
-
-    // Send back just the two tiny numbers
-    return res.status(200).json({ 
-      success: true, 
-      data: { totalActions, totalResolved } 
-    });
-
-  } catch (error) {
-    console.error("Error fetching admin metrics:", error);
-    return res.status(500).json({ success: false, message: "Failed to load metrics" });
-  }
-};
-
 module.exports = {
   getDashboard,
   getEngagementAnalytics,
   listUsers,
   updateUserRole,
-  togglePremium,
   banUser,
   unbanUser,
   getReports,

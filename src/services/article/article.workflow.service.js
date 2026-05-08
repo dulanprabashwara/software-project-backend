@@ -20,7 +20,7 @@ const {
   shouldUpdateArticleTimestamp,
 } = require("./article.helpers");
 
-const { notifyFollowersOfNewArticle } = require("../notification.service");
+const { notifyFollowersOfNewArticle,publishNotification} = require("../notification.service");
 const {generateSummary}= require ("../articleSummary.service");
 /*
  Publishes or schedules an article.
@@ -79,6 +79,12 @@ async function publishArticle(app, articleId, userId, payload) {
     await incrementPublishedArticleCount(userId);
 }
 generateSummary (updatedArticle.id,userId).catch(console.error);
+await publishNotification(app, {
+    type: "NEW_ARTICLE",
+    destUserId: userId, 
+    sourceUserId: userId,    
+    sourceArticleId: updatedArticle.id   
+  });
 notifyFollowersOfNewArticle(app, userId, updatedArticle.id).catch(console.error);
 
 
@@ -330,11 +336,11 @@ async function startEditAsNewArticle(sourceArticleId, userId) {
       data: {
         title: sourceArticle.title,
         slug,
-        content: "",
-        summary: null,
-        coverImage: null,
+        content: sourceArticle.content || "",
+        summary: sourceArticle.summary || null,
+        coverImage: sourceArticle.coverImage || null,
         tags: Array.isArray(sourceArticle.tags) ? sourceArticle.tags : [],
-        readingTime: 0,
+        readingTime: sourceArticle.readingTime || 0,
         status: ARTICLE_STATUS.EDITING,
         isAiGenerated: Boolean(sourceArticle.isAiGenerated),
         isEditAsNew: true,

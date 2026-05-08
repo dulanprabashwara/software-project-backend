@@ -9,8 +9,9 @@ const getFullArticleDetails = async (id) => {
           displayName: true,
           username: true,
           avatarUrl: true,
-          bio: true
-        }
+          isPremium : true,
+          id: true,
+          }
       },
       _count: {
         select: { comments: true }

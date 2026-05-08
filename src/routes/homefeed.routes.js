@@ -7,8 +7,8 @@ const { authenticate } = require("../middlewares/auth"); //user authentication i
 router.use(authenticate); //check if user is logged in
 
 // homefeed routes
-router.get("/main", homefeedController.getMainFeed);
-router.get("/following", homefeedController.getFollowingFeed);
+router.get("/main", homefeedController.getMainFeed); //New feed
+router.get("/following", homefeedController.getFollowingFeed); //following feed
  
 
 module.exports = router;

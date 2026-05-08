@@ -1,40 +1,41 @@
-// src/jobs/trendingScore.job.js
-const cron = require("node-cron");
+ const cron = require("node-cron");
 const prisma = require("../config/prisma");
 
 const calculateAndSaveScores = async () => {
   console.log("Starting trending score recalculation...");
 
   try {
-    // 1. Fetch articles (Optional: You can add a date filter here so you don't calculate 10-year-old articles)
+    // Fetch articles 
     const articles = await prisma.article.findMany({
       where: { status: "PUBLISHED" },
       select: { 
         id: true, 
         createdAt: true, 
+        updatedAt: true,
         readCount: true, 
         commentCount: true,
         ratingCount: true
     }  
     });
 
-    // 2. Loop through each article and calculate its new score
+    //Loop through and calculate score
     for (const article of articles) {
       const viewsWeight = 1;       // 1 point per view
       const commentsWeight = 5;    // 5 points per comment
-      const rateWeight = 3;
+      const rateWeight = 3;        // 3 points per rating (score won't matter)
       const affect = 1.2;         // How fast old posts lose their score
 
       // Calculate age in hours
-      const ageInMs = new Date() - new Date(article.createdAt);
+      const ageInMs = new Date().getTime() - new Date(article.createdAt).getTime();
       const ageInHours = ageInMs / (1000 * 60 * 60);
 
-      // The Gravity Formula
+      // interaction score
       const interactions = (article.readCount * viewsWeight) + (article.commentCount * commentsWeight)+ (article.ratingCount*rateWeight);
-      const penalty = Math.pow(ageInHours, affect);
-      const newScore = interactions / penalty;
+      // calculate penalty with age
+      const penalty = Math.pow(ageInHours + 2, affect);
+      const newScore = interactions / penalty || 0;
 
-      // 3. Update the database
+      // Update the database
       await prisma.article.update({
         where: { id: article.id },
         data: { trendingScore: newScore,
@@ -49,7 +50,7 @@ const calculateAndSaveScores = async () => {
   }
 };
 
- 
-cron.schedule("0 */1 * * *", calculateAndSaveScores);
+ //min,hou,daymonth,dayweek
+cron.schedule("0 */1 * * *", calculateAndSaveScores); //run once evry hpur
 
 module.exports = { calculateAndSaveScores };
