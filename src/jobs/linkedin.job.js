@@ -36,7 +36,8 @@ const _runPublish = async (jobId, article, liConnection, caption) => {
 
   // Fetch latest job state to check for idempotency (Ghost Success recovery)
   const job = await prisma.linkedInPublishJob.findUnique({ where: { id: jobId } });
-  if (!job || job.status === "PUBLISHED" || job.status === "CANCELLED") return true;
+  if (!job || job.status === "PUBLISHED" || job.status === "CANCELLED")
+    return true;
 
   // If we already have a liPostId, it means a previous attempt succeeded on LinkedIn 
   // but failed to update our database. We just fix the database status and move on.
@@ -65,8 +66,8 @@ const _runPublish = async (jobId, article, liConnection, caption) => {
   } catch (err) {
     // Check if the error was a network timeout/disconnect
     const isNetworkError = err.isNetworkError;
-    
-    const errorMsg = isNetworkError 
+
+    const errorMsg = isNetworkError
       ? `Network/Timeout Error: Post state is UNKNOWN. It might have reached LinkedIn. (Original error: ${err.message})`
       : err.message;
 
@@ -102,24 +103,27 @@ const _executeJob = async (jobId) => {
     return;
   }
 
-  if (!job) return console.warn(`[LinkedIn Scheduler] Job ${jobId} not found.`);
-  if (job.status !== "PENDING") return;
+  if (!job)
+    return console.warn(`[LinkedIn Scheduler] Job ${jobId} not found.`);
+  if (job.status !== "PENDING")
+    return;
 
   const handled = await _runPublish(jobId, job.article, job.liConnection, job.caption);
 
   if (!handled) {
-    // Retry once after 3 minutes
+    // Retry once after 10 seconds
     const retryKey = `${jobId}_retry`;
     if (_timeouts.has(retryKey)) {
       _timeouts.delete(retryKey);
-      await _cancelJob(jobId, "Article was not PUBLISHED 3 minutes after scheduled time.");
+      await _cancelJob(jobId, "Article was not PUBLISHED 10 seconds after scheduled time.");
     } else {
-      console.log(`[LinkedIn Scheduler] Article not PUBLISHED yet — retrying in 3 minutes.`);
-      _timeouts.set(retryKey, setTimeout(() => _executeJob(jobId), 3 * 60 * 1000));
+      console.log(`[LinkedIn Scheduler] Article not PUBLISHED yet — retrying in 10 seconds.`);
+      _timeouts.set(retryKey, setTimeout(() => _executeJob(jobId), 10 * 1000));
     }
   }
 };
 
+//Schedules a LinkedIn job
 const registerLinkedInJob = (jobId, scheduledAt) => {
   if (_timeouts.has(jobId)) {
     clearTimeout(_timeouts.get(jobId));
@@ -133,7 +137,7 @@ const registerLinkedInJob = (jobId, scheduledAt) => {
     return;
   }
 
-  const MAX_MS = 24 * 24 * 60 * 60 * 1000;
+  const MAX_MS = 24 * 60 * 60 * 1000;
   if (msUntilFire > MAX_MS) {
     _timeouts.set(jobId, setTimeout(() => registerLinkedInJob(jobId, scheduledAt), MAX_MS));
     return;
@@ -149,6 +153,7 @@ const cancelLinkedInJob = (jobId) => {
   }
 };
 
+//Recovers unfinished LinkedIn jobs from the database
 const startLinkedInJobs = async () => {
   try {
     const pendingJobs = await prisma.linkedInPublishJob.findMany({
