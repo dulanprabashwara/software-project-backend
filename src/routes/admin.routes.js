@@ -4,7 +4,6 @@ const { authenticate, authorize } = require("../middlewares/auth");
 
 const router = Router();
 
-// All admin routes require authentication + ADMIN role
 // @ts-ignore
 router.use(authenticate, authorize("ADMIN"));
 
@@ -15,7 +14,6 @@ router.get('/engagement', authenticate, adminController.getEngagementAnalytics);
 // User management
 router.get("/users", adminController.listUsers);
 router.put("/users/:userId/role", adminController.updateUserRole);
-router.put("/users/:userId/premium", adminController.togglePremium);
 router.post("/users/:userId/ban", adminController.banUser);
 router.delete("/users/:userId/ban", adminController.unbanUser);
 
