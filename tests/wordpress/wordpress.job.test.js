@@ -1,7 +1,16 @@
 // tests/wordpress/wordpress.job.test.js
 // ─────────────────────────────────────────────────────────────────────────────
 // Unit Tests — wordpress.job.js (cron processor) + getWordPressPublishStatus
+//
+// IMPORTANT — axios.post call order when article has a coverImage:
+//   When publish fails and a draft save is attempted, _runPublish makes
+//   4 axios.post calls total (via pushArticleToWordPress + attemptDraftSave):
+//     [0] media upload inside pushArticleToWordPress
+//     [1] posts/new publish    → the one that should fail
+//     [2] media upload inside attemptDraftSave
+//     [3] posts/new draft save → the fallback
 // ─────────────────────────────────────────────────────────────────────────────
+
 jest.mock("../../src/config/prisma", () => require("../mocks/prisma.mock.wp"));
 jest.mock("axios",                   () => require("../mocks/axios.mock"));
 
@@ -22,32 +31,27 @@ const {
 
 // ─── Helpers for building job variants ───────────────────────────────────────
 
-// Job whose article is PUBLISHED on the platform — the normal happy path
 const publishedArticleJob = () => ({
   ...MOCK_PUBLISH_JOB_PENDING,
   article:      { ...MOCK_ARTICLE, status: "PUBLISHED" },
   wpConnection: MOCK_WP_CONNECTION,
 });
 
-// Job whose article is still SCHEDULED (platform publish in progress or failed)
 const scheduledArticleJob = (minutesAgo = 2) => ({
   ...MOCK_PUBLISH_JOB_PENDING,
-  scheduledAt: new Date(Date.now() - minutesAgo * 60 * 1000),
-  article:     { ...MOCK_ARTICLE, status: "SCHEDULED" },
+  scheduledAt:  new Date(Date.now() - minutesAgo * 60 * 1000),
+  article:      { ...MOCK_ARTICLE, status: "SCHEDULED" },
   wpConnection: MOCK_WP_CONNECTION,
 });
 
-// Job whose article is SCHEDULED and past the grace period (>5 min)
-const overdueScheduledJob = () => scheduledArticleJob(10); // 10 minutes ago
+const overdueScheduledJob = () => scheduledArticleJob(10);
 
-// Job whose article is DRAFT (was never published)
 const draftArticleJob = () => ({
   ...MOCK_PUBLISH_JOB_PENDING,
   article:      { ...MOCK_ARTICLE, status: "DRAFT" },
   wpConnection: MOCK_WP_CONNECTION,
 });
 
-// Job whose article record was deleted
 const deletedArticleJob = () => ({
   ...MOCK_PUBLISH_JOB_PENDING,
   article:      null,
@@ -96,7 +100,7 @@ describe("processWordPressJobs", () => {
     await expect(processWordPressJobs()).resolves.toBeUndefined();
   });
 
-  // ── Article status guard — the key new behaviour ──────────────────────────
+  // ── Article status guard ──────────────────────────────────────────────────
 
   // TC-JOB-004
   test("TC-JOB-004 | skips job and does NOT call WordPress when article is still SCHEDULED within grace period", async () => {
@@ -173,7 +177,10 @@ describe("processWordPressJobs", () => {
   test("TC-JOB-010 | marks job IN_PROGRESS before calling WordPress when article is PUBLISHED", async () => {
     prisma.wordPressPublishJob.findMany.mockResolvedValue([publishedArticleJob()]);
     prisma.wordPressPublishJob.update.mockResolvedValue({});
-    axios.post.mockResolvedValue({ data: MOCK_WP_POST_RESPONSE });
+    // [0] media upload, [1] posts/new publish
+    axios.post
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: MOCK_WP_POST_RESPONSE });
 
     await processWordPressJobs();
 
@@ -185,7 +192,9 @@ describe("processWordPressJobs", () => {
   test("TC-JOB-011 | marks job PUBLISHED after successful WordPress API call", async () => {
     prisma.wordPressPublishJob.findMany.mockResolvedValue([publishedArticleJob()]);
     prisma.wordPressPublishJob.update.mockResolvedValue({});
-    axios.post.mockResolvedValue({ data: MOCK_WP_POST_RESPONSE });
+    axios.post
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: MOCK_WP_POST_RESPONSE });
 
     await processWordPressJobs();
 
@@ -197,7 +206,9 @@ describe("processWordPressJobs", () => {
   test("TC-JOB-012 | stores wpPostId and wpPostUrl on success", async () => {
     prisma.wordPressPublishJob.findMany.mockResolvedValue([publishedArticleJob()]);
     prisma.wordPressPublishJob.update.mockResolvedValue({});
-    axios.post.mockResolvedValue({ data: MOCK_WP_POST_RESPONSE });
+    axios.post
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: MOCK_WP_POST_RESPONSE });
 
     await processWordPressJobs();
 
@@ -208,13 +219,15 @@ describe("processWordPressJobs", () => {
 
   // ── Failure path — article is PUBLISHED but WordPress API fails ───────────
 
-  // TC-JOB-013
+  // TC-JOB-013 — full 4-call chain: media→publish(fail)→media→draft(success)
   test("TC-JOB-013 | marks job FAILED when WordPress API call throws", async () => {
     prisma.wordPressPublishJob.findMany.mockResolvedValue([publishedArticleJob()]);
     prisma.wordPressPublishJob.update.mockResolvedValue({});
     axios.post
-      .mockRejectedValueOnce(new Error("WP API timeout"))  // publish fails
-      .mockResolvedValueOnce({ data: { ID: 1, status: "draft" } }); // draft saves
+      .mockResolvedValueOnce({ data: {} })                              // [0] media upload
+      .mockRejectedValueOnce(new Error("WP API timeout"))              // [1] publish fails
+      .mockResolvedValueOnce({ data: {} })                              // [2] media in attemptDraftSave
+      .mockResolvedValueOnce({ data: { ID: 1, status: "draft" } });    // [3] draft saves
 
     await processWordPressJobs();
 
@@ -226,6 +239,7 @@ describe("processWordPressJobs", () => {
   test("TC-JOB-014 | stores errorMsg when publish fails", async () => {
     prisma.wordPressPublishJob.findMany.mockResolvedValue([publishedArticleJob()]);
     prisma.wordPressPublishJob.update.mockResolvedValue({});
+    // All calls reject — the media upload error is swallowed, publish error propagates
     axios.post.mockRejectedValue(new Error("WP API timeout"));
 
     await processWordPressJobs();
@@ -234,13 +248,15 @@ describe("processWordPressJobs", () => {
     expect(secondUpdate.data.errorMsg).toContain("WP API timeout");
   });
 
-  // TC-JOB-015
+  // TC-JOB-015 — full 4-call chain: media→publish(fail)→media→draft(success)
   test("TC-JOB-015 | stores draftUrl when draft save succeeds after publish failure", async () => {
     prisma.wordPressPublishJob.findMany.mockResolvedValue([publishedArticleJob()]);
     prisma.wordPressPublishJob.update.mockResolvedValue({});
     axios.post
-      .mockRejectedValueOnce(new Error("publish failed"))
-      .mockResolvedValueOnce({ data: { ID: 1, status: "draft" } });
+      .mockResolvedValueOnce({ data: {} })                              // [0] media upload
+      .mockRejectedValueOnce(new Error("publish failed"))              // [1] publish fails
+      .mockResolvedValueOnce({ data: {} })                              // [2] media in attemptDraftSave
+      .mockResolvedValueOnce({ data: { ID: 1, status: "draft" } });    // [3] draft saves
 
     await processWordPressJobs();
 
@@ -249,13 +265,15 @@ describe("processWordPressJobs", () => {
     expect(secondUpdate.data.draftUrl).not.toBeNull();
   });
 
-  // TC-JOB-016
+  // TC-JOB-016 — full 4-call chain: media→publish(fail)→media→draft(fail)
   test("TC-JOB-016 | draftUrl is null when both publish and draft save fail", async () => {
     prisma.wordPressPublishJob.findMany.mockResolvedValue([publishedArticleJob()]);
     prisma.wordPressPublishJob.update.mockResolvedValue({});
     axios.post
-      .mockRejectedValueOnce(new Error("publish failed"))
-      .mockRejectedValueOnce(new Error("draft failed"));
+      .mockResolvedValueOnce({ data: {} })                              // [0] media upload
+      .mockRejectedValueOnce(new Error("publish failed"))              // [1] publish fails
+      .mockResolvedValueOnce({ data: {} })                              // [2] media in attemptDraftSave
+      .mockRejectedValueOnce(new Error("draft failed"));               // [3] draft fails
 
     await processWordPressJobs();
 
@@ -275,26 +293,25 @@ describe("processWordPressJobs", () => {
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  // TC-JOB-018
+  // TC-JOB-018 — one ready job makes 2 axios calls (media upload + posts/new)
   test("TC-JOB-018 | processes multiple jobs with different article statuses in one run", async () => {
-    const readyJob    = { ...publishedArticleJob(),   id: "job_ready" };
-    const notReadyJob = { ...scheduledArticleJob(2),  id: "job_wait" };
-    const cancelJob   = { ...overdueScheduledJob(),   id: "job_cancel" };
+    const readyJob    = { ...publishedArticleJob(),  id: "job_ready" };
+    const notReadyJob = { ...scheduledArticleJob(2), id: "job_wait" };
+    const cancelJob   = { ...overdueScheduledJob(),  id: "job_cancel" };
 
-    prisma.wordPressPublishJob.findMany.mockResolvedValue([
-      readyJob, notReadyJob, cancelJob,
-    ]);
+    prisma.wordPressPublishJob.findMany.mockResolvedValue([readyJob, notReadyJob, cancelJob]);
     prisma.wordPressPublishJob.update.mockResolvedValue({});
-    axios.post.mockResolvedValue({ data: MOCK_WP_POST_RESPONSE });
+    // readyJob: [0] media upload, [1] posts/new publish
+    axios.post
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: MOCK_WP_POST_RESPONSE });
 
     await processWordPressJobs();
 
-    // axios called once for the ready job only
-    expect(axios.post).toHaveBeenCalledTimes(1);
+    // readyJob makes 2 axios calls (media + publish); the other two jobs make none
+    expect(axios.post).toHaveBeenCalledTimes(2);
 
-    // Update called: IN_PROGRESS + PUBLISHED for readyJob = 2
-    //                CANCELLED for cancelJob = 1
-    //                nothing for notReadyJob (skipped)
+    // IN_PROGRESS + PUBLISHED for readyJob = 2, CANCELLED for cancelJob = 1, nothing for notReadyJob
     expect(prisma.wordPressPublishJob.update).toHaveBeenCalledTimes(3);
   });
 
@@ -307,8 +324,8 @@ describe("processWordPressJobs", () => {
     prisma.wordPressPublishJob.update.mockResolvedValue({});
     axios.post
       .mockRejectedValueOnce(new Error("Fail"))
-      .mockResolvedValueOnce({ data: MOCK_WP_POST_RESPONSE }) // draft save for failJob
-      .mockResolvedValueOnce({ data: MOCK_WP_POST_RESPONSE }); // publish for successJob
+      .mockResolvedValueOnce({ data: MOCK_WP_POST_RESPONSE })
+      .mockResolvedValueOnce({ data: MOCK_WP_POST_RESPONSE });
 
     await processWordPressJobs();
 

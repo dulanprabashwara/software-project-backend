@@ -1,25 +1,27 @@
 // @ts-nocheck
+// src/services/wordpress.service.js
+// Handles all WordPress.com OAuth, connection management, and article publishing.
+
 const axios = require("axios");
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 
 // ── CONSTANTS ───────────────────────────────────────────────────────
 
-// Timeouts
 const MEDIA_UPLOAD_TIMEOUT_MS = 30000;
 const POST_PUBLISH_TIMEOUT_MS = 15000;
 
-// API version
 const WORDPRESS_API_VERSION = "rest/v1.1";
+const WP_OAUTH_BASE         = "https://public-api.wordpress.com/oauth2";
+const WP_API_BASE           = "https://public-api.wordpress.com/" + WORDPRESS_API_VERSION;
 
-const WP_OAUTH_BASE = "https://public-api.wordpress.com/oauth2";
-const WP_API_BASE   = "https://public-api.wordpress.com/" + WORDPRESS_API_VERSION;
+// ── HELPERS ─────────────────────────────────────────────────────────
 
+// Removes the protocol prefix and trailing slash from a URL string.
 const stripProtocol = (url = "") =>
   url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
-// Prepends a canonical <link> tag to article content so search engines
-// know Easy Blogger is the original source.
+// Returns an HTML canonical tag pointing back to the original article on Easy Blogger.
 const buildCanonicalSnippet = (article) => {
   const clientUrl = process.env.CLIENT_URL || "";
   if (!clientUrl || !article.slug) return "";
@@ -27,16 +29,15 @@ const buildCanonicalSnippet = (article) => {
   return `<!-- Originally published on Easy Blogger: ${canonicalUrl} -->\n<link rel="canonical" href="${canonicalUrl}" />\n\n`;
 };
 
-// Uploads the article cover image to the WordPress media library and returns the media ID.
-
+// Uploads the article cover image to the WordPress media library and returns its hosted URL.
 const uploadCoverImageToWordPress = async (coverImage, connection) => {
   if (!coverImage) return null;
 
   const mediaEndpoint = `${WP_API_BASE}/sites/${connection.siteId}/media/new`;
 
   try {
-    // Base64 data URL — extract binary and upload directly
     if (coverImage.startsWith("data:")) {
+      // Base64 data URL — decode to binary and upload as multipart form
       const match = coverImage.match(/^data:([^;]+);base64,(.+)$/);
       if (!match) return null;
 
@@ -44,7 +45,6 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
       const buffer   = Buffer.from(match[2], "base64");
       const ext      = mimeType.split("/")[1] || "jpg";
 
-      // WordPress.com media API requires multipart/form-data, not raw binary
       const FormData = require("form-data");
       const form     = new FormData();
       form.append("media[]", buffer, { filename: `cover.${ext}`, contentType: mimeType });
@@ -56,13 +56,11 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
         },
         timeout: 30000,
       });
-
-      // Return the public URL — WordPress.com v1.1 featured_image expects a URL, not an integer ID
       return res.data?.media?.[0]?.URL || null;
     }
 
-    // Absolute public URL — ask WordPress to sideload it
     if (coverImage.startsWith("http://") || coverImage.startsWith("https://")) {
+      // Public URL — ask WordPress to sideload it instead of uploading binary
       const res = await axios.post(
         mediaEndpoint,
         { url: coverImage },
@@ -83,9 +81,7 @@ const uploadCoverImageToWordPress = async (coverImage, connection) => {
   }
 };
 
-// Builds the post body for the WordPress REST API.
-// featuredImageUrl: the WordPress-hosted URL returned by uploadCoverImageToWordPress.
-// WordPress.com REST API v1.1 uses featured_image (URL), not featured_media (integer ID).
+// Builds the request body for creating or updating a WordPress post.
 const buildWpPostBody = (article, status, featuredImageUrl = null) => {
   const canonical = buildCanonicalSnippet(article);
   return {
@@ -97,8 +93,9 @@ const buildWpPostBody = (article, status, featuredImageUrl = null) => {
   };
 };
 
-// Generates the WordPress.com OAuth2 authorisation URL.
-// The userId is encoded in the state param so the callback can identify the user.
+// ── AUTH ─────────────────────────────────────────────────────────────
+
+// Generates the WordPress.com OAuth2 URL the user must visit to grant access.
 const initiateWordPressAuth = (userId) => {
   const clientId    = process.env.WORDPRESS_CLIENT_ID;
   const redirectUri = process.env.WORDPRESS_REDIRECT_URI;
@@ -109,6 +106,7 @@ const initiateWordPressAuth = (userId) => {
     );
   }
 
+  // Encode userId in state so the callback knows which user to connect
   const state  = Buffer.from(JSON.stringify({ userId })).toString("base64url");
   const params = new URLSearchParams({
     client_id:     clientId,
@@ -121,8 +119,7 @@ const initiateWordPressAuth = (userId) => {
   return `${WP_OAUTH_BASE}/authorize?${params.toString()}`;
 };
 
-// Handles the OAuth callback from WordPress.com: exchanges the auth code for
-// a token, fetches the user's WordPress profile, and saves the connection.
+// Exchanges the OAuth code for an access token, fetches the WordPress profile, and saves the connection.
 const handleWordPressCallback = async (code, stateParam) => {
   const clientId     = process.env.WORDPRESS_CLIENT_ID;
   const clientSecret = process.env.WORDPRESS_CLIENT_SECRET;
@@ -141,7 +138,13 @@ const handleWordPressCallback = async (code, stateParam) => {
   try {
     const res = await axios.post(
       `${WP_OAUTH_BASE}/token`,
-      new URLSearchParams({ client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, code, grant_type: "authorization_code" }).toString(),
+      new URLSearchParams({
+        client_id:     clientId,
+        client_secret: clientSecret,
+        redirect_uri:  redirectUri,
+        code,
+        grant_type:    "authorization_code",
+      }).toString(),
       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
     tokenData = res.data;
@@ -165,14 +168,15 @@ const handleWordPressCallback = async (code, stateParam) => {
   }
 
   const connectionData = {
-    siteUrl:           wpBlogUrl,
-    siteId:            wpBlogId,
+    siteUrl:          wpBlogUrl,
+    siteId:           wpBlogId,
     accessToken,
-    wpUsername:        wpUser.display_name || wpUser.username,
-    wpEmail:           wpUser.email || null,
-    wpProfilePicture:  wpUser.avatar_URL   || null,
+    wpUsername:       wpUser.display_name || wpUser.username,
+    wpEmail:          wpUser.email        || null,
+    wpProfilePicture: wpUser.avatar_URL   || null,
   };
 
+  // Upsert so re-connecting an existing account updates the token cleanly
   const connection = await prisma.wordPressConnection.upsert({
     where:  { userId },
     update: connectionData,
@@ -187,16 +191,20 @@ const handleWordPressCallback = async (code, stateParam) => {
   return connection;
 };
 
-// Returns the user's WordPress connection details, or null if not connected.
-// The access token is intentionally excluded from the returned fields.
+// ── CONNECTION ────────────────────────────────────────────────────────
+
+// Returns the user's connected WordPress site details (access token excluded).
 const getWordPressConnection = async (userId) => {
   return prisma.wordPressConnection.findUnique({
     where:  { userId },
-    select: { id: true, siteUrl: true, siteId: true, wpUsername: true, wpEmail: true, wpProfilePicture: true, connectedAt: true },
+    select: {
+      id: true, siteUrl: true, siteId: true,
+      wpUsername: true, wpEmail: true, wpProfilePicture: true, connectedAt: true,
+    },
   });
 };
 
-// Removes the user's WordPress connection from the database.
+// Deletes the user's WordPress connection and clears their wordpressAccountId.
 const disconnectWordPress = async (userId) => {
   const conn = await prisma.wordPressConnection.findUnique({ where: { userId } });
   if (!conn) throw ApiError.notFound("No WordPress connection found.");
@@ -207,13 +215,13 @@ const disconnectWordPress = async (userId) => {
   return { disconnected: true };
 };
 
-// Sends the article to WordPress as a published post.
-// Tries to set the cover image as featured image via media upload.
-// If upload fails, falls back to passing the original URL directly (works for public URLs after hosting).
+// ── PUBLISHING ────────────────────────────────────────────────────────
+
+// Sends the article to WordPress as a published post and returns the new post ID and URL.
 const pushArticleToWordPress = async (article, connection) => {
   let featuredImageUrl = await uploadCoverImageToWordPress(article.coverImage, connection);
 
-  // Fallback: if media upload failed but coverImage is already a public URL, use it directly
+  // If upload failed but coverImage is already public, pass the URL directly
   if (!featuredImageUrl && article.coverImage?.startsWith("http")) {
     featuredImageUrl = article.coverImage;
   }
@@ -224,7 +232,10 @@ const pushArticleToWordPress = async (article, connection) => {
       `${WP_API_BASE}/sites/${connection.siteId}/posts/new`,
       buildWpPostBody(article, "publish", featuredImageUrl),
       {
-        headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization:  `Bearer ${connection.accessToken}`,
+          "Content-Type": "application/json",
+        },
         timeout: POST_PUBLISH_TIMEOUT_MS,
       }
     );
@@ -238,8 +249,7 @@ const pushArticleToWordPress = async (article, connection) => {
   return { wpPostId: String(wpRes.ID), wpPostUrl: wpRes.URL };
 };
 
-// Saves the article as a draft on WordPress when publish fails.
-// Returns the WordPress posts dashboard URL so the user can manually publish it.
+// Saves the article as a WordPress draft and returns the WP posts dashboard URL on success, or null on failure.
 const attemptDraftSave = async (article, connection) => {
   try {
     let featuredImageUrl = await uploadCoverImageToWordPress(article.coverImage, connection);
@@ -251,7 +261,10 @@ const attemptDraftSave = async (article, connection) => {
       `${WP_API_BASE}/sites/${connection.siteId}/posts/new`,
       buildWpPostBody(article, "draft", featuredImageUrl),
       {
-        headers: { Authorization: `Bearer ${connection.accessToken}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization:  `Bearer ${connection.accessToken}`,
+          "Content-Type": "application/json",
+        },
         timeout: POST_PUBLISH_TIMEOUT_MS,
       }
     );
@@ -261,9 +274,7 @@ const attemptDraftSave = async (article, connection) => {
   }
 };
 
-// Handles immediate or scheduled WordPress publishing for an article.
-// For immediate publish (scheduledAt = null), calls WordPress right away.
-// For scheduled publish, creates a PENDING job and registers an in-memory timer.
+// Publishes immediately or creates a scheduled job, depending on whether scheduledAt is provided.
 const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
   const article = await prisma.article.findUnique({ where: { id: articleId } });
   if (!article) throw ApiError.notFound("Article not found.");
@@ -276,6 +287,7 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
 
   const jobBase = { articleId, userId, wpConnId: connection.id };
 
+  // ── Immediate publish ──────────────────────────────────────────────
   if (!scheduledAt) {
     if (article.status !== "PUBLISHED") {
       return {
@@ -288,12 +300,24 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
     try {
       const { wpPostId, wpPostUrl } = await pushArticleToWordPress(article, connection);
       await prisma.wordPressPublishJob.create({
-        data: { ...jobBase, scheduledAt: new Date(), status: "PUBLISHED", wpPostId, wpPostUrl, draftUrl: null, errorMsg: null },
+        data: {
+          ...jobBase,
+          scheduledAt: new Date(),
+          status:      "PUBLISHED",
+          wpPostId,
+          wpPostUrl,
+          draftUrl:    null,
+          errorMsg:    null,
+        },
       });
       return { success: true, message: "Article published to WordPress successfully.", wpPostId, wpPostUrl };
     } catch (publishErr) {
-      const draftUrl = await attemptDraftSave(article, connection)
-        || `https://wordpress.com/posts/${connection.siteUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+      // draftUrl is null when the draft save also fails — stored as null so the caller
+      // can distinguish between "draft saved" (failureReason: publish) and "both failed"
+      // (failureReason: both). The fallback dashboard URL is only used for logging.
+      const draftUrl    = await attemptDraftSave(article, connection);
+      const logDraftUrl = draftUrl || `https://wordpress.com/posts/${stripProtocol(connection.siteUrl)}`;
+
       await prisma.wordPressPublishJob.create({
         data: { ...jobBase, scheduledAt: new Date(), status: "FAILED", errorMsg: publishErr.message, draftUrl },
       });
@@ -305,6 +329,7 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
     }
   }
 
+  // ── Scheduled publish ──────────────────────────────────────────────
   const { registerJobTimeout, cancelJobTimeout } = require("../jobs/wordpress.job");
 
   const existingJob = await prisma.wordPressPublishJob.findFirst({
@@ -312,29 +337,44 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
   });
 
   if (existingJob) {
+    // Reschedule existing job to the new time
     await prisma.wordPressPublishJob.update({
       where: { id: existingJob.id },
       data:  { scheduledAt: new Date(scheduledAt), wpConnId: connection.id, status: "PENDING", errorMsg: null, draftUrl: null },
     });
     cancelJobTimeout(existingJob.id);
     registerJobTimeout(existingJob.id, new Date(scheduledAt));
-    return { success: true, message: `WordPress publish rescheduled for ${new Date(scheduledAt).toISOString()}.`, jobId: existingJob.id, scheduledAt: new Date(scheduledAt) };
+    return {
+      success:     true,
+      message:     `WordPress publish rescheduled for ${new Date(scheduledAt).toISOString()}.`,
+      jobId:       existingJob.id,
+      scheduledAt: new Date(scheduledAt),
+    };
   }
 
+  // No existing job — create a new one and register its timer
   const job = await prisma.wordPressPublishJob.create({
     data: { ...jobBase, scheduledAt: new Date(scheduledAt), status: "PENDING" },
   });
   registerJobTimeout(job.id, job.scheduledAt);
 
-  return { success: true, message: `Article scheduled for WordPress publish at ${job.scheduledAt.toISOString()}.`, jobId: job.id, scheduledAt: job.scheduledAt };
+  return {
+    success:     true,
+    message:     `Article scheduled for WordPress publish at ${job.scheduledAt.toISOString()}.`,
+    jobId:       job.id,
+    scheduledAt: job.scheduledAt,
+  };
 };
 
-// Returns the most recent WordPress publish job for a given article.
+// Returns the most recent WordPress publish job record for an article.
 const getWordPressPublishStatus = async (articleId, userId) => {
   return prisma.wordPressPublishJob.findFirst({
     where:   { articleId, userId },
     orderBy: { createdAt: "desc" },
-    select:  { id: true, status: true, wpPostId: true, wpPostUrl: true, draftUrl: true, errorMsg: true, scheduledAt: true, createdAt: true },
+    select:  {
+      id: true, status: true, wpPostId: true, wpPostUrl: true,
+      draftUrl: true, errorMsg: true, scheduledAt: true, createdAt: true,
+    },
   });
 };
 

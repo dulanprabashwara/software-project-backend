@@ -180,8 +180,11 @@ describe("searchArticles — pagination", () => {
   // TC-SS-011
   test("TC-SS-011: returns correct page slice (page 2, limit 5)", async () => {
     const arts = makeArticles(12);
+    // findMany call order: (1) title matches → arts, (2) summary matches → []
     prisma.article.findMany.mockResolvedValueOnce(arts).mockResolvedValueOnce([]);
-    prisma.article.count.mockResolvedValue(12);
+    // count call order: (1) summaryOnlyCount → 0, (2) titleTotal (Promise.all) → 12
+    // countTagOnly uses $queryRaw which already returns [] by default (count = 0)
+    prisma.article.count.mockResolvedValueOnce(0).mockResolvedValueOnce(12);
 
     const { articles, page, limit, totalPages } =
       await searchService.searchArticles({ query: "x", page: 2, limit: 5 });
