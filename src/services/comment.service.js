@@ -2,6 +2,7 @@ const prisma = require("../config/prisma");
 const { createNotification } = require("./notification.service");
 const { updateCommentCount, updateRatingStats } = require("./articleStats.service"); // Removed updateInteractionsTable from here
 
+//get all the comments
 const fetchArticleComments = async (articleId) => {
   return await prisma.comment.findMany({
     where: { articleId },
@@ -14,11 +15,12 @@ const fetchArticleComments = async (articleId) => {
   });
 };
 
+//add a comment
 const addCommentToArticle = async (userId, articleId, content, parentId, appInstance) => {
   let catchError = null;
   let finalData = null;
 
-  // 1. THE DATABASE TRANSACTION
+  //THE DATABASE TRANSACTION
   try {
     finalData = await prisma.$transaction(async (tx) => {
       const article = await tx.article.findUnique({
@@ -33,8 +35,8 @@ const addCommentToArticle = async (userId, articleId, content, parentId, appInst
         include: { author: { select: { id: true, displayName: true } } }
       });
 
-      // Inserted your upsert logic directly into the transaction using 'tx'
-      await tx.articleInteractions.upsert({
+      //add the somment status into interactions table
+       await tx.articleInteractions.upsert({
         where: { userId_articleId: { userId, articleId } },
         update: { commentStatus: true },
         create: { userId, articleId, commentStatus: true }
@@ -69,12 +71,13 @@ const addCommentToArticle = async (userId, articleId, content, parentId, appInst
   return finalData.newComment;
 };
 
+//give a rating
 const submitArticleRating = async (userId, articleId, rating, appInstance) => {
   let catchError = null;
   let finalData = null;
 
-  // 1. THE DATABASE TRANSACTION
-  try {
+  //   THE DATABASE TRANSACTION
+ try {
     finalData = await prisma.$transaction(async (tx) => {
       const article = await tx.article.findUnique({
         where: { id: articleId },
@@ -83,26 +86,22 @@ const submitArticleRating = async (userId, articleId, rating, appInstance) => {
 
       if (!article) throw new Error("Article not found");
 
+      //check if a rating already exists
       const existingRating = await tx.articleRating.findUnique({
-        where: { userId_articleId: { userId, articleId } }
+        where: { userId_articleId: { userId, articleId } },
+        select: { id: true } 
       });
 
-      let userRating;
-      let isNew = false; 
+      const isNew = !existingRating;
 
-      if (existingRating) {
-        userRating = await tx.articleRating.update({
-          where: { userId_articleId: { userId, articleId } },
-          data: { score: rating }
-        });
-      } else { 
-        userRating = await tx.articleRating.create({
-          data: { userId, articleId, score: rating }
-        });
-        isNew = true;
-      }
+      //add the rating to articleRating table
+      const userRating = await tx.articleRating.upsert({
+        where: { userId_articleId: { userId, articleId } },
+        update: { score: rating },
+        create: { userId, articleId, score: rating }
+      });
 
-      // Inserted your upsert logic directly into the transaction using 'tx'
+      // insert into interactions table
       await tx.articleInteractions.upsert({
         where: { userId_articleId: { userId, articleId } },
         update: { rateStatus: true },
@@ -115,14 +114,15 @@ const submitArticleRating = async (userId, articleId, rating, appInstance) => {
     catchError = error;
   }
 
-  // 2. HANDLE ERRORS
+  // HANDLE ERRORS
   if (catchError) {
     console.error("Transaction failed:", catchError.message);
     throw new Error(catchError.message || "Failed to submit rating");
   }
 
-  // 3. EXTERNAL FUNCTIONS (Runs only if there are no errors)
+  // External Functions (Runs only if there are no errors)
   try {
+    //will create the notification if the rating is new 
     if (finalData.isNew) {
       await createNotification(appInstance, {
         type: "RATE",

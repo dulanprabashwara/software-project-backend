@@ -4,7 +4,7 @@ const { authenticate } = require("../middlewares/auth");
 
 const router = Router();
 
-// Following feed (protected)
+// Following feed 
 router.get("/following", authenticate, followController.getFollowingFeed);
 
 module.exports = router;

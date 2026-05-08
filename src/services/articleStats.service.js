@@ -1,16 +1,16 @@
 const prisma = require("../config/prisma");
 
-/**
- * Updates the comment count for an article using Prisma's atomic increment.
- */
+ 
+ //update comment count in article table
 const updateCommentCount = async (articleId) => {
   try {
+    //get the commentcount 
       const commentcount = await prisma.Comment.aggregate({
       where: { articleId: articleId },
       _count: { articleId: true }
     });
 
-
+//set new comment cout
     const updatedArticle = await prisma.article.update({
       where: { id: articleId },
       data: {
@@ -25,13 +25,13 @@ const updateCommentCount = async (articleId) => {
   }
 };
 
-/**
- * Recalculates the total count and average score of an article's ratings,
- * then updates the article record.
+/*
+ Recalculates the total count and average score of an article's ratings,
+ then updates the article record.
  */
 const updateRatingStats = async (articleId) => {
   try {
-    // 1. Calculate the Average and the Count of all scores for this specific article
+    // Calculate the Average and the Count of all scores for this specific article
     const articleAggregations = await prisma.articleRating.aggregate({
       where: { articleId: articleId },
       _avg: { score: true },
@@ -41,8 +41,7 @@ const updateRatingStats = async (articleId) => {
     const newArticleAverage = articleAggregations._avg.score || 0;
     const newArticleCount = articleAggregations._count.score || 0;
 
-    // 2. Update the Article table with the freshly calculated stats
-    // Prisma returns the updated record, which gives us the authorId we need next
+    //Update the Article table with the  calculated stats 
     const updatedArticle = await prisma.article.update({
       where: { id: articleId },
       data: {
@@ -53,7 +52,7 @@ const updateRatingStats = async (articleId) => {
 
     const authorId = updatedArticle.authorId;
 
-    // 3. Calculate the new overall average rating for the author across ALL their articles
+    //Calculate the new overall average rating for the author across ALL their articles
     const userAggregations = await prisma.articleRating.aggregate({
       where: {
         article: {
@@ -83,9 +82,34 @@ const updateRatingStats = async (articleId) => {
     throw error;
   }
 };
+
+const getAuthorArticleStats = async (userId) => {
+  return await prisma.article.findMany({
+    where: {
+      authorId: userId,
+      status: "PUBLISHED",
+    },
+    take:10,
+    select: {
+      id: true,
+      title: true,
+      publishedAt: true,
+      readCount: true,
+      averageRating: true,
+      ratingCount: true,
+      commentCount: true,
+      status: true, // Useful if you want to filter out drafts later
+    },
+    orderBy: {
+      publishedAt: 'desc',
+    },
+    
+  });
+};
  
 
 module.exports = { 
   updateCommentCount, 
   updateRatingStats,
+  getAuthorArticleStats
 };

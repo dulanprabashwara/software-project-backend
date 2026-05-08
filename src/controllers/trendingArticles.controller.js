@@ -1,5 +1,6 @@
 const trendingArticlesService = require("../services/trendingArticles.service");
 
+//only titles, author name
 const getTrendingTitles = async (req, res) => {
   try {
     const trending = await trendingArticlesService.fetchTrendingTitles();
@@ -10,6 +11,7 @@ const getTrendingTitles = async (req, res) => {
   }
 };
 
+//get articles as a whole
 const getTrendingArticles = async (req, res) => {
   try {
     const articles = await trendingArticlesService.fetchTrendingArticles();
