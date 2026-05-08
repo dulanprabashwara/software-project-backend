@@ -251,7 +251,7 @@ const pushArticleToWordPress = async (article, connection) => {
   return { wpPostId: String(wpRes.ID), wpPostUrl: wpRes.URL };
 };
 
-// Saves the article as a WordPress draft when publishing fails, and returns the WP posts dashboard URL.
+// Saves the article as a WordPress draft and returns the WP posts dashboard URL on success, or null on failure.
 const attemptDraftSave = async (article, connection) => {
   try {
     let featuredImageUrl = await uploadCoverImageToWordPress(article.coverImage, connection);
@@ -314,20 +314,18 @@ const scheduleWordPressPublish = async (articleId, userId, scheduledAt) => {
       });
       return { success: true, message: "Article published to WordPress successfully.", wpPostId, wpPostUrl };
     } catch (publishErr) {
-      const draftUrl = await attemptDraftSave(article, connection)
-        || `https://wordpress.com/posts/${stripProtocol(connection.siteUrl)}`;
+      // draftUrl is null when the draft save also fails — stored as null so the caller
+      // can distinguish between "draft saved" (failureReason: publish) and "both failed"
+      // (failureReason: both). The fallback dashboard URL is only used for logging.
+      const draftUrl    = await attemptDraftSave(article, connection);
+      const logDraftUrl = draftUrl || `https://wordpress.com/posts/${stripProtocol(connection.siteUrl)}`;
 
       await prisma.wordPressPublishJob.create({
         data: { ...jobBase, scheduledAt: new Date(), status: "FAILED", errorMsg: publishErr.message, draftUrl },
       });
 
       if (draftUrl) {
-        return {
-          success:       false,
-          failureReason: "publish",
-          message:       "WordPress publish failed. Your article has been saved as a draft on WordPress.",
-          draftUrl,
-        };
+        return { success: false, failureReason: "publish", message: "WordPress publish failed. Your article has been saved as a draft on WordPress.", draftUrl };
       }
       return { success: false, failureReason: "both", message: `WordPress publish failed: ${publishErr.message}`, draftUrl: null };
     }
