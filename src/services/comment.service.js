@@ -85,6 +85,7 @@ const submitArticleRating = async (userId, articleId, rating, appInstance) => {
       });
 
       if (!article) throw new Error("Article not found");
+      if (article.authorId === userId) throw new Error("You cannot rate your own article");
 
       //check if a rating already exists
       const existingRating = await tx.articleRating.findUnique({
