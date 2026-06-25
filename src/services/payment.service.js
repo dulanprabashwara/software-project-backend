@@ -24,11 +24,12 @@ const getOrCreateStripeCustomer = async (user) => {
   return customer.id;
 };
 
-// ─── Create Checkout Session ────────────────
+// Create Checkout Session
 const createCheckoutSession = async (userId, offerId = null) => {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw ApiError.notFound("User not found.");
-  if (user.isPremium) throw ApiError.badRequest("You are already a premium member.");
+  if (user.isPremium)
+    throw ApiError.badRequest("You are already a premium member.");
 
   const customerId = await getOrCreateStripeCustomer(user);
 
@@ -46,7 +47,9 @@ const createCheckoutSession = async (userId, offerId = null) => {
         data: { isPremium: true },
       });
     }
-    throw ApiError.badRequest("You already have an active subscription. Please manage your existing subscription in the Customer Portal.");
+    throw ApiError.badRequest(
+      "You already have an active subscription. Please manage your existing subscription in the Customer Portal.",
+    );
   }
 
   // Build session params
@@ -67,7 +70,7 @@ const createCheckoutSession = async (userId, offerId = null) => {
     },
   };
 
-  // If an offer is selected, apply its coupon
+  // If an offer is selected, apply its coupon to the session params
   if (offerId) {
     const offer = await prisma.offer.findUnique({ where: { id: offerId } });
     if (!offer || !offer.is_active) {
@@ -84,7 +87,7 @@ const createCheckoutSession = async (userId, offerId = null) => {
   return { url: session.url };
 };
 
-// ─── Handle Webhook Events ──────────────────
+//Handle Webhook Events
 const handleWebhookEvent = async (event) => {
   console.log(`🔔 Webhook received: ${event.type}`);
   switch (event.type) {
@@ -95,23 +98,33 @@ const handleWebhookEvent = async (event) => {
       const subscriptionId = session.subscription;
 
       if (!userId || !subscriptionId) {
-        console.warn("Webhook: Missing userId or subscriptionId in session metadata");
+        console.warn(
+          "Webhook: Missing userId or subscriptionId in session metadata",
+        );
         return;
       }
 
       // Fetch subscription details from Stripe
-      const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-      
+      const stripeSubscription =
+        await stripe.subscriptions.retrieve(subscriptionId);
+
       // Debug: log the subscription to see the structure
-      console.log("Stripe subscription object keys:", Object.keys(stripeSubscription));
+      console.log(
+        "Stripe subscription object keys:",
+        Object.keys(stripeSubscription),
+      );
       console.log("current_period_end:", stripeSubscription.current_period_end);
-      console.log("items:", JSON.stringify(stripeSubscription.items?.data?.[0]?.current_period_end));
+      console.log(
+        "items:",
+        JSON.stringify(stripeSubscription.items?.data?.[0]?.current_period_end),
+      );
 
       // Safely parse the period end date — it may be a Unix timestamp or undefined
       let periodEnd = null;
-      const rawPeriodEnd = stripeSubscription.current_period_end 
-        || stripeSubscription.items?.data?.[0]?.current_period_end;
-      
+      const rawPeriodEnd =
+        stripeSubscription.current_period_end ||
+        stripeSubscription.items?.data?.[0]?.current_period_end;
+
       if (rawPeriodEnd && !isNaN(rawPeriodEnd)) {
         periodEnd = new Date(rawPeriodEnd * 1000);
       }
@@ -145,11 +158,13 @@ const handleWebhookEvent = async (event) => {
 
     case "customer.subscription.updated": {
       const subscription = event.data.object;
-      
+
       // If the user clicked cancel in the portal (which defaults to cancel at period end),
       // we forcefully cancel it immediately here so you don't have to wait to test again.
       if (subscription.cancel_at_period_end === true) {
-        console.log(`⚠️ Subscription set to cancel at period end. Forcing immediate cancellation for testing: ${subscription.id}`);
+        console.log(
+          `⚠️ Subscription set to cancel at period end. Forcing immediate cancellation for testing: ${subscription.id}`,
+        );
         await stripe.subscriptions.cancel(subscription.id);
         // This triggers 'customer.subscription.deleted' next, which actually updates the DB.
       }
@@ -191,7 +206,9 @@ const handleWebhookEvent = async (event) => {
             where: { id: user.id },
             data: { isPremium: false },
           });
-          console.log(`❌ User ${user.id} subscription canceled (fallback via customerId)`);
+          console.log(
+            `❌ User ${user.id} subscription canceled (fallback via customerId)`,
+          );
         }
       }
       break;
@@ -206,7 +223,9 @@ const handleWebhookEvent = async (event) => {
           where: { stripeSubscriptionId },
           data: { status: "past_due" },
         });
-        console.log(`⚠️ Payment failed for subscription ${stripeSubscriptionId}`);
+        console.log(
+          `⚠️ Payment failed for subscription ${stripeSubscriptionId}`,
+        );
       }
       break;
     }
