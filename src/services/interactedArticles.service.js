@@ -31,6 +31,35 @@ const fetchUserInteractions = async (userId) => {
   }));
 };
 
+
+
+
+const getInteractedList = async (userId) => {
+ const interactedList = await prisma.articleInteractions.findMany({
+    where: { userId: userId },
+    orderBy: { dateUpdated: 'desc' },
+    include: {
+      article: {
+        select: { 
+          id: true,
+            
+          },
+        },
+      },
+    },
+  );
+
+  // Format the data before sending it back
+  return interactedList.map(record => ({
+    ...record.article,
+    savedAt: record.dateUpdated,
+    commentStatus: record.commentStatus,
+    rateStatus: record.rateStatus
+  }));
+};
+
+
 module.exports = {
   fetchUserInteractions,
+  getInteractedList
 };

@@ -1,9 +1,8 @@
 const readHistoryService = require("../services/readHistory.service");
 
-/**
- * GET /api/readHistory
- * Returns the list of articles the user has read.
- */
+ 
+ // Returns the list of articles the user has read.
+ 
 const getReadHistory = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -22,10 +21,8 @@ const getReadHistory = async (req, res) => {
   }
 };
 
-/**
- * POST /api/readHistory/record
- * Call this when a user opens an article to track it.
- */
+ 
+ //to add an adrticle to users history
 const markAsRead = async (req, res) => {
   try {
     const userId = req.user.id;

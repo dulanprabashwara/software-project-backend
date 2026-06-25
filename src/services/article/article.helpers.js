@@ -6,12 +6,13 @@ const {
   calculateReadingTime,
 } = require("../../utils/helpers");
 const { ARTICLE_STATUS, MAX_TAGS } = require("./article.constants");
-	
+
 /*
  Normalizes and validates article status.
  */
 function normalizeArticleStatus(status) {
-  if (!status) return ARTICLE_STATUS.EDITING;
+  if (!status)
+    return ARTICLE_STATUS.EDITING;
 
   const normalized = String(status).trim().toUpperCase();
 
@@ -62,7 +63,7 @@ function normalizeTags(tags) {
     .map((tag) => String(tag || "").trim())
     .filter(Boolean)
     .filter((tag, index, array) => {
-      return array.findIndex((item) => item.toLowerCase() === tag.toLowerCase()) === index;
+      return array.findIndex((item) => item.toLowerCase() === tag.toLowerCase()) === index; //Removes duplicate tags case-insensitively
     });
 
   if (normalized.length === 0) {
@@ -84,7 +85,7 @@ function parseScheduledAt(value) {
     throw ApiError.badRequest("scheduledAt is required when scheduling an article.");
   }
 
-  const scheduledAt = new Date(value);
+  const scheduledAt = new Date(value); //Converts given value into a JavaScript date
 
   if (Number.isNaN(scheduledAt.getTime())) {
     throw ApiError.badRequest("Invalid scheduledAt value.");
@@ -125,6 +126,7 @@ function buildEditAsNewPayload(article, payload) {
  Resets backup fields.
  */
 function buildClearedEditingBackupData() {
+  //Use after save/discard/publish when backup is no longer needed
   return {
     editingBackupTitle: null,
     editingBackupContent: null,
@@ -195,8 +197,8 @@ async function getOwnedArticleOrThrow(articleId, userId) {
 async function incrementPublishedArticleCount(userId) {
   await prisma.userStats.upsert({
     where: { userId },
-    update: { articleCount: { increment: 1 } },
-    create: { userId, articleCount: 1 },
+    update: { articleCount: { increment: 1 } },//If stats exist, increase count by 1
+    create: { userId, articleCount: 1 },//If stats do not exist, create new stats row
   });
 }
 
