@@ -1,11 +1,15 @@
 const prisma = require("../config/prisma");
 
 // Fetch and format saved articles for a user
+const getUserSavedArticles = async (userId, page = 1, limit = 10) => {
+  //calculate how many records to skip
+  const skip = (page - 1) * limit;
 
-const getUserSavedArticles = async (userId) => {
  const savedRecords = await prisma.savedArticle.findMany({
     where: { userId: userId },
     orderBy: { savedAt: 'desc' },
+    skip,
+    take: limit,
     include: {
       article: {
            include:{

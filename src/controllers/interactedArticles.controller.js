@@ -5,7 +5,11 @@ const interactedArticlesService = require("../services/interactedArticles.servic
 const getMyInteractedArticles = async (req, res) => {
   try {
     const userId = req.user.id;
-    const articles = await interactedArticlesService.fetchUserInteractions(userId);
+    //read page from query, default to 1
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+
+    const articles = await interactedArticlesService.fetchUserInteractions(userId, page, limit);
 
     res.status(200).json({ success: true, data: articles });
   } catch (error) {
