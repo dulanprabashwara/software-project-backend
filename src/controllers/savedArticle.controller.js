@@ -15,9 +15,10 @@ const getMySavedArticles = async (req, res) => {
   }
 };
 
+//get saved raticles IDs 
 const getMySavedList = async (req, res) => {
   try {
-    const userId = req.user.id; // Extract from Auth middleware
+    const userId = req.user.id;  
     
     // Call the Service
     const articles = await savedArticleService.getSavedList(userId);
@@ -30,6 +31,7 @@ const getMySavedList = async (req, res) => {
 };
 
  
+//add an article to saved
 const saveArticle = async (req, res) => {
   try {
     const { articleId } = req.body;
@@ -52,6 +54,7 @@ const saveArticle = async (req, res) => {
   }
 };
 
+//remove an article from saved
 const unsaveArticle = async (req, res) => {
   try {
     const articleId = req.body.id || req.body.articleId;

@@ -4,7 +4,6 @@ const { authenticate, authorize } = require("../middlewares/auth");
 
 const router = Router();
 
-// All admin routes require authentication + ADMIN role
 // @ts-ignore
 router.use(authenticate, authorize("ADMIN"));
 

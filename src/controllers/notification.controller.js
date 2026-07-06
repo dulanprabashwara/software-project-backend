@@ -1,5 +1,7 @@
+//manage notifications
 const notificationService = require("../services/notification.service");
 
+//get available notifications
 exports.getNotifications = async (req, res, next) => {
   try {
     const userId = req.user.id;
@@ -11,6 +13,7 @@ exports.getNotifications = async (req, res, next) => {
   }
 };
 
+//mark notificatons as read
 exports.markAsRead = async (req, res, next) => {
   try {
     const userId = req.user.id;

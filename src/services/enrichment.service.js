@@ -1,3 +1,4 @@
+//@ts-nocheck
 // src/services/enrichment.service.js
 // Phase 3a — AI enrichment: summarizes scraped articles and matches them to keywords.
 // Uses OpenRouter API with multi-key and multi-model fallback to handle rate limits.
@@ -570,7 +571,6 @@ async function runManualEnrichment({
         await buildKeywordCoverageReport(sid);
 
       // Count articles still missing a summary to get the true current failed count.
-      // This replaces the old additive approach which never decremented previously failed articles.
       const currentFailedCount = await prisma.scrapedArticle.count({
         where: { sessionId: sid, summary: null },
       });

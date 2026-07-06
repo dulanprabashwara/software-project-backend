@@ -1,8 +1,9 @@
+//get popular topics (from tags)
 const articleService = require("../services/popularTopics.service");
 
 const getTrendingTopics = async (req, res) => {
   try {
-    const limit = req.query.limit || 10;
+    const limit = req.query.limit || 10; //how many topics
     const topics = await articleService.getPopularTags(limit);
 
     res.status(200).json({

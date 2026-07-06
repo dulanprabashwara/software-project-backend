@@ -1,8 +1,7 @@
 const prisma = require("../config/prisma");
 
-/**
- * Fetch and format saved articles for a user
- */
+// Fetch and format saved articles for a user
+
 const getUserSavedArticles = async (userId) => {
  const savedRecords = await prisma.savedArticle.findMany({
     where: { userId: userId },
@@ -21,9 +20,7 @@ const getUserSavedArticles = async (userId) => {
               username:true
             },
           },
-          _count: {
-            select: { comments: true },
-          },
+           
       }
       },
     },
@@ -36,32 +33,23 @@ const getUserSavedArticles = async (userId) => {
   }));
 };
 
+//get only a list of IDs of saved articles
 const getSavedList = async (userId) => {
  const savedList = await prisma.savedArticle.findMany({
     where: { userId: userId },
     orderBy: { savedAt: 'desc' },
     include: {
       article: {
-        select: { // Use select exclusively here
+        select: {  
           id: true,
-          title: true, // Add any other article fields you need
-          author: {
-            select: {
-              id: true,
-              displayName: true,
-              avatarUrl: true,
-              isPremium: true,
-            },
-          },
-          _count: {
-            select: { comments: true },
-          },
+             
+           
         },
       },
     },
   });
 
-  // Format the data before sending it back
+  // Format the data before sending it  
   return savedList.map(record => ({
     ...record.article,
     savedAt: record.savedAt
@@ -69,10 +57,8 @@ const getSavedList = async (userId) => {
 };
 
 
-/**
- * Save an article (Throws custom error if already saved)
- */
-const createSavedArticle = async (userId, articleId) => {
+ //Save an article  
+ const createSavedArticle = async (userId, articleId) => {
   try {
     const savedArticle = await prisma.savedArticle.create({
       data: { userId, articleId },
@@ -89,9 +75,9 @@ const createSavedArticle = async (userId, articleId) => {
   }
 };
 
-/**
- * Remove a saved article (Throws custom error if already removed)
- */
+
+//Remove a saved article  
+
 const removeSavedArticle = async (userId, articleId) => {
   try {
     await prisma.savedArticle.delete({

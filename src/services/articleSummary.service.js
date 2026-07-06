@@ -1,13 +1,10 @@
 const prisma = require("../config/prisma"); 
 
+//create a summary to show in the preview
 const generateSummary = async (articleId, userId) => {
-  // 1. Find the article to get the content and verify ownership
-  const article = await prisma.article.findUnique({
+   const article = await prisma.article.findUnique({
     where: 
-          { id: articleId,
-           
-
-           },
+          { id: articleId,},
     select: { 
       authorId: true, 
       content: true 
@@ -18,13 +15,13 @@ const generateSummary = async (articleId, userId) => {
     throw new Error("Article not found.");
   }
 
-  // 2. Security Check: Only the author can modify their own article
+  // Only the author can modify their own article
   if (article.authorId !== userId) {
-    throw new Error("Unauthorized: You do not have permission to modify this article.");
+    throw new Error("Unauthorized: You do not have permission to modify the article.");
   }
 
-  // 3. Extract the first 200 words
-  // First, strip out any HTML tags (e.g., <p>, <strong>) so they aren't counted as words
+  // Extract the first 200 words
+  //  strip out any HTML tags (e.g., <p>, <strong>) 
   const cleanContent = article.content.replace(/<[^>]*>?/gm, '');
   
   // Split the cleaned text into an array of words based on spaces/newlines

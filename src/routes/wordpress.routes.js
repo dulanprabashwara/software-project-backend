@@ -1,4 +1,7 @@
-const { Router } = require("express");
+// src/routes/wordpress.routes.js
+// Maps WordPress OAuth and publishing endpoints to their controller functions.
+
+const { Router }    = require("express");
 const { authenticate } = require("../middlewares/auth");
 const {
   initiateAuth,
@@ -17,10 +20,10 @@ router.get("/callback", handleCallback);
 
 router.use(authenticate);
 
-router.get("/auth",                        initiateAuth);
-router.get("/status",                      getStatus);
-router.delete("/disconnect",               disconnect);
-router.post("/publish",                    publishToWordPress);
-router.get("/publish-status/:articleId",   getPublishStatus);
+router.get("/auth",                      initiateAuth);
+router.get("/status",                    getStatus);
+router.delete("/disconnect",             disconnect);
+router.post("/publish",                  publishToWordPress);
+router.get("/publish-status/:articleId", getPublishStatus);
 
 module.exports = router;

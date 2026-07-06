@@ -1,3 +1,4 @@
+//@ts-nocheck
 const { Router } = require("express");
 const admin      = require("../config/firebase");
 const prisma     = require("../config/prisma");
@@ -10,9 +11,8 @@ const {
 const router = Router();
 
 // Decodes the Bearer token when present and attaches req.user.
-// Never returns 401 — anonymous requests pass through with req.user undefined.
-// Used on routes that return personalised data (isSaved, isFollowing) for
-// logged-in users while remaining accessible to anonymous visitors.
+// Never returns 401 — anonymous requests pass through with req.user undefined,
+// allowing routes to serve both authenticated and public visitors.
 const optionalAuth = async (req, _res, next) => {
   try {
     const header = req.headers.authorization || "";
@@ -27,7 +27,7 @@ const optionalAuth = async (req, _res, next) => {
 
     if (user) req.user = user;
   } catch {
-    // Expired or malformed token — treat as anonymous
+    // Expired or malformed token — treat as anonymous.
   }
   next();
 };

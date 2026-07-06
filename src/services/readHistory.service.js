@@ -1,9 +1,9 @@
 const prisma = require("../config/prisma");
 
-/**
- * Fetches all articles read by a specific user.
- * Includes basic article info so the frontend can display titles/images.
- */
+
+ //Fetches all articles read by a specific user.
+ //Includes basic article info  
+ 
 const getUserReadHistory = async (userId) => {
   return await prisma.readHistory.findMany({
     where: { userId },
@@ -13,7 +13,7 @@ const getUserReadHistory = async (userId) => {
           id: true,
           title: true,
           coverImage: true,
-          content: true,
+          summary: true,
           publishedAt: true,
           commentCount:true,
           ratingCount:true,
@@ -24,7 +24,8 @@ const getUserReadHistory = async (userId) => {
             select: { 
                 displayName: true,
                 isPremium: true,
-                username: true
+                username: true,
+                avatarUrl: true,
 
                  
             }
@@ -36,15 +37,13 @@ const getUserReadHistory = async (userId) => {
   });
 };
 
-/**
- * Upserts a read record. If the user reads the article again, 
- * it updates the timestamp and increments the count.
- */
+
+ // Upserts a read record.
+ 
 const recordArticleRead = async (userId, articleId) => {
-  // Use a transaction to ensure both operations succeed or fail together
-  return await prisma.$transaction([
+   return await prisma.$transaction([
     
-    // 1. Upsert the user's personal read history
+    // Upsert the user's personal read history
     prisma.readHistory.upsert({
       where: {
         userId_articleId: { userId, articleId },
@@ -59,7 +58,7 @@ const recordArticleRead = async (userId, articleId) => {
       },
     }),
 
-    // 2. Increment the global read count on the article itself
+    // Increment the read count on the article itself
     prisma.article.update({
       where: {
         id: articleId,

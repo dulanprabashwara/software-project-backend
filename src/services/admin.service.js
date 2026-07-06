@@ -5,28 +5,24 @@ const ApiError = require("../utils/ApiError");
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // ─── Dashboard ──────────────────────────────
-/**
- * Helper function to generate an array of the last 30 days in 'MM/DD' format
- */
+
 const getLast30Days = () => {
   const dates = [];
-  const startDates = []; // Store raw dates for querying
+  const startDates = [];
   for (let i = 29; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
     d.setHours(0, 0, 0, 0);
-    startDates.push(new Date(d)); // Midnight of that day
+    startDates.push(new Date(d));
     dates.push(`${d.getMonth() + 1}/${d.getDate()}`);
   }
   return { labels: dates, rawDates: startDates };
 };
 
 const calculateEngagement = async (days) => {
-  // 1. Figure out the cutoff date (e.g., 7 days ago)
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - days);
 
-  // 2. Query Postgres via Prisma for records since that date
   const records = await prisma.user.findMany({
     where: {
       createdAt: {
@@ -37,39 +33,33 @@ const calculateEngagement = async (days) => {
       createdAt: true,
     },
   });
-  // 3. Create a blank calendar for the last X days
-  // This ensures days with "0" engagement still show up on the graph!
+
   const engagementMap = {};
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date();
     date.setDate(date.getDate() - i);
-    // Format as "Mon DD" (e.g., "Apr 26")
     const dateString = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     engagementMap[dateString] = 0;
   }
 
-  // 4. Fill the calendar with the real database data
   records.forEach((record) => {
     const dateString = record.createdAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     if (engagementMap[dateString] !== undefined) {
-      engagementMap[dateString] += 1; // Increment the count for that day
+      engagementMap[dateString] += 1;
     }
   });
-  // 5. Separate into the exact arrays Chart.js asked for
+
   const labels = Object.keys(engagementMap);
   const values = Object.values(engagementMap);
 
   return {
-    labels: labels, 
-    values: values 
+    labels: labels,
+    values: values
   };
 };
 
-/**
- * Get or create the admin dashboard singleton.
- */
 const getDashboard = async () => {
-  // 1. Get the basic dashboard counts
+
   let dashboard = await prisma.adminDashboard.findUnique({
     where: { id: "singleton" },
   });
@@ -80,34 +70,29 @@ const getDashboard = async () => {
     });
   }
 
-  // 2. Generate the 30-day calendar
   const { labels, rawDates } = getLast30Days();
   const thirtyDaysAgo = rawDates[0];
 
-  // 3. Fetch all activity from the last 30 days
   const [recentComments, recentRatings, recentReads] = await Promise.all([
     prisma.comment.findMany({ where: { createdAt: { gte: thirtyDaysAgo } } }),
     prisma.articleRating.findMany({ where: { createdAt: { gte: thirtyDaysAgo } } }),
     prisma.readHistory.findMany({ where: { lastReadAt: { gte: thirtyDaysAgo } } })
   ]);
 
-  // 4. Initialize empty arrays for our chart data (filled with zeros)
   const chartDatasets = {
     comments: new Array(30).fill(0),
     ratings: new Array(30).fill(0),
     reads: new Array(30).fill(0)
   };
 
-  // 5. Sort the data into the correct days!
   const sortIntoDays = (items, dateField, targetArray) => {
     items.forEach(item => {
       const itemDate = new Date(item[dateField]);
-      itemDate.setHours(0, 0, 0, 0); // Normalize to midnight
-      
-      // Find which day out of the 30 this item belongs to
+      itemDate.setHours(0, 0, 0, 0);
+
       const dayIndex = rawDates.findIndex(d => d.getTime() === itemDate.getTime());
       if (dayIndex !== -1) {
-        targetArray[dayIndex] += 1; // Or += item.readCount for reads!
+        targetArray[dayIndex] += 1;
       }
     });
   };
@@ -116,13 +101,12 @@ const getDashboard = async () => {
   sortIntoDays(recentRatings, 'createdAt', chartDatasets.ratings);
   sortIntoDays(recentReads, 'lastReadAt', chartDatasets.reads);
 
-  // 6. Return the perfectly formatted payload for your React frontend
   return {
     kpis: {
       pendingReports: await prisma.reportedArticle.count({ where: { status: 'PENDING' } }),
       activePremiumUsers: dashboard.premiumUsers,
       totalUsers: dashboard.totalUsers,
-      dailyEngagement: recentComments.length + recentRatings.length // Simple engagement metric
+      dailyEngagement: recentComments.length + recentRatings.length
     },
     chartData: {
       labels: labels,
@@ -150,9 +134,6 @@ const refreshDashboard = async () => {
 
 // ─── User Management ────────────────────────
 
-/**
- * List all users with pagination and filtering.
- */
 const listUsers = async ({ page = 1, limit = 20, role, isPremium, search }) => {
   const skip = (page - 1) * limit;
   const where = {};
@@ -192,9 +173,6 @@ const listUsers = async ({ page = 1, limit = 20, role, isPremium, search }) => {
   return { users, total };
 };
 
-/**
- * Update a user's role (promote/demote).
- */
 const updateUserRole = async (adminId, targetUserId, newRole) => {
   if (adminId === targetUserId) {
     throw ApiError.badRequest("You cannot change your own role.");
@@ -205,7 +183,6 @@ const updateUserRole = async (adminId, targetUserId, newRole) => {
     data: { role: newRole },
   });
 
-  // Audit log
   await prisma.auditLog.create({
     data: {
       adminId,
@@ -221,9 +198,6 @@ const updateUserRole = async (adminId, targetUserId, newRole) => {
 
 // ─── Ban Management ─────────────────────────
 
-/**
- * Ban a user.
- */
 const banUser = async (adminId, targetUserId, reason, bannedUntil = null) => {
   if (adminId === targetUserId) {
     throw ApiError.badRequest("You cannot ban yourself.");
@@ -262,9 +236,6 @@ const banUser = async (adminId, targetUserId, reason, bannedUntil = null) => {
   return ban;
 };
 
-/**
- * Unban a user.
- */
 const unbanUser = async (adminId, targetUserId) => {
   const ban = await prisma.bannedUser.findUnique({
     where: { userId: targetUserId },
@@ -288,9 +259,6 @@ const unbanUser = async (adminId, targetUserId) => {
 
 // ─── Content Moderation ─────────────────────
 
-/**
- * Get reported articles.
- */
 const getReports = async ({ page = 1, limit = 20, status }) => {
   const skip = (page - 1) * limit;
   const where = {};
@@ -317,9 +285,6 @@ const getReports = async ({ page = 1, limit = 20, status }) => {
   return { reports, total };
 };
 
-/**
- * Report an article.
- */
 const reportArticle = async (reporterId, articleId, reason, details = null) => {
   const article = await prisma.article.findUnique({ where: { id: articleId } });
   if (!article) throw ApiError.notFound("Article not found.");
@@ -336,9 +301,6 @@ const reportArticle = async (reporterId, articleId, reason, details = null) => {
   return report;
 };
 
-/**
- * Resolve a report.
- */
 const resolveReport = async (adminId, reportId, newStatus) => {
   const report = await prisma.reportedArticle.update({
     where: { id: reportId },
@@ -347,12 +309,11 @@ const resolveReport = async (adminId, reportId, newStatus) => {
       resolvedAt: new Date(),
     },
   });
-  
-  // 2. IF the admin clicked Delete or Ban (RESOLVED), take the article offline!
+
   if (newStatus === "RESOLVED" && report.articleId) {
     await prisma.article.update({
       where: { id: report.articleId },
-      data: { status: "DRAFT" }, // Reverts it to draft so nobody can see it
+      data: { status: "DRAFT" },
     });
   }
 
@@ -371,9 +332,6 @@ const resolveReport = async (adminId, reportId, newStatus) => {
 
 // ─── Audit Logs ─────────────────────────────
 
-/**
- * Get audit logs with pagination.
- */
 const getAuditLogs = async ({ page = 1, limit = 50, adminId, action }) => {
   const skip = (page - 1) * limit;
   const where = {};
@@ -400,9 +358,6 @@ const getAuditLogs = async ({ page = 1, limit = 50, adminId, action }) => {
 
 // ─── AI Config ──────────────────────────────
 
-/**
- * Get AI configuration.
- */
 const getAiConfig = async () => {
   let config = await prisma.aiConfig.findUnique({ where: { id: "singleton" } });
 
@@ -413,9 +368,6 @@ const getAiConfig = async () => {
   return config;
 };
 
-/**
- * Update AI configuration.
- */
 const updateAiConfig = async (adminId, data) => {
   const { modelName, apiUsageLimit, isEnabled } = data;
 
@@ -444,9 +396,6 @@ const updateAiConfig = async (adminId, data) => {
 
 // ─── Trending ───────────────────────────────
 
-/**
- * Get trending topics.
- */
 const getTrendingTopics = async (limit = 20) => {
   return prisma.trendingTopic.findMany({
     orderBy: { hitCount: "desc" },
@@ -454,9 +403,6 @@ const getTrendingTopics = async (limit = 20) => {
   });
 };
 
-/**
- * Increment hit count for a topic (called when articles are viewed by tag).
- */
 const incrementTopicHit = async (topicName) => {
   await prisma.trendingTopic.upsert({
     where: { name: topicName.toLowerCase() },
@@ -465,25 +411,21 @@ const incrementTopicHit = async (topicName) => {
   });
 };
 
-// Get all offers
 const getAllOffers = async () => {
   return await prisma.offer.findMany({
     orderBy: { createdAt: 'desc' }
   });
 };
 
-// Create a new offer
 const createOffer = async (data, adminId) => {
   const { name, discount_percent, stripe_coupon_id, is_active } = data;
 
   if (!stripe_coupon_id) {
     throw new Error("Stripe Coupon ID is required to create an offer.");
   }
-  // Ask Stripe if the coupon actually exists
   try {
     await stripe.coupons.retrieve(stripe_coupon_id);
   } catch (error) {
-    // If Stripe throws an error (e.g., 404 Not Found), stop the whole process!
     throw new Error(`Invalid Stripe Coupon: '${stripe_coupon_id}' does not exist in your Stripe account.`);
   }
 
@@ -496,15 +438,19 @@ const createOffer = async (data, adminId) => {
     }
   });
 
-  // 4. Log the action
   await prisma.auditLog.create({
-    data: { action: "CREATE_OFFER", targetId: offer.id, targetType: "Offer", adminId, details: `Created automated Stripe offer: ${offer.name}` }
+    data: {
+      action: "CREATE_OFFER",
+      targetId: offer.id,
+      targetType: "Offer",
+      adminId,
+      details: `Created automated Stripe offer: ${offer.name}`
+    }
   });
-  
+
   return offer;
 };
 
-//updateOffer
 const updateOffer = async (id, data, adminId) => {
   const { name, discount_percent, stripe_coupon_id, is_active } = data;
 
@@ -514,7 +460,7 @@ const updateOffer = async (id, data, adminId) => {
       name: data.name,
       discount_percent: data.discount_percent,
       stripe_coupon_id: stripe_coupon_id,
-      is_active:is_active,
+      is_active: is_active,
     }
   });
 
@@ -524,7 +470,6 @@ const updateOffer = async (id, data, adminId) => {
   return offer;
 };
 
-//scraping sources
 const getScrapingSources = async () => {
   return await prisma.scrapingSource.findMany({
     orderBy: { createdAt: 'desc' }
@@ -537,7 +482,7 @@ const createScrapingSource = async (data, adminId) => {
       name: data.name,
       url: data.url,
       category: data.category,
-      scrapeWindow: data.scrapeWindow, 
+      scrapeWindow: data.scrapeWindow,
       minWordCount: parseInt(data.minWordCount) || 300,
       excludedKeywords: data.excludedKeywords || [],
       status: data.status || "active"
@@ -572,7 +517,7 @@ const updateScrapingSource = async (id, data, adminId) => {
 
 const deleteScrapingSource = async (id, adminId) => {
   const sourceToDelete = await prisma.scrapingSource.findUnique({ where: { id: id } });
-  
+
   await prisma.scrapingSource.delete({ where: { id: id } });
 
   if (sourceToDelete) {
