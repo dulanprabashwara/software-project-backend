@@ -27,7 +27,11 @@ const {
 async function getArticleById(articleId, userId) {
   const article = await prisma.article.findUnique({
     where: { id: articleId },
-    include: ARTICLE_AUTHOR_INCLUDE,
+    include: {
+      ...ARTICLE_AUTHOR_INCLUDE,
+      wpPublishJobs: true,
+      liPublishJobs: true,
+    },
   });
 
   if (!article) {
