@@ -3,8 +3,7 @@ const admin = require("../config/firebase");
 const ApiError = require("../utils/ApiError");
 
 /**
- * @function registerUser
- * @description
+
  * Creates a new user record in Postgres mapped to their newly generated Firebase identity.
  */
 const registerUser = async ({
@@ -51,17 +50,10 @@ const registerUser = async ({
 };
 
 /**
- * @function syncUser
- * @description
- * Synchronizes a Firebase login event with the local Postgres database.
- * WHY: If a user logs in via a social provider (Google, GitHub) for the very first time,
- * they won't exist in Postgres. This function cleanly handles the "Upsert" logic by fetching
- * their fresh Firebase profile and cleanly auto-generating a Postgres record for them dynamically.
- *
- * @param {string} firebaseUid - The cryptographically verified Firebase UID.
- * @returns {Promise<Object>} The deeply nested Prisma User object including stats, counts, and ban data.
+  sign up using google,facebook
  */
 const syncUser = async (firebaseUid) => {
+  //check if user is exist in database
   let user = await prisma.user.findUnique({
     where: { firebaseUid },
     include: {
@@ -80,7 +72,7 @@ const syncUser = async (firebaseUid) => {
   if (!user) {
     // Fetch user info from Firebase to auto-create
     const firebaseUser = await admin.auth().getUser(firebaseUid);
-
+    //create user in database
     user = await prisma.user.create({
       data: {
         firebaseUid,

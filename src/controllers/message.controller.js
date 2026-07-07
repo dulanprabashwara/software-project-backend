@@ -7,6 +7,8 @@ const { parsePagination } = require("../utils/helpers");
  * GET /api/v1/messages/conversations
  * Get list of conversations.
  */
+
+//get conversation list for the sidebar
 const getConversations = asyncHandler(async (req, res) => {
   const conversations = await messageService.getConversationList(req.user.id);
 

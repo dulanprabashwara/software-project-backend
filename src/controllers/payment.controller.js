@@ -5,14 +5,17 @@ const paymentService = require("../services/payment.service");
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ─── Create Checkout Session ────────────────
+//  Create Checkout Session
 const createCheckoutSession = asyncHandler(async (req, res) => {
   const { offerId } = req.body;
-  const result = await paymentService.createCheckoutSession(req.user.id, offerId);
+  const result = await paymentService.createCheckoutSession(
+    req.user.id,
+    offerId,
+  );
   sendSuccess(res, { data: result });
 });
 
-// ─── Stripe Webhook ─────────────────────────
+//get the  Stripe Webhook sent from the strip in the headers after paying
 const handleWebhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
 
@@ -27,7 +30,7 @@ const handleWebhook = async (req, res) => {
     event = stripe.webhooks.constructEvent(
       req.body,
       sig,
-      process.env.STRIPE_WEBHOOK_SECRET
+      process.env.STRIPE_WEBHOOK_SECRET,
     );
     console.log("✅ Webhook verified. Event type:", event.type);
   } catch (err) {
@@ -36,6 +39,7 @@ const handleWebhook = async (req, res) => {
   }
 
   try {
+    //send the webhook event to the service to handle it
     await paymentService.handleWebhookEvent(event);
     res.json({ received: true });
   } catch (err) {
