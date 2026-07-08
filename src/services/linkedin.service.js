@@ -11,7 +11,7 @@ const POST_PUBLISH_TIMEOUT_MS = 15000;
 /**
  * Generates the LinkedIn OAuth 2.0 authorization URL.
  */
-const initiateLinkedInAuth = (userId) => {
+const initiateLinkedInAuth = (userId, returnTo = "/profile/edit") => {
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
 
@@ -21,8 +21,8 @@ const initiateLinkedInAuth = (userId) => {
     );
   }
 
-  // The state parameter helps prevent CSRF attacks and carries our internal userId
-  const state = Buffer.from(JSON.stringify({ userId })).toString("base64url");
+  // The state parameter helps prevent CSRF attacks and carries our internal userId and returnTo
+  const state = Buffer.from(JSON.stringify({ userId, returnTo })).toString("base64url");
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -113,7 +113,13 @@ const handleLinkedInCallback = async (code, stateParam) => {
     data: { linkedInAccountId: liMemberId },
   });
 
-  return connection;
+  let returnTo = "/profile/edit";
+  try {
+    const decoded = JSON.parse(Buffer.from(stateParam, "base64url").toString("utf8"));
+    if (decoded.returnTo) returnTo = decoded.returnTo;
+  } catch (e) {}
+
+  return { connection, returnTo };
 };
 
 /**
