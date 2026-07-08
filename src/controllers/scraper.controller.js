@@ -20,12 +20,25 @@ const DEFAULT_LOG_LIMIT = 200;
 
 // Starts a scraping session in the background and immediately returns 202.
 const triggerScraping = asyncHandler(async (req, res) => {
+  // Start scraping in background
   runScrapingSession().catch((err) =>
     console.error("[Controller] Manual trigger error:", err.message)
   );
+
+  // Get the most recent session (the one we just started)
+  const recentSession = await prisma.scrapingSession.findFirst({
+    orderBy: { startedAt: "desc" },
+    select: { id: true, status: true },
+  });
+
+  // Use the authenticated user's email (the admin who triggered the action)
+  const userEmail = req.user?.email || null;
+
   res.status(HTTP_STATUS_ACCEPTED).json({
     success: true,
-    message: "Scraping session started. Check GET /api/scraper/sessions for progress.",
+    sessionId: recentSession?.id || null,
+    status: recentSession?.status || "running",
+    userEmail,
   });
 });
 
@@ -40,12 +53,20 @@ const triggerEnrichment = asyncHandler(async (req, res) => {
     console.error("[Controller] Manual enrichment error:", err.message)
   );
 
+  // Get the most recent session for enrichment status tracking
+  const recentSession = await prisma.scrapingSession.findFirst({
+    orderBy: { startedAt: "desc" },
+    select: { id: true, status: true, reportSentAt: true },
+  });
+
+  // Use the authenticated user's email (the admin who triggered the action)
+  const userEmail = req.user?.email || null;
+
   res.status(HTTP_STATUS_ACCEPTED).json({
     success: true,
-    message: sessionId
-      ? `Enrichment started for session ${sessionId}.`
-      : "Enrichment started for all unenriched articles.",
-    note: "This runs in the background. Check Prisma Studio or GET /api/scraper/sessions for results.",
+    sessionId: sessionId || recentSession?.id || null,
+    status: "running",
+    userEmail,
   });
 });
 
