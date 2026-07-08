@@ -2,6 +2,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess, sendPaginated } = require("../utils/response");
 const userService = require("../services/user.service");
 const { parsePagination } = require("../utils/helpers");
+const prisma = require("../config/prisma");
 
 /**
  * GET /api/v1/users/:identifier
@@ -51,6 +52,40 @@ const updateProfile = asyncHandler(async (req, res) => {
 });
 
 /**
+ * GET /api/v1/users/email?userId=xxx
+ * Get user's email address by userId (query parameter).
+ */
+const getUserEmail = asyncHandler(async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({
+      success: false,
+      message: "userId query parameter is required.",
+    });
+  }
+
+  const userIdStr = Array.isArray(userId) ? userId[0] : String(userId);
+
+  const user = await prisma.user.findUnique({
+    where: { id: userIdStr },
+    select: { email: true },
+  });
+
+  if (!user) {
+    return res.status(404).json({
+      success: false,
+      message: "User not found.",
+    });
+  }
+
+  sendSuccess(res, {
+    message: "User email retrieved.",
+    data: { email: user.email },
+  });
+});
+
+/**
  * GET /api/v1/users/search?q=query
  * Search users by username or display name.
  */
@@ -88,4 +123,11 @@ const deleteAccount = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { getProfile, getMe, updateProfile, searchUsers, deleteAccount };
+module.exports = {
+  getProfile,
+  getMe,
+  updateProfile,
+  getUserEmail,
+  searchUsers,
+  deleteAccount,
+};
