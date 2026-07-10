@@ -10,6 +10,8 @@ const ENRICHMENT_MODELS = [
   "google/gemma-4-31b-it:free",
   "nousresearch/hermes-3-llama-3.1-405b:free",
   "meta-llama/llama-3.3-70b-instruct:free",
+  "liquid/lfm-2.5-1.2b-instruct:free",
+  "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
 ];
 
 // Supports up to 3 keys: OPENROUTER_API_KEY, OPENROUTER_API_KEY_2, OPENROUTER_API_KEY_3.

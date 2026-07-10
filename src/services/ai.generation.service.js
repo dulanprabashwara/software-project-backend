@@ -43,8 +43,11 @@ const SUMMARY_EXCERPT_LENGTH = 200;
 // AI model fallback chain (tried in order; first success wins)
 const MODELS = [
   "openai/gpt-oss-120b:free",
+  "openai/gpt-oss-20b:free",
   "google/gemma-4-31b-it:free",
-  "arcee-ai/trinity-large-preview:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "qwen/qwen3-next-80b-a3b-instruct:free",
+  "tencent/hy3:free",
   "nousresearch/hermes-3-llama-3.1-405b:free",
   "meta-llama/llama-3.3-70b-instruct:free",
 ];
