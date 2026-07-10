@@ -292,4 +292,4 @@ async function sendErrorAlert(report, criticalIssues) {
   console.log(`[Email] Critical alert sent to: ${adminEmails.join(", ")}`);
 }
 
-module.exports = { sendCompletionNotification, sendErrorAlert };
+module.exports = { sendCompletionNotification, sendErrorAlert, getAdminEmails };

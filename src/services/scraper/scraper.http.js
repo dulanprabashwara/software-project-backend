@@ -21,9 +21,9 @@ const {
 
 const { sleep, isRedirectAllowedDomain } = require("./scraper.utils");
 
-// ════════════════════════════════════════════════════════════════════════════
+
 // PHASE 2 — ARTICLE SCRAPING & CONTENT VALIDATION
-// ════════════════════════════════════════════════════════════════════════════
+
 
 // Waits a random 1.5–2.5 second delay to avoid overwhelming target servers.
 async function applyRateLimitDelay() {
