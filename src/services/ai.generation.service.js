@@ -42,12 +42,14 @@ const SUMMARY_EXCERPT_LENGTH = 200;
 
 // AI model fallback chain (tried in order; first success wins)
 const MODELS = [
+  "poolside/laguna-xs-2.1:free",
+   "tencent/hy3:free",
   "openai/gpt-oss-120b:free",
-  "openai/gpt-oss-20b:free",
   "google/gemma-4-31b-it:free",
   "google/gemma-4-26b-a4b-it:free",
   "qwen/qwen3-next-80b-a3b-instruct:free",
-  "tencent/hy3:free",
+ 
+  "openai/gpt-oss-20b:free",
   "nousresearch/hermes-3-llama-3.1-405b:free",
   "meta-llama/llama-3.3-70b-instruct:free",
 ];
@@ -60,10 +62,27 @@ const LENGTH_CONFIG = {
 
 // ── AI client ──────────────────────────────────────────────────────────────────
 
-const client = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey:  process.env.OPENROUTER_API_KEY,
-});
+// Supports up to 3 keys: OPENROUTER_API_KEY, OPENROUTER_API_KEY_2, OPENROUTER_API_KEY_3.
+// Each key has its own independent rate limit quota.
+function buildClients() {
+  const keys = [
+    process.env.OPENROUTER_API_KEY,
+    process.env.OPENROUTER_API_KEY_2,
+    process.env.OPENROUTER_API_KEY_3,
+  ].filter(Boolean);
+
+  if (!keys.length) {
+    console.warn("[AI] ⚠️  No OPENROUTER_API_KEY found in environment.");
+    return [];
+  }
+
+  return keys.map((apiKey) =>
+    new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey })
+  );
+}
+
+// Module-level singleton — built once when the module loads
+const CLIENTS = buildClients();
 
 // ── Session cache ──────────────────────────────────────────────────────────────
 
@@ -79,17 +98,27 @@ setInterval(() => {
 // ── AI helpers ─────────────────────────────────────────────────────────────────
 
 async function callAI(messages) {
+  let lastError;
+
   for (const model of MODELS) {
-    try {
-      const completion = await client.chat.completions.create({ model, messages });
-      const content    = completion.choices[0].message.content;
-      const usage      = completion.usage || { prompt_tokens: 0, completion_tokens: 0 };
-      return { content, usage };
-    } catch (err) {
-      console.warn(`[AI] Model ${model} failed: ${err.message}`);
+    for (let ki = 0; ki < CLIENTS.length; ki++) {
+      const client = CLIENTS[ki];
+      const keyLabel = ki === 0 ? "primary" : `key-${ki + 1}`;
+
+      try {
+        const completion = await client.chat.completions.create({ model, messages });
+        const content = completion.choices[0]?.message?.content || "";
+        const usage = completion.usage || { prompt_tokens: 0, completion_tokens: 0 };
+
+        console.log(`[AI] ✅ Success on ${keyLabel}/${model}`);
+        return { content, usage };
+      } catch (err) {
+        lastError = err;
+        console.warn(`[AI] ${keyLabel}/${model} failed: ${err.message}`);
+      }
     }
   }
-  throw new Error("All AI models failed. Check your OPENROUTER_API_KEY.");
+  throw new Error(`All AI models failed. Last error: ${lastError?.message || "Unknown error"}`);
 }
 
 function parseAIJson(raw) {
