@@ -22,19 +22,24 @@ exports.checkContent = async (req, res) => {
   const highlights = [];
 
   // In a real API, you'd receive exact string matches or character offsets.
-  // We'll return some common letters/words just so the frontend highlighting can be tested visually.
+  // For this mock, we will extract actual phrases from the submitted content so you can see the highlights!
+  const plainText = htmlContent.replace(/<[^>]+>/g, ' ');
+  const words = plainText.split(/\s+/).filter(w => w.trim().length > 0);
+  const phrases = [];
+  for (let i = 0; i < words.length - 5; i += 6) {
+    phrases.push(words.slice(i, i + 4).join(' ')); // Grab 4-word phrases
+  }
+
   if (type === "ai" || type === "both") {
     aiScore = Math.floor(Math.random() * 40) + 20; // 20-60%
-    highlights.push({ text: "Technology", type: "AI" });
-    highlights.push({ text: "design", type: "AI" });
-    highlights.push({ text: "article", type: "AI" });
+    if (phrases[0]) highlights.push({ text: phrases[0], type: "AI" });
+    if (phrases[2]) highlights.push({ text: phrases[2], type: "AI" });
   }
 
   if (type === "plagiarism" || type === "both") {
     plagiarismScore = Math.floor(Math.random() * 30) + 5; // 5-35%
-    highlights.push({ text: "publish", type: "PLAGIARISM" });
-    highlights.push({ text: "blog", type: "PLAGIARISM" });
-    highlights.push({ text: "test", type: "PLAGIARISM" });
+    if (phrases[1]) highlights.push({ text: phrases[1], type: "PLAGIARISM" });
+    if (phrases[3]) highlights.push({ text: phrases[3], type: "PLAGIARISM" });
   }
 
   res.status(200).json({
