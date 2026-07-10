@@ -5,6 +5,7 @@ const ApiError = require("../utils/ApiError");
  * Get user profile by ID or username.
  */
 const getUserProfile = async (identifier, currentUserId = null) => {
+  //check if the identifier is id or username
   const where =
     identifier.startsWith("clz") || identifier.length > 20
       ? { id: identifier }
@@ -35,7 +36,7 @@ const getUserProfile = async (identifier, currentUserId = null) => {
           receivedMessages: true,
         },
       },
-      // Eagerly check if current user follows this profile (saves 1 DB roundtrip)
+      //  check if current user follows this profile
       ...(currentUserId && {
         followers: {
           where: { followerId: currentUserId },
@@ -52,7 +53,7 @@ const getUserProfile = async (identifier, currentUserId = null) => {
     // If the array has an item, the current user is following this profile
     isFollowing = user.followers && user.followers.length > 0;
   }
-  
+
   // Calculate unread message count for profile display
   const unreadMessageCount = await prisma.message.count({
     where: {
@@ -61,7 +62,7 @@ const getUserProfile = async (identifier, currentUserId = null) => {
     },
   });
 
-  // Remove the eager loaded array from the response object
+  // Remove the array from the response object
   delete user.followers;
   delete user._count.sentMessages;
   delete user._count.receivedMessages;

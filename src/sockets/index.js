@@ -11,14 +11,15 @@ const prisma = require("../config/prisma");
  * - Private messaging
  * - Typing indicators
  * - Notification broadcasting
- *
- * @param {import("http").Server} httpServer
- * @returns {Server}
  */
 const initializeSocket = (httpServer) => {
   const io = new Server(httpServer, {
     cors: {
-      origin: [process.env.CLIENT_URL, "http://localhost:3000", "http://127.0.0.1:3000"].filter(Boolean),
+      origin: [
+        process.env.CLIENT_URL,
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+      ].filter(Boolean),
       methods: ["GET", "POST"],
       credentials: true,
     },
@@ -82,7 +83,7 @@ const initializeSocket = (httpServer) => {
     }
 
     if (currentCount === 0) {
-      // First connection, mark user as online
+      // First connection, mark user as online in the database
       await prisma.user.update({
         where: { id: userId },
         data: { isOnline: true, lastSeen: new Date() },
@@ -159,7 +160,7 @@ const initializeSocket = (httpServer) => {
           },
         });
 
-        // Send to receiver in real time
+        // Send message to receiver in real time
         io.to(`user:${receiverId}`).emit("message:receive", message);
 
         // Acknowledge to sender
@@ -257,7 +258,7 @@ const initializeSocket = (httpServer) => {
     // ── Disconnect ──
     socket.on("disconnect", async () => {
       console.log(`💤 User disconnected: ${socket.data.userData.username}`);
-      
+
       const userId = socket.data.userId;
       let count = userConnections.get(userId) || 0;
       count = Math.max(0, count - 1);

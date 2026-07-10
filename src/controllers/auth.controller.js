@@ -5,13 +5,8 @@ const admin = require("../config/firebase");
 const ApiError = require("../utils/ApiError");
 
 /**
- * @function getUidFromToken
- * @description
+ 
  * Extracts and verifies the Firebase UID from an incoming Authorization header.
- *
- * @param {Object} req - Express request object containing `headers.authorization`.
- * @returns {Promise<string>} The verified Firebase UID.
- * @throws {ApiError} 401 if token is missing, invalid, or expired.
  */
 const getUidFromToken = async (req) => {
   const authHeader = req.headers.authorization;
@@ -29,14 +24,9 @@ const getUidFromToken = async (req) => {
 };
 
 /**
- * @function register
- * @description
+ 
  * POST /api/v1/auth/register
  * Handles manual user registration via Email/Password.
- *
- * @param {Object} req - Express request object containing registration details (email, username).
- * @param {Object} res - Express response object.
- * @returns {Promise<void>} Sends HTTP 201 with the created Postgres User object.
  */
 const register = asyncHandler(async (req, res) => {
   const { email, username, displayName, avatarUrl } = req.body;
@@ -64,14 +54,10 @@ const register = asyncHandler(async (req, res) => {
 });
 
 /**
- * @function sync
- * @description
+
  * POST /api/v1/auth/sync
+for sign up and log in via google, facebook
  * Syncs an authenticated Firebase session with the local Postgres database.
- *
- * @param {Object} req - Express request object. Token is extracted via headers.
- * @param {Object} res - Express response object.
- * @returns {Promise<void>} Sends HTTP 200 with the synced Postgres User object.
  */
 const sync = asyncHandler(async (req, res) => {
   // Securely get UID from verified token
@@ -95,13 +81,9 @@ const sync = asyncHandler(async (req, res) => {
 });
 
 /**
- * @function getMe
- * @description
+
  * GET /api/v1/auth/me
- * Retrieves the currently authenticated user's profile.
- * @param {Object} req - Express request object. Expects `req.user` attached by `authenticate` middleware.
- * @param {Object} res - Express response object.
- * @returns {Promise<void>} Sends HTTP 200 with the `req.user` object.
+ * Retrieves the currently authenticated user's profile and send it to the frontend 
  */
 const getMe = asyncHandler(async (req, res) => {
   sendSuccess(res, {
