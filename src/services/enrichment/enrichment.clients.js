@@ -6,6 +6,8 @@ const { OpenAI } = require("openai");
 
 // Free models tried in order — first available wins
 const ENRICHMENT_MODELS = [
+  "tencent/hy3:free",
+  "openai/gpt-oss-20b:free",
   "openai/gpt-oss-120b:free",
   "google/gemma-4-31b-it:free",
   "nousresearch/hermes-3-llama-3.1-405b:free",
