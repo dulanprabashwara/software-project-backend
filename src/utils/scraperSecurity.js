@@ -9,13 +9,13 @@ const net = require("net");
 // ── Security Constants ─────────────────────────────────────────────────────────
 
 // Maximum allowed response size — large enough for any real article page
-const MAX_RESPONSE_BYTES   = 5 * 1024 * 1024;  // 5MB
+const MAX_RESPONSE_BYTES   = 5 * 1024 * 1024; 
 
 // Maximum allowed request body size — scraper sends no body, this is a safety cap
-const MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024; // 1MB
+const MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024;
 
 // Request timeout in milliseconds — prevents slow-loris style attacks
-const REQUEST_TIMEOUT_MS = 15000; // 15 seconds
+const REQUEST_TIMEOUT_MS = 15000; 
 
 // Hard cap on stored title length
 const MAX_TITLE_LENGTH = 500;
@@ -276,6 +276,6 @@ module.exports = {
   sanitizeContent,
   sanitizeTitle,
   buildSecureAxiosConfig,
-  isPrivateIp,         // exported for tests
+  isPrivateIp,       
   MAX_RESPONSE_BYTES,
 };

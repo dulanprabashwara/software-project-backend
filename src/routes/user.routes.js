@@ -18,6 +18,10 @@ router.put("/profile", authenticate, userController.updateProfile); // Keep old 
 // Delete own account (protected)
 router.delete("/me", authenticate, userController.deleteAccount);
 
+// Get user email by userId (protected - email is sensitive)
+// Using query parameter to avoid route conflict with /:identifier
+router.get("/email", authenticate, userController.getUserEmail);
+
 // User profile by ID or username (public, but optionalAuth so isFollowing works)
 router.get("/:identifier", optionalAuth, userController.getProfile);
 
