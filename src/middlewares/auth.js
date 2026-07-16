@@ -49,6 +49,43 @@ const authenticate = async (req, res, next) => {
       }
     }
 
+    if (user.role === "ADMIN") {
+      const userAgent = req.headers['user-agent'] || 'Unknown Device';
+      let deviceName = "Desktop Browser";
+      if (userAgent.includes("Windows")) deviceName = "Windows PC";
+      else if (userAgent.includes("Mac")) deviceName = "Mac OS Device";
+      else if (userAgent.includes("Android")) deviceName = "Android Mobile";
+      else if (userAgent.includes("iPhone") || userAgent.includes("iPad")) deviceName = "Apple iOS Device";
+      
+      // Look for the most recent session for this specific device
+      const deviceSession = await prisma.userSession.findFirst({
+        where: { userId: user.id, deviceInfo: deviceName },
+        orderBy: { lastActive: 'desc' }
+      });
+
+      if (deviceSession && deviceSession.status === "REVOKED") {
+        // Firebase Tokens last an hour. We check if they logged in BEFORE the revoke happened.
+        // auth_time is in seconds, JS needs milliseconds
+        const tokenLoginTime = decodedToken.auth_time * 1000; 
+        
+        console.log(`[BOUNCER] Admin tried to access route on ${deviceName}. Status: REVOKED`);
+
+        if (tokenLoginTime <= deviceSession.lastActive.getTime()) {
+          console.log("[BOUNCER] Access Denied! Kicking user out to login screen.");
+          return res.status(401).json({
+            success: false,
+            message: "Your session was remotely revoked. Please log in again."
+          });
+        } else {
+          // If they successfully logged back in via Firebase, reactivate the session
+          await prisma.userSession.update({
+            where: { id: deviceSession.id },
+            data: { status: "ACTIVE" }
+          });
+        }
+      }
+    }
+
     req.user = user;
     next();
   } catch (error) {
