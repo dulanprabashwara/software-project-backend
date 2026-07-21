@@ -7,9 +7,8 @@ const {
   CRITICAL_FAILED_CATEGORIES_THRESHOLD,
 } = require("./scraper.constants");
 
-// ════════════════════════════════════════════════════════════════════════════
 // HELPERS FOR THE MAIN ORCHESTRATOR
-// ════════════════════════════════════════════════════════════════════════════
+
 
 // Checks session results for critical issues (very low success rate, multiple empty categories).
 function checkCriticalErrors(report, counters) {

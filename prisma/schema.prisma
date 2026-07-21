@@ -52,7 +52,7 @@ model User {
   stats                  UserStats?
   wordpressConnection    WordPressConnection?
   wpPublishJobs          WordPressPublishJob[]
-
+  sessions               UserSession[]
 
   @@map("users")
 }
@@ -218,6 +218,8 @@ model Message {
   @@index([senderId])
   @@index([receiverId])
   @@index([sentAt])
+  @@index([senderId, receiverId, sentAt])
+  @@index([receiverId, isRead])
   @@map("messages")
 }
 
@@ -619,4 +621,18 @@ model LinkedInPublishJob {
   @@index([status])
   @@index([scheduledAt])
   @@map("linkedin_publish_jobs")
+}
+
+model UserSession {
+  id          String   @id @default(cuid())
+  deviceInfo  String   // "Chrome on Windows"
+  ipAddress   String?  // "124.43.15.2"
+  status      String   @default("ACTIVE") // ACTIVE or REVOKED
+  lastActive  DateTime @default(now())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("user_sessions")
 }

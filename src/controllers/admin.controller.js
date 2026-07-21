@@ -4,6 +4,7 @@ const { sendSuccess, sendPaginated } = require("../utils/response");
 const adminService = require("../services/admin.service");
 const { parsePagination } = require("../utils/helpers");
 const { excludedKeywords } = require('../config/excludedKeywords');
+const prisma = require("../config/prisma");
 
 // ─── Dashboard ──────────────────────────────
 
@@ -289,6 +290,98 @@ const validateUrl = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ─── Profile & Sessions ──────────────────────────────
+
+const updateAdminProfile = asyncHandler(async (req, res) => {
+  const { displayName, bio, avatarUrl } = req.body;
+  const adminId = req.user.id;
+
+  const updatedAdmin = await prisma.user.update({
+    where: { id: adminId },
+    data: {
+      displayName: displayName,
+      bio: bio,
+      avatarUrl: avatarUrl,
+    }
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      adminId: adminId,
+      action: "UPDATE_PROFILE",
+      targetId: adminId,
+      targetType: "User",
+      details: "Admin updated their profile details."
+    }
+  });
+
+  sendSuccess(res, { message: "Profile updated successfully", data: updatedAdmin });
+});
+
+const registerSession = asyncHandler(async (req, res) => {
+  const adminId = req.user.id;
+  const userAgent = req.headers['user-agent'] || 'Unknown Device';
+  const ipAddress = req.ip || req.connection.remoteAddress || 'Unknown IP';
+
+  let deviceName = "Desktop Browser";
+  if (userAgent.includes("Windows")) deviceName = "Windows PC";
+  else if (userAgent.includes("Mac")) deviceName = "Mac OS Device";
+  else if (userAgent.includes("Android")) deviceName = "Android Mobile";
+  else if (userAgent.includes("iPhone") || userAgent.includes("iPad")) deviceName = "Apple iOS Device";
+
+  // Check if this exact device/IP is already registered and active to avoid spamming the DB
+  let session = await prisma.userSession.findFirst({
+    where: { userId: adminId, ipAddress: ipAddress, status: "ACTIVE" }
+  });
+
+  // If not, create a real session in Postgres!
+  if (!session) {
+    session = await prisma.userSession.create({
+      data: {
+        userId: adminId,
+        deviceInfo: deviceName,
+        ipAddress: ipAddress,
+        status: "ACTIVE"
+      }
+    });
+  }
+
+  sendSuccess(res, { data: session });
+});
+
+const getActiveSessions = asyncHandler(async (req, res) => {
+  const sessions = await prisma.userSession.findMany({
+    where: { userId: req.user.id, status: "ACTIVE" },
+    orderBy: { lastActive: "desc" }
+  });
+  
+  sendSuccess(res, { data: sessions });
+});
+
+const revokeSession = asyncHandler(async (req, res) => {
+  const { sessionId } = req.params;
+  const adminId = req.user.id;
+
+  await prisma.userSession.update({
+    where: { id: sessionId },
+    data: { status: "REVOKED",
+            lastActive: new Date()
+          }
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      adminId: adminId,
+      action: "REVOKE_SESSION",
+      targetId: sessionId,
+      targetType: "UserSession",
+      details: "Admin revoked a device session."
+    }
+  });
+
+  sendSuccess(res, { message: "Session revoked successfully" });
+});
+
 module.exports = {
   getDashboard,
   getEngagementAnalytics,
@@ -313,4 +406,8 @@ module.exports = {
   deleteScrapingSource,
   getDefaultKeywords,
   getAdminMetrics,
+  updateAdminProfile,
+  revokeSession,
+  registerSession,
+  getActiveSessions,
 };

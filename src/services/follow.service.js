@@ -1,6 +1,7 @@
 const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 const { createNotification } = require("./notification.service");
+
 /**
  * Toggle follow/unfollow a user.
  */
@@ -11,7 +12,7 @@ const toggleFollow = async (app, followerId, followingId) => {
 
   try {
     // Attempt to Unfollow first (Optimistic)
-    // Runs entirely in 1 database roundtrip
+
     await prisma.$transaction([
       prisma.follow.delete({
         where: { followerId_followingId: { followerId, followingId } },
@@ -29,7 +30,6 @@ const toggleFollow = async (app, followerId, followingId) => {
     ]);
     return { followed: false };
   } catch (error) {
-    // P2025: Record to delete does not exist (They weren't following yet)
     if (error.code === "P2025") {
       try {
         // Attempt to Follow instead
@@ -49,12 +49,14 @@ const toggleFollow = async (app, followerId, followingId) => {
             create: { userId: followingId, totalFollowers: 1 },
           }),
         ]);
-          createNotification(app, {
+        createNotification(app, {
           type: "FOLLOW",
-          destUserId:followingId, 
-          sourceUserId:followerId,    
-          sourceArticleId: null
-        }).catch(err => console.error("Failed to create follow notification:", err));
+          destUserId: followingId,
+          sourceUserId: followerId,
+          sourceArticleId: null,
+        }).catch((err) =>
+          console.error("Failed to create follow notification:", err),
+        );
 
         return { followed: true };
       } catch (createError) {

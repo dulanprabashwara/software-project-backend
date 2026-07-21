@@ -1,18 +1,7 @@
 const admin = require("../config/firebase");
 const prisma = require("../config/prisma");
 
-/**
- * @function authenticate
- * @description
- * Express middleware to authenticate inbound requests using Firebase ID tokens.
- * WHY: verify the JWT token against Firebase
- * to prove the user's identity before interacting with our own Postgres database.
- *
- * @param {Object} req - Express request object. Expects `Authorization: Bearer <token>` in headers.
- * @param {Object} res - Express response object.
- * @param {Function} next - Express next middleware function.
- * @returns {Promise<void>} Attaches the verified Postgres `User` record to `req.user` or returns 401/403/500 on failure.
- */
+//authenticate middleware to get jwt token from firebase and verify it to get the user raw
 const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -49,6 +38,7 @@ const authenticate = async (req, res, next) => {
       const isStillBanned =
         isPermanent || new Date() < new Date(ban.bannedUntil);
 
+      //if ban send 403 respose to the frontend
       if (isStillBanned) {
         return res.status(403).json({
           success: false,
@@ -59,12 +49,49 @@ const authenticate = async (req, res, next) => {
       }
     }
 
+    if (user.role === "ADMIN") {
+      const userAgent = req.headers['user-agent'] || 'Unknown Device';
+      let deviceName = "Desktop Browser";
+      if (userAgent.includes("Windows")) deviceName = "Windows PC";
+      else if (userAgent.includes("Mac")) deviceName = "Mac OS Device";
+      else if (userAgent.includes("Android")) deviceName = "Android Mobile";
+      else if (userAgent.includes("iPhone") || userAgent.includes("iPad")) deviceName = "Apple iOS Device";
+      
+      // Look for the most recent session for this specific device
+      const deviceSession = await prisma.userSession.findFirst({
+        where: { userId: user.id, deviceInfo: deviceName },
+        orderBy: { lastActive: 'desc' }
+      });
+
+      if (deviceSession && deviceSession.status === "REVOKED") {
+        // Firebase Tokens last an hour. We check if they logged in BEFORE the revoke happened.
+        // auth_time is in seconds, JS needs milliseconds
+        const tokenLoginTime = decodedToken.auth_time * 1000; 
+        
+        console.log(`[BOUNCER] Admin tried to access route on ${deviceName}. Status: REVOKED`);
+
+        if (tokenLoginTime <= deviceSession.lastActive.getTime()) {
+          console.log("[BOUNCER] Access Denied! Kicking user out to login screen.");
+          return res.status(401).json({
+            success: false,
+            message: "Your session was remotely revoked. Please log in again."
+          });
+        } else {
+          // If they successfully logged back in via Firebase, reactivate the session
+          await prisma.userSession.update({
+            where: { id: deviceSession.id },
+            data: { status: "ACTIVE" }
+          });
+        }
+      }
+    }
+
     req.user = user;
     next();
   } catch (error) {
     console.error("Authentication/Database error:", error.message);
 
-    // If the error comes from Firebase Auth verifyIdToken (usually starts with 'auth/'), if the token is invalid or expired
+    // If the error comes from Firebase Auth verifyIdToken  if the token is invalid or expired
     if (
       error.code &&
       typeof error.code === "string" &&
@@ -92,15 +119,7 @@ const authenticate = async (req, res, next) => {
   }
 };
 
-/**
- * @function authorize
- * @description
- * Express middleware to authorize users based on internal roles.
- * Must be executed AFTER the `authenticate` middleware to ensure `req.user` is present.
- *
- * @param {...string} roles - An array of allowed role strings (e.g., 'ADMIN', 'USER').
- * @returns {Function} Express middleware function checking for role inclusion. Returns 403 on denial.
- */
+// authorize middleware to get the user raw that got the authneticate and check if the role is correct
 const authorize = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {
@@ -122,14 +141,7 @@ const authorize = (...roles) => {
 };
 
 /**
- * @function requirePremium
- * @description
- * Express middleware to restrict access to premium-only features.
- *
- * @param {Object} req - Express request object. Expects `req.user` to be populated.
- * @param {Object} res - Express response object.
- * @param {Function} next - Express next middleware function.
- * @returns {void} Proceeds if `isPremium` is true or role is 'ADMIN', else returns 403.
+ requirepremium middleware to get the user raw and check if the user is premium if not to block that route
  */
 const requirePremium = (req, res, next) => {
   if (!req.user) {
@@ -149,18 +161,7 @@ const requirePremium = (req, res, next) => {
   next();
 };
 
-/**
- * @function optionalAuth
- * @description
- * Express middleware for endpoints that behave differently depending on auth state.
- * WHY: Some public endpoints need to know if the viewer is authenticated , but shouldn't block
- * anonymous/public viewers if no token is provided.
- *
- * @param {Object} req - Express request object.
- * @param {Object} res - Express response object.
- * @param {Function} next - Express next middleware function.
- * @returns {Promise<void>} Attaches `req.user` if valid token is found, otherwise proceeds silently.
- */
+//optionalAuth middleware to allow a person who doesnt have a token to go to that route
 const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;

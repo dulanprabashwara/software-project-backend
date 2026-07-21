@@ -46,5 +46,9 @@ router.get('/scraping/default-keywords', adminController.getDefaultKeywords);
 
 //profile
 router.get('/metrics', authenticate, adminController.getAdminMetrics);
+router.put('/profile', adminController.updateAdminProfile);
+router.post('/sessions/register', adminController.registerSession); 
+router.get('/sessions', adminController.getActiveSessions);
+router.delete('/sessions/:sessionId', adminController.revokeSession);
 
 module.exports = router;

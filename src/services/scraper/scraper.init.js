@@ -5,9 +5,9 @@
 const prisma = require("../../config/prisma");
 const { validateScrapingUrl } = require("../../utils/scraperSecurity");
 
-// ════════════════════════════════════════════════════════════════════════════
+
 // PHASE 1 — INITIALIZATION
-// ════════════════════════════════════════════════════════════════════════════
+
 
 // Loads all active scraping sources from the database and validates each URL for security.
 // Returns sources grouped by category plus a list of any blocked sources.
