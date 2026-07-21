@@ -636,3 +636,12 @@ model UserSession {
   @@index([status])
   @@map("user_sessions")
 }
+
+model SupportRequest {
+  id        String   @id @default(cuid())
+  email     String
+  problem   String
+  createdAt DateTime @default(now())
+
+  @@map("support_requests")
+}
