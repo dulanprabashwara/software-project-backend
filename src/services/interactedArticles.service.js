@@ -1,9 +1,14 @@
 const prisma = require("../config/prisma");
 
-const fetchUserInteractions = async (userId) => {
+const fetchUserInteractions = async (userId, page = 1, limit = 10) => {
+  //calculate how many records to skip
+  const skip = (page - 1) * limit;
+
   const interactedRecords = await prisma.articleInteractions.findMany({
     where: { userId: userId },
     orderBy: { dateUpdated: 'desc' },
+    skip,
+    take: limit,
     include: {
       article: {
         include: {

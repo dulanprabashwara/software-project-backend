@@ -1,12 +1,15 @@
 const readHistoryService = require("../services/readHistory.service");
 
  
- // Returns the list of articles the user has read.
- 
+ // Returns the list of articles the user has read (paginated).
 const getReadHistory = async (req, res) => {
   try {
     const userId = req.user.id;
-    const history = await readHistoryService.getUserReadHistory(userId);
+    //read page from query, default to 1
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+
+    const history = await readHistoryService.getUserReadHistory(userId, page, limit);
 
     res.status(200).json({
       success: true,

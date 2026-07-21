@@ -1,12 +1,15 @@
 const prisma = require("../config/prisma");
 
 
- //Fetches all articles read by a specific user.
- //Includes basic article info  
- 
-const getUserReadHistory = async (userId) => {
+ //Fetches articles read by a specific user (paginated).
+const getUserReadHistory = async (userId, page = 1, limit = 10) => {
+  //calculate how many records to skip
+  const skip = (page - 1) * limit;
+
   return await prisma.readHistory.findMany({
     where: { userId },
+    skip,
+    take: limit,
     include: {
       article: {
         select: {
