@@ -25,6 +25,9 @@ const readHistoryRoutes = require("./readHistory.routes");
 const popularTopicsRoutes = require("./popularTopics.routes");
 const articleReportsRoutes = require("./articleReports.routes");
 const articleStatsRoutes = require("./articleStats.routes");
+const userReportsRoutes = require("./userReports.routes");
+const topUserArticleRoutes = require("./topUserArticles.routes");
+
 
 
 
@@ -59,6 +62,9 @@ router.use("/readHistory", readHistoryRoutes);
 router.use("/popularTopics", popularTopicsRoutes);
 router.use("/articleReports", articleReportsRoutes);
 router.use("/articleStats", articleStatsRoutes);
+router.use("/userReports", userReportsRoutes);
+router.use("/topUserArticles", topUserArticleRoutes);
+
 
 
 
