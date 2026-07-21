@@ -27,6 +27,7 @@ const articleReportsRoutes = require("./articleReports.routes");
 const articleStatsRoutes = require("./articleStats.routes");
 const userReportsRoutes = require("./userReports.routes");
 const topUserArticleRoutes = require("./topUserArticles.routes");
+const supportRoutes = require("./support.routes");
 
 
 
@@ -64,6 +65,7 @@ router.use("/articleReports", articleReportsRoutes);
 router.use("/articleStats", articleStatsRoutes);
 router.use("/userReports", userReportsRoutes);
 router.use("/topUserArticles", topUserArticleRoutes);
+router.use("/support", supportRoutes);
 
 
 
