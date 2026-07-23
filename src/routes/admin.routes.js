@@ -12,6 +12,7 @@ router.get("/dashboard", adminController.getDashboard);
 router.get('/engagement', authenticate, adminController.getEngagementAnalytics);
 
 // User management
+router.get("/users/paginated", adminController.getPaginatedUsers);
 router.get("/users", adminController.listUsers);
 router.put("/users/:userId/role", adminController.updateUserRole);
 router.post("/users/:userId/ban", adminController.banUser);
@@ -22,6 +23,9 @@ router.get("/reports", adminController.getReports);
 router.put("/reports/:reportId", adminController.resolveReport);
 
 // Audit logs
+// Add this line to your routes file
+router.get("/audit-logs/paginated", adminController.getPaginatedAuditLogs);
+router.get("/audit-logs/filters", adminController.getAuditLogFilters);
 router.get("/audit-logs", adminController.getAuditLogs);
 
 // AI Config
@@ -37,6 +41,7 @@ router.post("/offers", adminController.createOffer);
 router.put("/offers/:id", adminController.updateOffer);
 
 // AI Scraping Sources
+router.get("/scraping-sources/paginated", adminController.getPaginatedScrapingSources);
 router.get("/scraping-sources", adminController.getScrapingSources);
 router.post("/scraping-sources", adminController.createScrapingSource);
 router.post("/validate-url", adminController.validateUrl);
