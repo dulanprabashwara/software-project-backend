@@ -90,6 +90,63 @@ const updateUserRole = asyncHandler(async (/** @type {any} */ req, res) => {
 });
 
 
+const getPaginatedUsers = async (req, res) => {
+  try {
+    // Extract page and limit from the query string (default to page 1, 10 items)
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    
+    //Calculate how many records to skip
+    const skip = (page - 1) * limit;
+
+    // Run both queries concurrently for maximum performance
+    const [totalUsers, users] = await Promise.all([
+      prisma.user.count(),
+      prisma.user.findMany({
+        skip: skip,
+        take: limit,
+        orderBy: {
+          createdAt: 'desc', // Shows newest users first
+        },
+        // Select only the fields you need for the list to keep the payload light
+        select: {
+          id: true,
+          username: true,   
+          displayName: true,
+          email: true,
+          role: true,
+          createdAt: true,
+          isPremium: true,   
+          bannedRecord: true
+        }
+      })
+    ]);
+
+    //Calculate total pages
+    const totalPages = Math.ceil(totalUsers / limit);
+
+    // Send the structured response
+    res.status(200).json({
+      success: true,
+      data: users,
+      meta: {
+        totalItems: totalUsers,
+        currentPage: page,
+        totalPages: totalPages,
+        itemsPerPage: limit
+      }
+    });
+
+  } catch (error) {
+    console.error("Error fetching paginated users:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch users", 
+      error: error.message 
+    });
+  }
+};
+
 // ─── Bans ───────────────────────────────────
 
 const banUser = asyncHandler(async (/** @type {any} */ req, res) => {
@@ -146,6 +203,134 @@ const resolveReport = asyncHandler(async (/** @type {any} */ req, res) => {
 });
 
 // ─── Audit Logs ─────────────────────────────
+const getPaginatedAuditLogs = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    //Build the dynamic where clause based on filters provided
+    const whereClause = {};
+
+    // Filter by Action (Case-insensitive search)
+    if (req.query.action && req.query.action !== 'All Actions' && req.query.action !== '') {
+      whereClause.action = {
+        contains: req.query.action,
+        mode: 'insensitive' // So 'update' matches 'UPDATE_PROFILE'
+      };
+    }
+
+    // Filter by Admin Name (Searches both username and displayName)
+    if (req.query.admin && req.query.admin !== 'All Admins' && req.query.admin !== '') {
+      whereClause.admin = {
+        OR: [
+          { displayName: { contains: req.query.admin, mode: 'insensitive' } },
+          { username: { contains: req.query.admin, mode: 'insensitive' } }
+        ]
+      };
+    }
+
+    // Filter by Date Range
+    if (req.query.startDate || req.query.endDate) {
+      whereClause.createdAt = {};
+      if (req.query.startDate) {
+        whereClause.createdAt.gte = new Date(req.query.startDate);
+      }
+      if (req.query.endDate) {
+        // Append time to include the entire end date
+        whereClause.createdAt.lte = new Date(`${req.query.endDate}T23:59:59.999Z`);
+      }
+    }
+
+    //Pass the whereClause to BOTH count() and findMany()
+    const [totalLogs, logs] = await Promise.all([
+      prisma.auditLog.count({
+        where: whereClause
+      }),
+      prisma.auditLog.findMany({
+        where: whereClause,
+        skip: skip,
+        take: limit,
+        orderBy: {
+          createdAt: 'desc',
+        },
+        select: {
+          id: true,
+          action: true,
+          targetId: true,
+          targetType: true,
+          details: true,
+          ipAddress: true,
+          createdAt: true,
+          admin: {
+            select: {
+              username: true,
+              displayName: true
+            }
+          }
+        }
+      })
+    ]);
+
+    const totalPages = Math.ceil(totalLogs / limit);
+
+    res.status(200).json({
+      success: true,
+      data: logs,
+      meta: {
+        totalItems: totalLogs,
+        currentPage: page,
+        totalPages: totalPages,
+        itemsPerPage: limit
+      }
+    });
+
+  } catch (error) {
+    console.error("Error fetching paginated audit logs:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch audit logs", error: error.message });
+  }
+};
+
+const getAuditLogFilters = async (req, res) => {
+  try {
+    // Get unique actions
+    const uniqueActions = await prisma.auditLog.findMany({
+      distinct: ['action'],
+      select: { action: true }
+    });
+
+    // Get unique admins
+    const uniqueAdmins = await prisma.auditLog.findMany({
+      distinct: ['adminId'],
+      select: {
+        admin: {
+          select: { username: true, displayName: true }
+        }
+      }
+    });
+
+    // Format for the frontend
+    const actionList = uniqueActions.map(a => 
+      a.action.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase())
+    );
+    
+    const adminList = uniqueAdmins
+      .filter(a => a.admin) // Safety check in case an admin was deleted
+      .map(a => a.admin.displayName || a.admin.username);
+
+    res.status(200).json({
+      success: true,
+      data: { 
+        actions: [...new Set(actionList)], 
+        admins: [...new Set(adminList)] 
+      }
+    });
+
+  } catch (error) {
+    console.error("Error fetching audit log filters:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch filters" });
+  }
+};
 
 const getAuditLogs = asyncHandler(async (req, res) => {
   const { page, limit } = parsePagination(req.query);
@@ -212,6 +397,67 @@ const updateOffer = asyncHandler(async (req, res, next) => {
 });
 
 // ─── scraping sources ───────────────────────────────
+const getPaginatedScrapingSources = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Build the dynamic where clause
+    const whereClause = {};
+
+    //Listen for the Category dropdown
+    if (req.query.category && req.query.category !== 'All Categories') {
+      whereClause.category = req.query.category;
+    }
+
+    // Listen for a text search if ever add a search bar
+    if (req.query.search) {
+      whereClause.OR = [
+        { name: { contains: req.query.search, mode: 'insensitive' } },
+        { url: { contains: req.query.search, mode: 'insensitive' } }
+      ];
+    }
+
+    // Run count and fetch concurrently
+    const [totalSources, sources] = await Promise.all([
+      prisma.scrapingSource.count({
+        where: whereClause
+      }),
+      prisma.scrapingSource.findMany({
+        where: whereClause,
+        skip: skip,
+        take: limit,
+        orderBy: [
+          { createdAt: 'desc' },
+          { id: 'asc' }
+        ]
+      })
+    ]);
+
+    const totalPages = Math.ceil(totalSources / limit);
+
+    res.status(200).json({
+      success: true,
+      data: sources,
+      meta: {
+        totalItems: totalSources,
+        currentPage: page,
+        totalPages: totalPages,
+        itemsPerPage: limit
+      }
+    });
+
+  } catch (error) {
+    console.error("Error fetching paginated scraping sources:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch scraping sources", 
+      error: error.message 
+    });
+  }
+};
+
 const getScrapingSources = asyncHandler(async (req, res, next) => {
   try {
     const sources = await adminService.getScrapingSources();
@@ -387,11 +633,14 @@ module.exports = {
   getEngagementAnalytics,
   listUsers,
   updateUserRole,
+  getPaginatedUsers,
   banUser,
   unbanUser,
   getReports,
   reportArticle,
   resolveReport,
+  getPaginatedAuditLogs,
+  getAuditLogFilters,
   getAuditLogs,
   getAiConfig,
   updateAiConfig,
@@ -399,6 +648,7 @@ module.exports = {
   getOffers,
   createOffer,
   updateOffer,
+  getPaginatedScrapingSources,
   getScrapingSources,
   createScrapingSource,
   validateUrl,
