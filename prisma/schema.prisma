@@ -641,7 +641,13 @@ model SupportRequest {
   id        String   @id @default(cuid())
   email     String
   problem   String
+
+  // --- Admin Tracking Fields ---
+  status    String   @default("PENDING") // Options: PENDING, IN_PROGRESS, RESOLVED
+  isRead    Boolean  @default(false)
+
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@map("support_requests")
 }
