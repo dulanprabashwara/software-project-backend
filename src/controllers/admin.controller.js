@@ -628,6 +628,91 @@ const revokeSession = asyncHandler(async (req, res) => {
   sendSuccess(res, { message: "Session revoked successfully" });
 });
 
+// ─── Support tickets ──────────────────────────────
+
+// Fetch support requests with pagination and optional status filter
+const getPaginatedSupportRequests = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const whereClause = {};
+    
+    // Optional filter so can view only "PENDING" or "RESOLVED" tickets
+    if (req.query.status && req.query.status !== 'ALL') {
+      whereClause.status = req.query.status;
+    }
+
+    const [totalRequests, requests] = await Promise.all([
+      prisma.supportRequest.count({
+        where: whereClause
+      }),
+      prisma.supportRequest.findMany({
+        where: whereClause,
+        skip: skip,
+        take: limit,
+        orderBy: [
+          { createdAt: 'desc' }, // Newest tickets at the top
+          { id: 'asc' }
+        ]
+      })
+    ]);
+
+    const totalPages = Math.ceil(totalRequests / limit);
+
+    res.status(200).json({
+      success: true,
+      data: requests,
+      meta: {
+        totalItems: totalRequests,
+        currentPage: page,
+        totalPages: totalPages,
+        itemsPerPage: limit
+      }
+    });
+
+  } catch (error) {
+    console.error("Error fetching support requests:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch support requests", 
+      error: error.message 
+    });
+  }
+};
+
+// Update a ticket (e.g., mark as read, or mark as resolved)
+const updateSupportRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, isRead } = req.body;
+
+    // Build update data dynamically based on what the frontend sends
+    const updateData = {};
+    if (status) updateData.status = status;
+    if (typeof isRead === 'boolean') updateData.isRead = isRead;
+
+    const updatedRequest = await prisma.supportRequest.update({
+      where: { id: id },
+      data: updateData
+    });
+
+    res.status(200).json({ 
+      success: true, 
+      data: updatedRequest 
+    });
+
+  } catch (error) {
+    console.error("Error updating support request:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to update support request", 
+      error: error.message 
+    });
+  }
+};
+
 module.exports = {
   getDashboard,
   getEngagementAnalytics,
@@ -660,4 +745,6 @@ module.exports = {
   revokeSession,
   registerSession,
   getActiveSessions,
+  updateSupportRequest,
+  getPaginatedSupportRequests,
 };

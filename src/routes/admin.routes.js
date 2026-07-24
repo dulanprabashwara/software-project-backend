@@ -56,4 +56,8 @@ router.post('/sessions/register', adminController.registerSession);
 router.get('/sessions', adminController.getActiveSessions);
 router.delete('/sessions/:sessionId', adminController.revokeSession);
 
+//Support tickets
+router.get("/support-requests/paginated", adminController.getPaginatedSupportRequests);
+router.put("/support-requests/:id", adminController.updateSupportRequest);
+
 module.exports = router;
