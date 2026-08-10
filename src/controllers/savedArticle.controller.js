@@ -4,9 +4,12 @@ const savedArticleService = require("../services/savedArticle.service");
 const getMySavedArticles = async (req, res) => {
   try {
     const userId = req.user.id; // Extract from Auth middleware
+    //read page from query, default to 1
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
     
     // Call the Service
-    const articles = await savedArticleService.getUserSavedArticles(userId);
+    const articles = await savedArticleService.getUserSavedArticles(userId, page, limit);
 
     res.status(200).json({ success: true, data: articles });
   } catch (error) {

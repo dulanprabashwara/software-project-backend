@@ -14,7 +14,7 @@ const stripeRoutes = require("./stripe.routes");
 const scraperRoutes = require("./scraper.routes");
 const wordpressRoutes = require("./wordpress.routes");
 const linkedinRoutes = require("./linkedin.routes");
-const searchRoutes       = require("./search.routes"); 
+const searchRoutes = require("./search.routes");
 const homefeedRoutes = require("./homefeed.routes");
 const articleReadRoutes = require("./articleRead.routes");
 const savedArticleRoutes = require("./savedArticle.routes");
@@ -25,7 +25,10 @@ const readHistoryRoutes = require("./readHistory.routes");
 const popularTopicsRoutes = require("./popularTopics.routes");
 const articleReportsRoutes = require("./articleReports.routes");
 const articleStatsRoutes = require("./articleStats.routes");
-const analysisRoutes = require("./analysis.route");
+const userReportsRoutes = require("./userReports.routes");
+const topUserArticleRoutes = require("./topUserArticles.routes");
+const supportRoutes = require("./support.routes");
+
 
 
 
@@ -47,9 +50,9 @@ router.use("/ai", aiRoutes);
 router.use("/payments", paymentRoutes);
 router.use("/stripe", stripeRoutes);
 router.use("/scraper", scraperRoutes);
-router.use("/wordpress",  wordpressRoutes);
+router.use("/wordpress", wordpressRoutes);
 router.use("/linkedin", linkedinRoutes);
-router.use("/search",     searchRoutes);  
+router.use("/search", searchRoutes);
 router.use("/homefeed", homefeedRoutes);
 router.use("/articleRead", articleReadRoutes);
 router.use("/savedArticle", savedArticleRoutes);
@@ -60,7 +63,10 @@ router.use("/readHistory", readHistoryRoutes);
 router.use("/popularTopics", popularTopicsRoutes);
 router.use("/articleReports", articleReportsRoutes);
 router.use("/articleStats", articleStatsRoutes);
-router.use("/analysis", analysisRoutes);
+router.use("/userReports", userReportsRoutes);
+router.use("/topUserArticles", topUserArticleRoutes);
+router.use("/support", supportRoutes);
+
 
 
 

@@ -99,6 +99,20 @@ const getAuthorArticleStats = async (userId) => {
       ratingCount: true,
       commentCount: true,
       status: true, // Useful if you want to filter out drafts later
+      comments: {
+        select: {
+          id: true,
+          content: true,
+          author: {
+            select: { displayName: true }
+          }
+        }
+      },
+      ratings: {
+        select: {
+          score: true
+        }
+      }
     },
     orderBy: {
       publishedAt: 'desc',
