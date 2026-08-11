@@ -299,23 +299,7 @@ const pushArticleToLinkedIn = async (article, connection, caption, job = null) =
 
   // Use snapshot from job if available, otherwise fallback to current article state
   const title = job?.title || article.title;
-  const coverImage = job?.coverImage || article.coverImage;
-  // 1. Ensure absolute Article URL
   const articleUrl = `${clientUrl}/home/read?id=${article.id}`;
-
-  // 2. Normalize and Validate Thumbnail URL
-  let thumbnail = coverImage || undefined;
-  if (thumbnail) {
-    if (thumbnail.startsWith("/")) {
-      thumbnail = `${clientUrl}${thumbnail}`;
-    }
-    if (thumbnail.startsWith("data:")) {
-      thumbnail = undefined;
-    }
-  }
-
-  // Attempt direct binary upload to LinkedIn (supports base64, local, or remote cover images)
-  const imageAssetUrn = await uploadImageToLinkedIn(coverImage, connection, clientUrl);
 
   // We use the modern 'v2/posts' API
   const postBody = {
@@ -327,21 +311,13 @@ const pushArticleToLinkedIn = async (article, connection, caption, job = null) =
       targetEntities: [],
       thirdPartyDistributionChannels: [],
     },
-    content: imageAssetUrn
-      ? {
-          media: {
-            title: title,
-            id: imageAssetUrn,
-          },
-        }
-      : {
-          article: {
-            source: articleUrl,
-            title: title,
-            description: article.summary || "",
-            thumbnail: thumbnail,
-          },
-        },
+    content: {
+      article: {
+        source: articleUrl,
+        title: title,
+        description: article.summary || title,
+      },
+    },
     lifecycleState: "PUBLISHED",
   };
 
