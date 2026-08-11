@@ -94,6 +94,9 @@ async function getUserPublishedArticles(userId, page = 1, limit = 10) {
       take: limit,
       include: {
         ...ARTICLE_AUTHOR_INCLUDE,
+        shares: true,
+        liPublishJobs: true,
+        wpPublishJobs: true,
         _count: {
           select: {
             comments: true,
