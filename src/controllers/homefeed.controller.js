@@ -5,7 +5,7 @@ const homefeedService = require("../services/homefeed.service");
 exports.getMainFeed = async (req, res) => {
   try {
     const page = parseInt(req.query.page, 10) || 1; //which page 
-    const limit = 5;  //5 articles at a time
+    const limit = 3;  //3 articles at a time
 
     const articles = await homefeedService.getPublishedMainFeed(page, limit);
     res.status(200).json(articles); 

@@ -1,7 +1,7 @@
 const prisma = require("../config/prisma");
 
 //get the feed of new articles (5 at ta time)
-const getPublishedMainFeed = async (page = 1, limit = 5) => {
+const getPublishedMainFeed = async (page = 1, limit = 3) => {
   const skip = (page - 1) * limit; //how many records to skip
 
   return await prisma.article.findMany({
