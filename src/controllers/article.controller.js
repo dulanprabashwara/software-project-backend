@@ -6,6 +6,8 @@ const articleService = require("../services/article.service");
 const linkedinService = require("../services/linkedin.service");
 const { parsePagination } = require("../utils/helpers");
 
+const { logPlatformEvent } = require("../utils/eventLogger");
+
 //  PUBLIC VIEWS & DISCOVERY
 
 /*
@@ -394,6 +396,13 @@ const publishArticle = asyncHandler(async (req, res) => {
     linkedinService
       .scheduleLinkedInPublish(article.id, req.user.id, scheduledAt, req.body.linkedinCaption)
       .catch((err) => console.error("[LinkedIn Auto-Sync Error]", err.message));
+  }
+
+  // --- PLATFORM PULSE TRIGGER ---
+  if (article.status === "PUBLISHED") {
+    await logPlatformEvent("NEW_ARTICLE", `A new article was published: "${article.title}"`);
+  } else if (article.status === "SCHEDULED") {
+    await logPlatformEvent("ARTICLE_SCHEDULED", `An article was scheduled for publication: "${article.title}"`);
   }
 
   sendSuccess(res, {
