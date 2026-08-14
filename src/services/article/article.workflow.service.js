@@ -103,9 +103,12 @@ async function startExistingArticleEditing(articleId, userId) {
     );
   }
 
-  // Backup is only created when starting a fresh session from a DRAFT.
+  // Backup is created when starting a fresh session from a DRAFT or SCHEDULED article.
   // This ensures we always have the "original" state to restore to.
-  const shouldCreateBackup = article.status === ARTICLE_STATUS.DRAFT && !article.editingStartedAt;
+  const shouldCreateBackup =
+    (article.status === ARTICLE_STATUS.DRAFT ||
+      article.status === ARTICLE_STATUS.SCHEDULED) &&
+    !article.editingStartedAt;
 
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
@@ -204,16 +207,25 @@ async function discardExistingArticleEdits(articleId, userId) {
     return article;
   }
 
+  // If the article is scheduled (has scheduledAt), restore its status to SCHEDULED
+  // so it remains in the scheduled queue and will publish automatically.
+  const isScheduledArticle = Boolean(article.scheduledAt);
+  const targetStatus = isScheduledArticle
+    ? ARTICLE_STATUS.SCHEDULED
+    : ARTICLE_STATUS.DRAFT;
+
   // Restore the article and reset its timestamp to the point before editing began.
   const updatedArticle = await prisma.article.update({
     where: { id: articleId },
     data: {
-      title: article.editingBackupTitle,
-      content: article.editingBackupContent,
-      coverImage: article.editingBackupCoverImage,
-      readingTime: calculateReadingTime(article.editingBackupContent || ""),
-      status: ARTICLE_STATUS.DRAFT,
-      updatedAt: article.editingStartedAt,
+      title: article.editingBackupTitle ?? article.title,
+      content: article.editingBackupContent ?? article.content,
+      coverImage: article.editingBackupCoverImage ?? article.coverImage,
+      readingTime: calculateReadingTime(
+        article.editingBackupContent || article.content || "",
+      ),
+      status: targetStatus,
+      updatedAt: article.editingStartedAt || article.updatedAt,
       ...buildClearedEditingBackupData(),
     },
     include: ARTICLE_AUTHOR_INCLUDE,
