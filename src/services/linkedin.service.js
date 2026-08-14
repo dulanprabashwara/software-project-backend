@@ -153,6 +153,144 @@ const disconnectLinkedIn = async (userId) => {
   return { disconnected: true };
 };
 
+const DEFAULT_FALLBACK_IMAGE_URL =
+  "https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=1200&auto=format&fit=crop&q=80";
+
+/**
+ * Uploads a cover image (base64 data URL, relative path, or HTTP URL) to LinkedIn Asset API.
+ * Falls back to a default sample cover image if initial image upload fails or is missing.
+ * Returns LinkedIn image asset URN (urn:li:digitalmediaAsset:...) or null.
+ */
+const uploadImageToLinkedIn = async (coverImage, connection, clientUrl) => {
+  const targetImage = coverImage || DEFAULT_FALLBACK_IMAGE_URL;
+
+  try {
+    let buffer = null;
+    let mimeType = "image/jpeg";
+
+    if (targetImage.startsWith("data:")) {
+      const match = targetImage.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        mimeType = match[1];
+        buffer = Buffer.from(match[2], "base64");
+      }
+    } else if (targetImage.startsWith("http://") || targetImage.startsWith("https://")) {
+      const imgRes = await axios.get(targetImage, { responseType: "arraybuffer", timeout: 15000 });
+      buffer = Buffer.from(imgRes.data);
+      mimeType = imgRes.headers["content-type"] || "image/jpeg";
+    } else if (targetImage.startsWith("/")) {
+      const fullUrl = `${clientUrl}${targetImage}`;
+      const imgRes = await axios.get(fullUrl, { responseType: "arraybuffer", timeout: 15000 });
+      buffer = Buffer.from(imgRes.data);
+      mimeType = imgRes.headers["content-type"] || "image/jpeg";
+    }
+
+    if (!buffer && targetImage !== DEFAULT_FALLBACK_IMAGE_URL) {
+      const fallbackRes = await axios.get(DEFAULT_FALLBACK_IMAGE_URL, { responseType: "arraybuffer", timeout: 15000 });
+      buffer = Buffer.from(fallbackRes.data);
+      mimeType = "image/jpeg";
+    }
+
+    if (!buffer) return null;
+
+    // Register upload asset with LinkedIn API
+    const registerRes = await axios.post(
+      `${LI_API_BASE}/assets?action=registerUpload`,
+      {
+        registerUploadRequest: {
+          recipes: ["urn:li:digitalmediaRecipe:feedshare-image"],
+          owner: `urn:li:person:${connection.liMemberId}`,
+          serviceRelationships: [
+            {
+              relationshipType: "OWNER",
+              identifier: "urn:li:userGeneratedContent",
+            },
+          ],
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${connection.accessToken}`,
+          "Content-Type": "application/json",
+          "X-Restli-Protocol-Version": "2.0.0",
+        },
+        timeout: 15000,
+      }
+    );
+
+    const uploadUrl =
+      registerRes.data?.value?.uploadMechanism?.[
+        "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"
+      ]?.uploadUrl;
+    const assetUrn = registerRes.data?.value?.asset;
+
+    if (!uploadUrl || !assetUrn) return null;
+
+    // Upload binary buffer to LinkedIn uploadUrl
+    await axios.put(uploadUrl, buffer, {
+      headers: {
+        Authorization: `Bearer ${connection.accessToken}`,
+        "Content-Type": mimeType,
+      },
+      timeout: 30000,
+    });
+
+    return assetUrn;
+  } catch (err) {
+    console.warn("[LinkedIn Image Upload Warning - Retrying with Default Image]", err?.response?.data || err.message);
+
+    try {
+      const fallbackRes = await axios.get(DEFAULT_FALLBACK_IMAGE_URL, { responseType: "arraybuffer", timeout: 15000 });
+      const buffer = Buffer.from(fallbackRes.data);
+
+      const registerRes = await axios.post(
+        `${LI_API_BASE}/assets?action=registerUpload`,
+        {
+          registerUploadRequest: {
+            recipes: ["urn:li:digitalmediaRecipe:feedshare-image"],
+            owner: `urn:li:person:${connection.liMemberId}`,
+            serviceRelationships: [
+              {
+                relationshipType: "OWNER",
+                identifier: "urn:li:userGeneratedContent",
+              },
+            ],
+          },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${connection.accessToken}`,
+            "Content-Type": "application/json",
+            "X-Restli-Protocol-Version": "2.0.0",
+          },
+          timeout: 15000,
+        }
+      );
+
+      const uploadUrl =
+        registerRes.data?.value?.uploadMechanism?.[
+          "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"
+        ]?.uploadUrl;
+      const assetUrn = registerRes.data?.value?.asset;
+
+      if (uploadUrl && assetUrn) {
+        await axios.put(uploadUrl, buffer, {
+          headers: {
+            Authorization: `Bearer ${connection.accessToken}`,
+            "Content-Type": "image/jpeg",
+          },
+          timeout: 30000,
+        });
+        return assetUrn;
+      }
+    } catch (fallbackErr) {
+      console.warn("[LinkedIn Default Image Upload Failed]", fallbackErr.message);
+    }
+
+    return null;
+  }
+};
+
 /**
  * Posts the article to LinkedIn.
  */
@@ -161,28 +299,7 @@ const pushArticleToLinkedIn = async (article, connection, caption, job = null) =
 
   // Use snapshot from job if available, otherwise fallback to current article state
   const title = job?.title || article.title;
-  const coverImage = job?.coverImage || article.coverImage;
-  // 1. Ensure absolute Article URL
   const articleUrl = `${clientUrl}/home/read?id=${article.id}`;
-
-  // 2. Normalize and Validate Thumbnail URL
-  let thumbnail = coverImage || undefined;
-  if (thumbnail) {
-    // If it's a relative path, prepend clientUrl
-    if (thumbnail.startsWith("/")) {
-      thumbnail = `${clientUrl}${thumbnail}`;
-    }
-    // If it's a base64 string, LinkedIn will reject it, so we remove it
-    if (thumbnail.startsWith("data:")) {
-      console.warn("[LinkedIn] Removing base64 thumbnail (LinkedIn only supports public URLs)");
-      thumbnail = undefined;
-    }
-  }
-
-  // 3. Warn about localhost
-  if (articleUrl.includes("localhost")) {
-    console.warn("[LinkedIn] Warning: Using localhost URL. LinkedIn's crawler will not be able to fetch article metadata.");
-  }
 
   // We use the modern 'v2/posts' API
   const postBody = {
@@ -198,8 +315,7 @@ const pushArticleToLinkedIn = async (article, connection, caption, job = null) =
       article: {
         source: articleUrl,
         title: title,
-        description: article.summary || "",
-        thumbnail: thumbnail,
+        description: article.summary || title,
       },
     },
     lifecycleState: "PUBLISHED",

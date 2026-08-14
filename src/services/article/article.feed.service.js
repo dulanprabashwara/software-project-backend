@@ -22,7 +22,13 @@ async function getArticleFeed({
   const skip = (page - 1) * limit;
 
   const where = {
-    status: ARTICLE_STATUS.PUBLISHED,
+    status: {
+      in: [
+        ARTICLE_STATUS.PUBLISHED,
+        ARTICLE_STATUS.REPUBLISHED,
+        ARTICLE_STATUS.EDITING_PUBLISHED,
+      ],
+    },
   };
 
   if (tag) {
@@ -83,7 +89,13 @@ async function getUserPublishedArticles(userId, page = 1, limit = 10) {
 
   const where = {
     authorId: userId,
-    status: ARTICLE_STATUS.PUBLISHED,
+    status: {
+      in: [
+        ARTICLE_STATUS.PUBLISHED,
+        ARTICLE_STATUS.REPUBLISHED,
+        ARTICLE_STATUS.EDITING_PUBLISHED,
+      ],
+    },
   };
 
   const [articles, total] = await Promise.all([
@@ -94,6 +106,9 @@ async function getUserPublishedArticles(userId, page = 1, limit = 10) {
       take: limit,
       include: {
         ...ARTICLE_AUTHOR_INCLUDE,
+        shares: true,
+        liPublishJobs: true,
+        wpPublishJobs: true,
         _count: {
           select: {
             comments: true,
@@ -126,7 +141,13 @@ async function getPublishedArticlesByUsername(username, page = 1, limit = 10) {
 
   const where = {
     authorId: user.id,
-    status: ARTICLE_STATUS.PUBLISHED,
+    status: {
+      in: [
+        ARTICLE_STATUS.PUBLISHED,
+        ARTICLE_STATUS.REPUBLISHED,
+        ARTICLE_STATUS.EDITING_PUBLISHED,
+      ],
+    },
   };
 
   const [articles, total] = await Promise.all([
@@ -225,7 +246,15 @@ async function getUserDrafts(userId, page = 1, limit = 10, filters = {}) {
  */
 async function getTrendingArticles() {
   const articles = await prisma.article.findMany({
-    where: { status: "PUBLISHED" },
+    where: {
+      status: {
+        in: [
+          ARTICLE_STATUS.PUBLISHED,
+          ARTICLE_STATUS.REPUBLISHED,
+          ARTICLE_STATUS.EDITING_PUBLISHED,
+        ],
+      },
+    },
     orderBy: { trendingScore: "desc" },
     take: 10,
     select: {
