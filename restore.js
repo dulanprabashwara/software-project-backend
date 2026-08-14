@@ -31,6 +31,7 @@ async function restore() {
     { key: 'scraping_sources', model: 'scrapingSource' },
     { key: 'scraping_sessions', model: 'scrapingSession' },
     { key: 'users', model: 'user' },
+    { key: 'support_requests', model: 'supportRequest' },
 
     // --- LEVEL 1: First-Degree Dependencies ---
     { key: 'articles', model: 'article' },
@@ -45,6 +46,8 @@ async function restore() {
     { key: 'scraped_articles', model: 'scrapedArticle' },
     { key: 'keyword_scraping_stats', model: 'categoryScrapingStats' }, // FIXED
     { key: 'wordpress_connections', model: 'wordPressConnection' },
+    { key: 'linkedin_connections', model: 'linkedInConnection' },
+    { key: 'user_sessions', model: 'userSession' },
 
     // --- LEVEL 2: Second-Degree Dependencies ---
     { key: 'article_ratings', model: 'articleRating' },
@@ -55,6 +58,7 @@ async function restore() {
     { key: 'reported_articles', model: 'reportedArticle' },
     { key: 'ai_article_logs', model: 'ai_article_logs' },
     { key: 'wordpress_publish_jobs', model: 'wordPressPublishJob' },
+    { key: 'linkedin_publish_jobs', model: 'linkedInPublishJob' },
     { key: 'article_interactions', model: 'articleInteractions' }, // ADDED
     
     // Comments go last due to self-referencing

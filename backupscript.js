@@ -45,7 +45,11 @@ async function backup() {
     "keyword_scraping_stats",
     "wordpress_connections",
     "wordpress_publish_jobs",
-    "article_interactions" 
+    "article_interactions",
+    "linkedin_connections",
+    "linkedin_publish_jobs",
+    "user_sessions",
+    "support_requests"
   ];
 
   console.log('--- Starting Full Database Backup ---');
