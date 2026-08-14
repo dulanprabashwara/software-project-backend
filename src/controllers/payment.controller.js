@@ -2,6 +2,7 @@ const Stripe = require("stripe");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendSuccess } = require("../utils/response");
 const paymentService = require("../services/payment.service");
+const { logPlatformEvent } = require("../utils/eventLogger");
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -41,6 +42,16 @@ const handleWebhook = async (req, res) => {
   try {
     //send the webhook event to the service to handle it
     await paymentService.handleWebhookEvent(event);
+
+    // --- PLATFORM PULSE TRIGGER ---
+    if (event.type === "checkout.session.completed") {
+      const email = event.data.object?.customer_details?.email || "A user";
+      await logPlatformEvent("PREMIUM_UPGRADE", `${email} just upgraded to Premium!`);
+    } else if (event.type === "customer.subscription.deleted") {
+      await logPlatformEvent("SUBSCRIPTION_CANCELED", "A premium subscription was canceled.");
+    }
+    // ------------------------------
+
     res.json({ received: true });
   } catch (err) {
     console.error(`❌ Webhook handler error: ${err.message}`);
@@ -57,6 +68,10 @@ const getSubscriptionStatus = asyncHandler(async (req, res) => {
 // ─── Cancel Subscription ────────────────────
 const cancelSubscription = asyncHandler(async (req, res) => {
   const result = await paymentService.cancelSubscription(req.user.id);
+  // --- PLATFORM PULSE TRIGGER ---
+  await logPlatformEvent("SUBSCRIPTION_CANCELED", "A user manually canceled their premium subscription.");
+  // ------------------------------
+
   sendSuccess(res, { message: result.message });
 });
 

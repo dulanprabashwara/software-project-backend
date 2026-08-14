@@ -60,4 +60,7 @@ router.delete('/sessions/:sessionId', adminController.revokeSession);
 router.get("/support-requests/paginated", adminController.getPaginatedSupportRequests);
 router.put("/support-requests/:id", adminController.updateSupportRequest);
 
+//Dashboard feeds
+router.get("/dashboard/feeds", adminController.getDashboardFeeds);
+
 module.exports = router;
