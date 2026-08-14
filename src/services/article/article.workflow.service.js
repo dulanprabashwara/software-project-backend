@@ -442,6 +442,184 @@ async function saveEditAsNewArticleAsDraft(articleId, userId, payload) {
   return updatedArticle;
 }
 
+/*
+ Starts editing a published article (creates backup and sets status to EDITING_PUBLISHED).
+ Only owned articles can be edited.
+ */
+async function startPublishedArticleEditing(articleId, userId) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  const isPublishedState =
+    article.status === ARTICLE_STATUS.PUBLISHED ||
+    article.status === ARTICLE_STATUS.REPUBLISHED ||
+    article.status === ARTICLE_STATUS.EDITING_PUBLISHED;
+
+  if (!isPublishedState) {
+    throw ApiError.badRequest("Only published articles can be edited here.");
+  }
+
+  const shouldCreateBackup = !article.editingStartedAt;
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: {
+      status: ARTICLE_STATUS.EDITING_PUBLISHED,
+      ...(shouldCreateBackup
+        ? {
+            editingBackupTitle: article.title,
+            editingBackupContent: article.content,
+            editingBackupCoverImage: article.coverImage,
+            editingStartedAt: article.updatedAt,
+          }
+        : {}),
+    },
+    include: ARTICLE_AUTHOR_INCLUDE,
+  });
+
+  return updatedArticle;
+}
+
+/*
+ Autosave for published article editing.
+ */
+async function autosavePublishedArticle(articleId, userId, payload) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  const updateData = {
+    ...buildEditExistingPayload(payload),
+    status: ARTICLE_STATUS.EDITING_PUBLISHED,
+  };
+
+  if (
+    payload.title &&
+    payload.title.trim() &&
+    payload.title.trim() !== article.title
+  ) {
+    updateData.slug = await generateUniqueSlug(payload.title.trim());
+  }
+
+  if (shouldUpdateArticleTimestamp(article, updateData)) {
+    updateData.updatedAt = new Date();
+  }
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: updateData,
+    include: ARTICLE_AUTHOR_INCLUDE,
+  });
+
+  return updatedArticle;
+}
+
+/*
+ Save published article for preview page.
+ */
+async function savePublishedArticleForPreview(articleId, userId, payload) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  const nextTitle = payload.title?.trim() || article.title;
+  const nextContent = payload.content || article.content;
+
+  requireCompleteArticle(
+    { title: nextTitle, content: nextContent },
+    ARTICLE_STATUS.EDITING_PUBLISHED
+  );
+
+  const updateData = {
+    ...buildEditExistingPayload(payload),
+    status: ARTICLE_STATUS.EDITING_PUBLISHED,
+  };
+
+  if (nextTitle && nextTitle !== article.title) {
+    updateData.slug = await generateUniqueSlug(nextTitle);
+  }
+
+  updateData.updatedAt = new Date();
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: updateData,
+    include: ARTICLE_AUTHOR_INCLUDE,
+  });
+
+  return updatedArticle;
+}
+
+/*
+ Republish edited published article (sets status to REPUBLISHED and clears backup).
+ */
+async function republishArticle(articleId, userId, payload = {}) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  const nextTitle = payload.title?.trim() || article.title;
+  const nextContent = payload.content || article.content;
+
+  requireCompleteArticle(
+    { title: nextTitle, content: nextContent },
+    ARTICLE_STATUS.REPUBLISHED
+  );
+
+  const updateData = {
+    ...buildEditExistingPayload({
+      title: nextTitle,
+      content: nextContent,
+      coverImage: payload.coverImage !== undefined ? payload.coverImage : article.coverImage,
+    }),
+    status: ARTICLE_STATUS.REPUBLISHED,
+    isEdited: true,
+    updatedAt: new Date(),
+    ...buildClearedEditingBackupData(),
+  };
+
+  if (nextTitle && nextTitle !== article.title) {
+    updateData.slug = await generateUniqueSlug(nextTitle);
+  }
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: updateData,
+    include: ARTICLE_AUTHOR_INCLUDE,
+  });
+
+  generateSummary(updatedArticle.id, userId).catch(console.error);
+
+  return updatedArticle;
+}
+
+/*
+ Discards changes and restores published article to its pre-edit state.
+ */
+async function discardPublishedArticleEdits(articleId, userId) {
+  const article = await getOwnedArticleOrThrow(articleId, userId);
+
+  if (!article.editingStartedAt) {
+    const resetStatus = await prisma.article.update({
+      where: { id: articleId },
+      data: {
+        status: ARTICLE_STATUS.PUBLISHED,
+      },
+      include: ARTICLE_AUTHOR_INCLUDE,
+    });
+    return resetStatus;
+  }
+
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data: {
+      title: article.editingBackupTitle || article.title,
+      content: article.editingBackupContent || article.content,
+      coverImage: article.editingBackupCoverImage,
+      readingTime: calculateReadingTime(article.editingBackupContent || ""),
+      status: ARTICLE_STATUS.PUBLISHED,
+      updatedAt: article.editingStartedAt,
+      ...buildClearedEditingBackupData(),
+    },
+    include: ARTICLE_AUTHOR_INCLUDE,
+  });
+
+  return updatedArticle;
+}
+
 module.exports = {
   publishArticle,
   startExistingArticleEditing,
@@ -454,4 +632,9 @@ module.exports = {
   autosaveEditAsNewArticle,
   discardEditAsNewArticle,
   saveEditAsNewArticleAsDraft,
+  startPublishedArticleEditing,
+  autosavePublishedArticle,
+  savePublishedArticleForPreview,
+  republishArticle,
+  discardPublishedArticleEdits,
 };

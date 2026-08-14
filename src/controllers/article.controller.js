@@ -426,6 +426,86 @@ function parseBooleanQuery(value) {
   return undefined;
 }
 
+// EDIT PUBLISHED FLOW
+
+/*
+ Starts editing a published article (captures backup and sets status to EDITING_PUBLISHED).
+ */
+const startEditPublished = asyncHandler(async (req, res) => {
+  const article = await articleService.startPublishedArticleEditing(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Published article editing session started.",
+    data: article,
+  });
+});
+
+/*
+ Autosaves changes during a published article edit session.
+ */
+const autosaveEditPublished = asyncHandler(async (req, res) => {
+  const article = await articleService.autosavePublishedArticle(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Published article autosaved.",
+    data: article,
+  });
+});
+
+/*
+ Saves published article state for previewing.
+ */
+const saveEditPublishedForPreview = asyncHandler(async (req, res) => {
+  const article = await articleService.savePublishedArticleForPreview(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Published article preview saved.",
+    data: article,
+  });
+});
+
+/*
+ Finalizes editing session and republishes the article.
+ */
+const republishArticle = asyncHandler(async (req, res) => {
+  const article = await articleService.republishArticle(
+    req.params.id,
+    req.user.id,
+    req.body,
+  );
+
+  sendSuccess(res, {
+    message: "Article republished successfully.",
+    data: article,
+  });
+});
+
+/*
+ Discards changes and restores published article to its pre-edit state.
+ */
+const discardEditPublished = asyncHandler(async (req, res) => {
+  const article = await articleService.discardPublishedArticleEdits(
+    req.params.id,
+    req.user.id,
+  );
+
+  sendSuccess(res, {
+    message: "Published article changes discarded successfully.",
+    data: article,
+  });
+});
+
 module.exports = {
   getFeed,
   getTrendingArticles,
@@ -449,6 +529,11 @@ module.exports = {
   autosaveEditAsNew,
   saveEditAsNewAsDraft,
   discardEditAsNew,
+  startEditPublished,
+  autosaveEditPublished,
+  saveEditPublishedForPreview,
+  republishArticle,
+  discardEditPublished,
   publishArticle,
   recordRead,
 };
