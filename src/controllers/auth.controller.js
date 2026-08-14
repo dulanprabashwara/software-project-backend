@@ -3,6 +3,7 @@ const { sendSuccess } = require("../utils/response");
 const authService = require("../services/auth.service");
 const admin = require("../config/firebase");
 const ApiError = require("../utils/ApiError");
+const { logPlatformEvent } = require("../utils/eventLogger");
 
 /**
  
@@ -46,6 +47,10 @@ const register = asyncHandler(async (req, res) => {
     avatarUrl,
   });
 
+  // --- PLATFORM PULSE TRIGGER ---
+  await logPlatformEvent("NEW_USER", `A new user joined the platform: @${user.username}`);
+  // ------------------------------
+
   sendSuccess(res, {
     statusCode: 201,
     message: "User registered successfully.",
@@ -73,6 +78,14 @@ const sync = asyncHandler(async (req, res) => {
         "Your account has been suspended. Please contact support.",
     );
   }
+
+  //--- PLATFORM PULSE TRIGGER ---
+  // If the user's creation time is within the last 10 seconds, they just signed up
+  const isNewUser = new Date().getTime() - new Date(user.createdAt).getTime() < 10000;
+  if (isNewUser) {
+    await logPlatformEvent("NEW_USER", `A new user joined via social login: @${user.username}`);
+  }
+  // ------------------------------
 
   sendSuccess(res, {
     message: "User synced successfully.",
