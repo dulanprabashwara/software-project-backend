@@ -132,6 +132,59 @@ const refreshDashboard = async () => {
   return await getDashboard();
 };
 
+const getAdvancedAnalytics = async () => {
+  //User Demographics (Donut Chart)
+  const totalUsers = await prisma.user.count();
+  const premiumUsers = await prisma.user.count({ where: { isPremium: true } });
+  const regularUsers = totalUsers - premiumUsers;
+
+  const bannedUsers = await prisma.bannedUser.count();
+  const activeUsers = totalUsers - bannedUsers;
+
+  // Content Usage & Engagement (Radar Chart)
+  const [totalReads, totalComments, totalRatings, totalShares] = await Promise.all([
+    prisma.readHistory.count(),
+    prisma.comment.count(),
+    prisma.articleRating.count(),
+    prisma.articleShare.count()
+  ]);
+
+  // Revenue & Growth
+  const sixMonthsAgo = new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+  const recentUsers = await prisma.user.findMany({
+    where: { createdAt: { gte: sixMonthsAgo } },
+    select: { createdAt: true }
+  });
+
+  // Group the signups by month (e.g., 'Jan', 'Feb')
+  const monthlyGrowth = {};
+  recentUsers.forEach(user => {
+    const month = user.createdAt.toLocaleString('en-US', { month: 'short' });
+    monthlyGrowth[month] = (monthlyGrowth[month] || 0) + 1;
+  });
+
+  return {
+    demographics: {
+      premium: premiumUsers,
+      regular: regularUsers,
+      banned: bannedUsers,
+      active: activeUsers
+    },
+    usage: {
+      reads: totalReads,
+      comments: totalComments,
+      ratings: totalRatings,
+      shares: totalShares
+    },
+    growth: {
+      labels: Object.keys(monthlyGrowth),
+      values: Object.values(monthlyGrowth)
+    }
+  };
+};
+
 // ─── User Management ────────────────────────
 
 const listUsers = async ({ page = 1, limit = 20, role, isPremium, search }) => {
@@ -532,6 +585,7 @@ module.exports = {
   calculateEngagement,
   getDashboard,
   refreshDashboard,
+  getAdvancedAnalytics,
   listUsers,
   updateUserRole,
   banUser,
