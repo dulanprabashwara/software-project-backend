@@ -18,6 +18,7 @@ const { startScrapingJobs } = require("./jobs/scraper.job");
 const { startWordPressJobs } = require("./jobs/wordpress.job");
 const { startLinkedInJobs } = require("./jobs/linkedin.job");
 const {calculateAndSaveScores} = require('./jobs/trendingScore.job');
+const { initAuditCronJob,runWeeklyAuditExport } = require("./services/audit.export.service");
 
 // ─── App Setup ──────────────────────────────
 
@@ -131,6 +132,8 @@ server.listen(PORT, () => {
     startLinkedInJobs();
     calculateAndSaveScores();
     processScheduledArticles();
+    initAuditCronJob();
+    //runWeeklyAuditExport();
   }
 });
 
