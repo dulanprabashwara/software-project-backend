@@ -17,7 +17,7 @@ const getUidFromToken = async (req) => {
   const idToken = authHeader.split("Bearer ")[1];
   try {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
-    return decodedToken.uid;
+    return decodedToken;
   } catch (error) {
     console.error("Firebase Token Verification Error in sync:", error);
     throw new ApiError(401, "Invalid or expired token.");
@@ -33,6 +33,7 @@ const register = asyncHandler(async (req, res) => {
   const { email, username, displayName, avatarUrl } = req.body;
 
   // Verify token to ensure legitimate registration
+  const decodedToken = await getUidFromToken(req);
   const firebaseUid = await getUidFromToken(req);
 
   if (!email || !username) {
@@ -66,9 +67,20 @@ for sign up and log in via google, facebook
  */
 const sync = asyncHandler(async (req, res) => {
   // Securely get UID from verified token
-  const firebaseUid = await getUidFromToken(req);
+  const decodedToken = await getUidFromToken(req);
+  const firebaseUid = decodedToken.uid;
+  const signInProvider = decodedToken.firebase.sign_in_provider;
 
   const user = await authService.syncUser(firebaseUid);
+
+  // --- STRICT ADMIN SECURITY POLICY ---
+  // Block the login if the user is an Admin and tried to use a standard password.
+  if (user.role === "ADMIN" && signInProvider === "password") {
+    throw new ApiError(
+      403,
+      "Security Policy: Administrators must sign in using Google."
+    );
+  }
 
   // If the user has an active ban record, reject the login. return 403
   if (user.bannedRecord) {

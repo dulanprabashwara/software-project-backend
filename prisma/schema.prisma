@@ -53,6 +53,7 @@ model User {
   wordpressConnection    WordPressConnection?
   wpPublishJobs          WordPressPublishJob[]
   sessions               UserSession[]
+  receiveWeeklyExport    Boolean              @default(false)
 
   @@map("users")
 }
