@@ -5,14 +5,10 @@ const ApiError = require("../utils/ApiError");
  * Get user profile by ID or username.
  */
 const getUserProfile = async (identifier, currentUserId = null) => {
-  //check if the identifier is id or username
-  const where =
-    identifier.startsWith("clz") || identifier.length > 20
-      ? { id: identifier }
-      : { username: identifier };
-
   const user = await prisma.user.findFirst({
-    where,
+    where: {
+      OR: [{ id: identifier }, { username: identifier }],
+    },
     select: {
       id: true,
       username: true,
