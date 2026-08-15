@@ -18,10 +18,11 @@ describe("User Service", () => {
   });
 
   describe("getUserProfile", () => {
-    test("should fetch user by username and return formatted profile", async () => {
+    test("should fetch a long username and return formatted profile", async () => {
+      const username = "postman_chat_receiver";
       const mockUser = {
         id: "user-1",
-        username: "testuser",
+        username,
         _count: { sentMessages: 5, receivedMessages: 2 },
         followers: [{ id: "follower-1" }],
       };
@@ -29,10 +30,14 @@ describe("User Service", () => {
       prisma.user.findFirst.mockResolvedValue(mockUser);
       prisma.message.count.mockResolvedValue(3);
 
-      const result = await getUserProfile("testuser", "current-user-id");
+      const result = await getUserProfile(username, "current-user-id");
 
       expect(prisma.user.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { username: "testuser" } })
+        expect.objectContaining({
+          where: {
+            OR: [{ id: username }, { username }],
+          },
+        })
       );
       expect(prisma.message.count).toHaveBeenCalledWith({
         where: { receiverId: "user-1", isRead: false },
