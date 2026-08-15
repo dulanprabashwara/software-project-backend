@@ -1,9 +1,11 @@
 const { getProfile, getMe, updateProfile, searchUsers, deleteAccount } = require("../../src/controllers/user.controller");
 const userService = require("../../src/services/user.service");
+const prisma = require("../../src/config/prisma");
 const { sendSuccess, sendPaginated } = require("../../src/utils/response");
 
 // Mock dependencies
 jest.mock("../../src/services/user.service");
+jest.mock("../../src/config/prisma", () => require("../mocks/prisma.mock"));
 jest.mock("../../src/utils/response", () => ({
   sendSuccess: jest.fn(),
   sendPaginated: jest.fn(),
@@ -64,13 +66,18 @@ describe("User Controller Unit Tests", () => {
     it("should return the current user's full profile", async () => {
       const mockProfile = { id: "user_123", username: "currentuser" };
       userService.getUserProfile.mockResolvedValue(mockProfile);
+      prisma.user.findUnique.mockResolvedValue({ receiveWeeklyExport: true });
 
       await getMe(req, res, next);
 
       expect(userService.getUserProfile).toHaveBeenCalledWith("user_123", "user_123");
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { id: "user_123" },
+        select: { receiveWeeklyExport: true },
+      });
       expect(sendSuccess).toHaveBeenCalledWith(res, {
         message: "Current user profile retrieved.",
-        data: mockProfile,
+        data: { ...mockProfile, receiveWeeklyExport: true },
       });
     });
   });

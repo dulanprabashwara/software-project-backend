@@ -53,6 +53,7 @@ model User {
   wordpressConnection    WordPressConnection?
   wpPublishJobs          WordPressPublishJob[]
   sessions               UserSession[]
+  receiveWeeklyExport    Boolean              @default(false)
 
   @@map("users")
 }
@@ -556,6 +557,8 @@ enum ArticleStatus {
   PUBLISHED
   SCHEDULED
   EDITING
+  EDITING_PUBLISHED
+  REPUBLISHED
 }
 
 enum ReportStatus {

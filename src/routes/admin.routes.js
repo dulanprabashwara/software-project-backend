@@ -1,14 +1,13 @@
 const { Router } = require("express");
 const adminController = require("../controllers/admin.controller");
 const { authenticate, authorize } = require("../middlewares/auth");
-
 const router = Router();
 
 // @ts-ignore
 router.use(authenticate, authorize("ADMIN"));
 
 // Dashboard
-router.get("/dashboard", adminController.getDashboard);
+router.get("/dashboard",authenticate, adminController.getDashboard);
 router.get('/engagement', authenticate, adminController.getEngagementAnalytics);
 
 // User management
@@ -62,5 +61,6 @@ router.put("/support-requests/:id", adminController.updateSupportRequest);
 
 //Dashboard feeds
 router.get("/dashboard/feeds", adminController.getDashboardFeeds);
+router.get("/dashboard/analytics-charts", adminController.getAnalyticsCharts);
 
 module.exports = router;
