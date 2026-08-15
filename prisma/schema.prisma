@@ -556,6 +556,8 @@ enum ArticleStatus {
   PUBLISHED
   SCHEDULED
   EDITING
+  EDITING_PUBLISHED
+  REPUBLISHED
 }
 
 enum ReportStatus {

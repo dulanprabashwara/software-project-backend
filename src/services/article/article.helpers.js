@@ -29,6 +29,10 @@ function normalizeArticleStatus(status) {
     // SCHEDULED marks an article to be published at a future date.
     case ARTICLE_STATUS.SCHEDULED:
       return ARTICLE_STATUS.SCHEDULED;
+    case ARTICLE_STATUS.EDITING_PUBLISHED:
+      return ARTICLE_STATUS.EDITING_PUBLISHED;
+    case ARTICLE_STATUS.REPUBLISHED:
+      return ARTICLE_STATUS.REPUBLISHED;
     default:
       throw ApiError.badRequest(`Invalid article status: ${status}`);
   }
