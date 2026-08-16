@@ -95,14 +95,42 @@ const getPaginatedUsers = async (req, res) => {
     // Extract page and limit from the query string (default to page 1, 10 items)
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-    
+    const search = req.query.search || "";
+    const isPremium = req.query.premium; // 'true', 'false', or undefined
+    const isBanned = req.query.banned;   // 'true', 'false', or undefined
+
     //Calculate how many records to skip
     const skip = (page - 1) * limit;
 
+    const whereClause = {};
+
+    if (search) {
+      whereClause.OR = [
+        { username: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { displayName: { contains: search, mode: 'insensitive' } }
+      ];
+    }
+
+    // Handle Premium vs Regular
+    if (isPremium === 'true') {
+      whereClause.isPremium = true;
+    } else if (isPremium === 'false') {
+      whereClause.isPremium = false;
+    }
+
+    // Handle Banned vs Active
+    if (isBanned === 'true') {
+      whereClause.bannedRecord = { isNot: null };
+    } else if (isBanned === 'false') {
+      whereClause.bannedRecord = { is: null };
+    }
+
     // Run both queries concurrently for maximum performance
     const [totalUsers, users] = await Promise.all([
-      prisma.user.count(),
+      prisma.user.count({ where: whereClause }),
       prisma.user.findMany({
+        where: whereClause,
         skip: skip,
         take: limit,
         orderBy: {
