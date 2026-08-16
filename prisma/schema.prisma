@@ -556,6 +556,8 @@ enum ArticleStatus {
   PUBLISHED
   SCHEDULED
   EDITING
+  EDITING_PUBLISHED
+  REPUBLISHED
 }
 
 enum ReportStatus {
@@ -650,4 +652,14 @@ model SupportRequest {
   updatedAt DateTime @default(now()) @updatedAt
 
   @@map("support_requests")
+}
+
+model PlatformEvent {
+  id        String   @id @default(cuid())
+  type      String   // e.g., "USER_SIGNUP", "PREMIUM_UPGRADE", "ARTICLE_PUBLISHED", "TICKET_CREATED"
+  message   String   // e.g., "Emma upgraded to Premium"
+  linkUrl   String?  // Optional: A URL to redirect the admin to when they click the feed item
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

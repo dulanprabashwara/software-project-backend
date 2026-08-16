@@ -38,6 +38,13 @@ router.put("/:id/edit-as-new/save-draft",authenticate,articleController.saveEdit
 router.post("/:id/edit-as-new/discard",authenticate,articleController.discardEditAsNew,
 );
 
+// Edit published
+router.post("/:id/edit-published/start", authenticate, articleController.startEditPublished);
+router.put("/:id/edit-published/autosave", authenticate, articleController.autosaveEditPublished);
+router.put("/:id/edit-published/preview", authenticate, articleController.saveEditPublishedForPreview);
+router.put("/:id/edit-published/republish", authenticate, articleController.republishArticle);
+router.post("/:id/edit-published/discard", authenticate, articleController.discardEditPublished);
+
 // Public article read
 router.get("/author/:username/published", articleController.getPublishedByUsername);
 router.get("/:slug", articleController.getArticle);

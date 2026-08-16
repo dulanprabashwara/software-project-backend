@@ -713,6 +713,52 @@ const updateSupportRequest = async (req, res) => {
   }
 };
 
+//Dashboard Analytics
+const getDashboardFeeds = async (req, res) => {
+  try {
+    //Fetch the 5 most recent articles
+    const recentArticles = await prisma.article.findMany({
+      take: 5,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        createdAt: true,
+        author: { 
+          select: { 
+            displayName: true, 
+            email: true,
+            avatarUrl: true 
+          } 
+        }
+      }
+    });
+
+    //Fetch the 10 most recent platform events
+    const recentActivity = await prisma.platformEvent.findMany({
+      take: 10,
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        recentArticles,
+        recentActivity
+      }
+    });
+
+  } catch (error) {
+    console.error("Error fetching dashboard feeds:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch dashboard feeds",
+      error: error.message 
+    });
+  }
+};
+
 module.exports = {
   getDashboard,
   getEngagementAnalytics,
@@ -747,4 +793,5 @@ module.exports = {
   getActiveSessions,
   updateSupportRequest,
   getPaginatedSupportRequests,
+  getDashboardFeeds,
 };
