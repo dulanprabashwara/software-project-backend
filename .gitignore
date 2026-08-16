@@ -30,4 +30,7 @@ Thumbs.db
 serviceAccountKey.json
 firebase-service-account.json
 
+# Local API testing credentials
+postman*_token.txt
+
 full_database_backup.json
