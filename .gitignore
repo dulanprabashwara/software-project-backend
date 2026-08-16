@@ -32,5 +32,6 @@ firebase-service-account.json
 
 # Local API testing credentials
 postman*_token.txt
+test-guide.md
 
 full_database_backup.json
