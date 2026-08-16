@@ -6,6 +6,9 @@ const ApiError = require("../../src/utils/ApiError");
 
 // Mock dependencies
 jest.mock("../../src/services/auth.service");
+jest.mock("../../src/utils/eventLogger", () => ({
+  logPlatformEvent: jest.fn(),
+}));
 const mockVerifyIdToken = jest.fn();
 jest.mock("../../src/config/firebase", () => ({
   auth: () => ({
@@ -48,7 +51,10 @@ describe("Auth Controller Unit Tests", () => {
       req.body = { email: "test@test.com", username: "testuser" };
 
       // Mock Firebase
-      mockVerifyIdToken.mockResolvedValue({ uid: "firebase_uid_123" });
+      mockVerifyIdToken.mockResolvedValue({
+        uid: "firebase_uid_123",
+        firebase: { sign_in_provider: "google.com" },
+      });
 
       // Mock Service
       const mockCreatedUser = { id: "1", email: "test@test.com", username: "testuser" };
@@ -89,7 +95,10 @@ describe("Auth Controller Unit Tests", () => {
       req.headers.authorization = "Bearer valid_token";
       req.body = { email: "test@test.com" }; // Missing username
 
-      mockVerifyIdToken.mockResolvedValue({ uid: "firebase_uid_123" });
+      mockVerifyIdToken.mockResolvedValue({
+        uid: "firebase_uid_123",
+        firebase: { sign_in_provider: "google.com" },
+      });
 
       await register(req, res, next);
 
@@ -103,7 +112,10 @@ describe("Auth Controller Unit Tests", () => {
     it("should sync user successfully and return 200", async () => {
       req.headers.authorization = "Bearer valid_token";
 
-      mockVerifyIdToken.mockResolvedValue({ uid: "firebase_uid_123" });
+      mockVerifyIdToken.mockResolvedValue({
+        uid: "firebase_uid_123",
+        firebase: { sign_in_provider: "google.com" },
+      });
 
       const mockSyncedUser = { id: "1", firebaseUid: "firebase_uid_123", bannedRecord: null };
       authService.syncUser.mockResolvedValue(mockSyncedUser);

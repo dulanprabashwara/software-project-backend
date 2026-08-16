@@ -45,6 +45,7 @@ const mockPrisma = {
     findMany:   jest.fn(),
     findFirst:  jest.fn(),
     findUnique: jest.fn(),
+    groupBy:    jest.fn(),
     create:     jest.fn(),
     updateMany: jest.fn(),
     count:      jest.fn(),

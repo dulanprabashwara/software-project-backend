@@ -32,9 +32,19 @@ const getMe = asyncHandler(async (req, res) => {
     currentUserId,
   );
 
+  const privateSettings = await prisma.user.findUnique({
+    where: { id: currentUserId },
+    select: {
+      receiveWeeklyExport: true
+    }
+  });
+
   sendSuccess(res, {
     message: "Current user profile retrieved.",
-    data: profile,
+    data: {
+      ...profile,
+      receiveWeeklyExport: privateSettings ? privateSettings.receiveWeeklyExport : false
+    },
   });
 });
 

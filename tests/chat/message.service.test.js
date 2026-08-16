@@ -27,18 +27,37 @@ describe("Message Service", () => {
 
   describe("getConversationList", () => {
     test("should return a list of conversations for the user", async () => {
-      prisma.message.findMany
-        .mockResolvedValueOnce([{ receiverId: "user-2" }]) // sent
-        .mockResolvedValueOnce([{ senderId: "user-3" }]);  // received
-        
-      prisma.message.findFirst.mockResolvedValue({ id: "msg-x", sentAt: "2026-05-01T00:00:00Z" });
-      prisma.message.count.mockResolvedValue(2);
-      prisma.user.findUnique.mockResolvedValue({ id: "user-2", username: "bob" });
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: "msg-1",
+          content: "latest",
+          senderId: "user-1",
+          receiverId: "user-2",
+          sentAt: "2026-05-02T00:00:00Z",
+          isRead: true,
+        },
+        {
+          id: "msg-2",
+          content: "older",
+          senderId: "user-3",
+          receiverId: "user-1",
+          sentAt: "2026-05-01T00:00:00Z",
+          isRead: false,
+        },
+      ]);
+      prisma.message.groupBy.mockResolvedValue([
+        { senderId: "user-2", _count: { id: 2 } },
+      ]);
+      prisma.user.findMany.mockResolvedValue([
+        { id: "user-2", username: "bob" },
+        { id: "user-3", username: "carol" },
+      ]);
 
       const result = await getConversationList("user-1");
 
-      expect(prisma.message.findMany).toHaveBeenCalledTimes(2);
-      expect(prisma.message.findFirst).toHaveBeenCalledTimes(2); // one for user-2, one for user-3
+      expect(prisma.message.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.message.groupBy).toHaveBeenCalledTimes(1);
+      expect(prisma.user.findMany).toHaveBeenCalledTimes(1);
       expect(result.length).toBe(2);
       expect(result[0].unreadCount).toBe(2);
       expect(result[0].user.username).toBe("bob");

@@ -492,7 +492,7 @@ const deleteScrapingSource = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
     const adminId = req.user.id;
-    await adminService.deleteScrapingSource(id);
+    await adminService.deleteScrapingSource(id, adminId);
     res.status(200).json({ success: true, message: "Source deleted successfully" });
   } catch (error) {
     next(error);
@@ -539,7 +539,7 @@ const validateUrl = asyncHandler(async (req, res, next) => {
 // ─── Profile & Sessions ──────────────────────────────
 
 const updateAdminProfile = asyncHandler(async (req, res) => {
-  const { displayName, bio, avatarUrl } = req.body;
+  const { displayName, bio, avatarUrl,receiveWeeklyExport} = req.body;
   const adminId = req.user.id;
 
   const updatedAdmin = await prisma.user.update({
@@ -548,6 +548,7 @@ const updateAdminProfile = asyncHandler(async (req, res) => {
       displayName: displayName,
       bio: bio,
       avatarUrl: avatarUrl,
+      receiveWeeklyExport: receiveWeeklyExport
     }
   });
 
@@ -590,6 +591,14 @@ const registerSession = asyncHandler(async (req, res) => {
         status: "ACTIVE"
       }
     });
+  }else {
+    session = await prisma.userSession.update({
+      where: { id: session.id },
+      data: { 
+        lastActive: new Date(),
+        deviceInfo: deviceName //updates info in case they switched from mobile to desktop on the same IP
+      }
+    });
   }
 
   sendSuccess(res, { data: session });
@@ -610,8 +619,7 @@ const revokeSession = asyncHandler(async (req, res) => {
 
   await prisma.userSession.update({
     where: { id: sessionId },
-    data: { status: "REVOKED",
-            lastActive: new Date()
+    data: { status: "REVOKED"
           }
   });
 
@@ -759,6 +767,14 @@ const getDashboardFeeds = async (req, res) => {
   }
 };
 
+const getAnalyticsCharts = asyncHandler(async (req, res) => {
+  const chartData = await adminService.getAdvancedAnalytics();
+  
+  sendSuccess(res, { 
+    data: chartData 
+  });
+});
+
 module.exports = {
   getDashboard,
   getEngagementAnalytics,
@@ -794,4 +810,5 @@ module.exports = {
   updateSupportRequest,
   getPaginatedSupportRequests,
   getDashboardFeeds,
+  getAnalyticsCharts,
 };
