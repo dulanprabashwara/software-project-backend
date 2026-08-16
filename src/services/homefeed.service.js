@@ -5,7 +5,10 @@ const getPublishedMainFeed = async (page = 1, limit = 3) => {
   const skip = (page - 1) * limit; //how many records to skip
 
   return await prisma.article.findMany({
-    where: { status: "PUBLISHED" }, 
+    where: { status:{
+                  in:["PUBLISHED","REPUBLISHED"]
+
+    }}, 
     orderBy: { publishedAt: "desc" },
     take: limit, 
     skip: skip,  
@@ -29,7 +32,10 @@ const getFollowingFeed = async (userId, page = 1, limit = 5) => {
 
   return await prisma.article.findMany({
     where: { 
-      status: "PUBLISHED",
+      status:{
+                  in:["PUBLISHED","REPUBLISHED"]
+
+    },
       author: {
         followers: {
           some: {
