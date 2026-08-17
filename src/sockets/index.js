@@ -180,6 +180,12 @@ const initializeSocket = (httpServer) => {
           return callback?.({ error: "Message ID is required" });
         }
 
+        if (typeof messageId !== "string" || messageId.startsWith("temp-")) {
+          return callback?.({
+            error: "Message is still sending. Please try again.",
+          });
+        }
+
         // Find the message
         const message = await prisma.message.findUnique({
           where: { id: messageId },
